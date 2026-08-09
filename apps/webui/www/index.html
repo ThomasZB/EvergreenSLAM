@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EvergreenSLAM debug</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14181d; color: #c8ccd2;
+               font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; overflow: hidden; }
+  #view { display: block; width: 100%; height: 100%; cursor: grab; }
+  #view:active { cursor: grabbing; }
+  #hud { position: fixed; top: 10px; left: 10px; padding: 8px 10px; border-radius: 4px;
+         background: rgba(10,13,16,.82); border: 1px solid #2a3038; pointer-events: none; }
+  #hud b { color: #eef1f5; font-weight: 600; }
+  #legend { position: fixed; bottom: 10px; left: 10px; padding: 8px 10px; border-radius: 4px;
+            background: rgba(10,13,16,.82); border: 1px solid #2a3038; }
+  #legend label { display: block; cursor: pointer; }
+  .sw { display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+        vertical-align: -1px; border-radius: 2px; }
+  .off { opacity: .4; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud">waiting for the pipeline…</div>
+<div id="legend"></div>
+<script>
+const LAYERS = [
+  { key: 'matched',   label: 'scan @ matched',   color: '#4ade80', on: true },
+  { key: 'predicted', label: 'scan @ predicted', color: '#f87171', on: true },
+  { key: 'coarse',    label: 'scan @ coarse',    color: '#fbbf24', on: false },
+  { key: 'traj',      label: 'trajectory',       color: '#60a5fa', on: true },
+];
+
+// The SSE handler only writes here; drawing happens in requestAnimationFrame. Rendering on
+// arrival would couple frame rate to the network and queue up draws the moment either stalls.
+const state = { frame: null, map: null, mapSeq: -1, trajectory: [], frames: 0, dirty: false };
+const view = { x: 0, y: 0, scale: 20, ready: false };   // world -> screen, scale is px per metre
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+
+function resize() {
+  const dpr = devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr;
+  canvas.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  state.dirty = true;
+}
+addEventListener('resize', resize);
+
+function buildLegend() {
+  const box = document.getElementById('legend');
+  for (const layer of LAYERS) {
+    const row = document.createElement('label');
+    row.className = layer.on ? '' : 'off';
+    row.innerHTML = `<span class="sw" style="background:${layer.color}"></span>${layer.label}`;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = layer.on;
+    input.style.display = 'none';
+    row.prepend(input);
+    row.onclick = () => {
+      layer.on = !layer.on;
+      row.className = layer.on ? '' : 'off';
+      state.dirty = true;
+    };
+    box.appendChild(row);
+  }
+}
+
+// --- trajectory ------------------------------------------------------------
+// The server keeps it, so opening the page late or after the run has ended still shows the whole
+// track. Dropped frames leave gaps, so resync whenever our length falls behind what it reports.
+let fetchingTrajectory = false;
+async function fetchTrajectory() {
+  if (fetchingTrajectory) return;
+  fetchingTrajectory = true;
+  try {
+    const response = await fetch('trajectory');
+    if (response.status !== 200) return;
+    state.trajectory = Array.from(new Float64Array(await response.arrayBuffer()));
+    const n = state.trajectory.length;
+    if (!view.ready && n >= 2) centreOn([state.trajectory[n - 2], state.trajectory[n - 1], 0]);
+    state.dirty = true;
+  } finally {
+    fetchingTrajectory = false;
+  }
+}
+
+// --- map -------------------------------------------------------------------
+// One byte per cell, already decoded server side: 0..100 occupancy, 255 unknown. The raw
+// 0/1..127/+128 cell encoding never leaves C++.
+async function fetchMap() {
+  const response = await fetch('map');
+  if (response.status !== 200) return null;
+  const buffer = await response.arrayBuffer();
+  const head = new DataView(buffer);
+  if (String.fromCharCode(head.getUint8(0), head.getUint8(1), head.getUint8(2),
+                          head.getUint8(3)) !== 'EGM1') return null;
+  const width = head.getInt32(4, true), height = head.getInt32(8, true);
+  const map = {
+    width, height,
+    resolution: head.getFloat64(12, true),
+    originX: head.getFloat64(20, true),
+    originY: head.getFloat64(28, true),
+    canvas: document.createElement('canvas'),
+  };
+  const cells = new Uint8Array(buffer, 36, width * height);
+  map.canvas.width = width;
+  map.canvas.height = height;
+  const image = map.canvas.getContext('2d').createImageData(width, height);
+  for (let y = 0; y < height; y++) {
+    // Cell row 0 is the lowest y in world space, image row 0 is the top, so flip.
+    const src = y * width, dst = (height - 1 - y) * width;
+    for (let x = 0; x < width; x++) {
+      const value = cells[src + x];
+      const i = (dst + x) * 4;
+      // Unknown is blue, not another grey. As a shade it lands next to an occupied cell, and
+      // occupied versus never seen is the one distinction this view exists to show.
+      if (value === 255) {
+        image.data[i] = 43; image.data[i + 1] = 52; image.data[i + 2] = 64;
+      } else {
+        image.data[i] = image.data[i + 1] = image.data[i + 2] = 235 - Math.round(value * 2.2);
+      }
+      image.data[i + 3] = 255;
+    }
+  }
+  map.canvas.getContext('2d').putImageData(image, 0, 0);
+  return map;
+}
+
+// --- drawing ---------------------------------------------------------------
+function drawScan(points, pose, color) {
+  const [px, py, theta] = pose;
+  const cos = Math.cos(theta), sin = Math.sin(theta);
+  ctx.fillStyle = color;
+  const size = Math.max(1.5, Math.min(3, view.scale / 12));
+  for (let i = 0; i < points.length; i += 2) {
+    const x = points[i], y = points[i + 1];
+    const wx = cos * x - sin * y + px, wy = sin * x + cos * y + py;
+    ctx.fillRect(view.x + wx * view.scale - size / 2,
+                 view.y - wy * view.scale - size / 2, size, size);
+  }
+}
+
+function drawRobot(pose) {
+  const [px, py, theta] = pose;
+  const sx = view.x + px * view.scale, sy = view.y - py * view.scale;
+  ctx.strokeStyle = '#eef1f5';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(sx, sy, 7, 0, Math.PI * 2);
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(sx + Math.cos(theta) * 16, sy - Math.sin(theta) * 16);
+  ctx.stroke();
+}
+
+function draw() {
+  ctx.fillStyle = '#14181d';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (state.map) {
+    const m = state.map;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(m.canvas,
+                  view.x + m.originX * view.scale,
+                  view.y - (m.originY + m.height * m.resolution) * view.scale,
+                  m.width * m.resolution * view.scale,
+                  m.height * m.resolution * view.scale);
+  }
+
+  const traj = LAYERS.find(l => l.key === 'traj');
+  if (traj.on && state.trajectory.length > 1) {
+    ctx.strokeStyle = traj.color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < state.trajectory.length; i += 2) {
+      const sx = view.x + state.trajectory[i] * view.scale;
+      const sy = view.y - state.trajectory[i + 1] * view.scale;
+      i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+  }
+
+  if (state.frame) {
+    // Reversed so the legend can lead with the answer while the answer still paints on top.
+    for (const layer of [...LAYERS].reverse()) {
+      const pose = state.frame.poses[layer.key];
+      if (layer.on && pose) drawScan(state.frame.scan, pose, layer.color);
+    }
+    if (state.frame.poses.matched) drawRobot(state.frame.poses.matched);
+  }
+}
+
+function tick() {
+  if (state.dirty) {
+    state.dirty = false;
+    draw();
+  }
+  requestAnimationFrame(tick);
+}
+
+// --- input -----------------------------------------------------------------
+let dragging = null;
+canvas.onmousedown = event => { dragging = { x: event.clientX, y: event.clientY }; };
+addEventListener('mouseup', () => { dragging = null; });
+addEventListener('mousemove', event => {
+  if (!dragging) return;
+  view.x += event.clientX - dragging.x;
+  view.y += event.clientY - dragging.y;
+  dragging = { x: event.clientX, y: event.clientY };
+  state.dirty = true;
+});
+canvas.onwheel = event => {
+  event.preventDefault();
+  const factor = Math.exp(-event.deltaY * 0.0015);
+  // Keep the world point under the cursor fixed, otherwise zooming walks the map away.
+  view.x = event.clientX - (event.clientX - view.x) * factor;
+  view.y = event.clientY - (event.clientY - view.y) * factor;
+  view.scale *= factor;
+  state.dirty = true;
+};
+
+// --- stream ----------------------------------------------------------------
+function centreOn(pose) {
+  view.x = innerWidth / 2 - pose[0] * view.scale;
+  view.y = innerHeight / 2 + pose[1] * view.scale;
+  view.ready = true;
+}
+
+const events = new EventSource('events');
+events.onmessage = message => {
+  const frame = JSON.parse(message.data);
+  state.frame = frame;
+  state.frames++;
+  const matched = frame.poses.matched;
+  if (matched) {
+    if (!view.ready) centreOn(matched);
+    state.trajectory.push(matched[0], matched[1]);
+    if (state.trajectory.length / 2 !== frame.traj_len + 1) fetchTrajectory();
+  }
+  if (frame.map_seq !== state.mapSeq) {
+    state.mapSeq = frame.map_seq;
+    fetchMap().then(map => { if (map) { state.map = map; state.dirty = true; } });
+  }
+  const delta = matched && frame.poses.predicted
+      ? Math.hypot(matched[0] - frame.poses.predicted[0], matched[1] - frame.poses.predicted[1])
+      : 0;
+  hud.innerHTML =
+      // Both numbers: the stream is latest wins, so what arrived here is not what the pipeline
+      // did, and reporting only the received count would understate it by an order of magnitude.
+      `<b>${frame.traj_len + 1}</b> scans, <b>${state.frames}</b> drawn` +
+      ` &nbsp; t <b>${frame.time.toFixed(2)}</b><br>` +
+      `score <b>${frame.score.toFixed(3)}</b> &nbsp; ` +
+      `match &minus; predict <b>${(delta * 100).toFixed(1)}</b> cm<br>` +
+      `${frame.scan.length / 2} points &nbsp; ` +
+      // Not the global map: the sink is handed whatever the matcher matched against.
+      `grey area is the matching submap`;
+  state.dirty = true;
+};
+events.onerror = () => { hud.innerHTML += '<br><span style="color:#f87171">stream closed</span>'; };
+
+buildLegend();
+resize();
+fetchTrajectory();
+tick();
+</script>
+</body>
+</html>

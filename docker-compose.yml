@@ -1,0 +1,88 @@
+# One dev image (adapters/ros2/Dockerfile), the repo mounted at /ws, build trees in a named
+# volume so they survive between runs and never touch the source tree.
+#
+#   docker compose build                     # (re)build the image
+#   docker compose run --rm core-test       # core alone on Linux gcc: cmake + ctest
+#   docker compose run --rm ros-build       # ROS 2 adapter: build + tests
+#   docker compose run --rm shell           # interactive shell in the image
+#
+#   BAG=bags/wg_cafe docker compose up bag  # offline replay, webui at http://localhost:8642
+#   docker compose up live                  # live node: /scan in, webui at :8642
+#   BAG=bags/wg_cafe docker compose run --rm bag-play   # feed the live node over DDS
+#
+# Tunables via env: BAG (rosbag2 dir, relative to the repo root so it is visible in /ws),
+# SCAN_TOPIC (/scan), BASE_FRAME (base_link), EXTRA (appended to the bag command verbatim,
+# e.g. EXTRA="--reference_frame map --speed 4"), WEBUI_PORT (8642), ROS_DOMAIN_ID (0).
+#
+# bag and live build (incrementally) through ros-build before starting, so a plain
+# `docker compose up live` on a fresh clone works. live and bag-play sit on the default
+# "bridge" network, not the compose-private one: DDS discovery is multicast and stays inside
+# one docker network, and plain `docker run` containers (sensor drivers, bridges) land on
+# bridge. A driver on the host network instead needs network_mode: host on live (Linux only),
+# with its ports dropped.
+
+x-dev: &dev
+  image: evergreenslam:ros2
+  build: adapters/ros2
+  working_dir: /ws
+  volumes:
+    - .:/ws
+    - build-cache:/out
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    # $$-escaped in the commands below: compose interpolates the whole file even for services
+    # it is not starting, so a compose-time ${BAG:?} would make `up live` demand a bag too.
+    BAG: ${BAG:-}
+
+services:
+  core-test:
+    <<: *dev
+    command: >
+      bash -lc "cmake -S /ws -B /out/core -DCMAKE_BUILD_TYPE=Release
+      -DEVERGREENSLAM_BUILD_TESTS=ON
+      && cmake --build /out/core -j8 && ctest --test-dir /out/core --output-on-failure"
+
+  ros-build:
+    <<: *dev
+    command: >
+      bash -lc "cmake -S /ws/adapters/ros2 -B /out/ros -DCMAKE_BUILD_TYPE=Release
+      -DBUILD_TESTING=ON
+      && cmake --build /out/ros -j8 && ctest --test-dir /out/ros --output-on-failure"
+
+  bag:
+    <<: *dev
+    depends_on:
+      ros-build:
+        condition: service_completed_successfully
+    ports:
+      - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
+    command: >
+      bash -lc "/out/ros/bag_laser_odometry
+      --bag $${BAG:?set BAG to a rosbag2 dir relative to the repo root}
+      --config configs/evergreenslam.yaml --scan_topic ${SCAN_TOPIC:-/scan}
+      --base_frame ${BASE_FRAME:-base_link} --webui_port ${WEBUI_PORT:-8642} ${EXTRA:-}"
+
+  live:
+    <<: *dev
+    depends_on:
+      ros-build:
+        condition: service_completed_successfully
+    network_mode: bridge
+    ports:
+      - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
+    command: >
+      bash -lc "/out/ros/laser_odometry_node --ros-args
+      -p config:=configs/evergreenslam.yaml -p base_frame:=${BASE_FRAME:-base_link}
+      -p webui_port:=${WEBUI_PORT:-8642} -r scan:=${SCAN_TOPIC:-/scan}"
+
+  bag-play:
+    <<: *dev
+    network_mode: bridge
+    command: bash -lc "ros2 bag play $${BAG:?set BAG to a rosbag2 dir relative to the repo root}"
+
+  shell:
+    <<: *dev
+    command: bash
+
+volumes:
+  build-cache:

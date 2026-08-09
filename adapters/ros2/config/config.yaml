@@ -1,0 +1,11 @@
+# ROS-side parameters for laser_odometry_node. The SLAM configuration lives in
+# configs/evergreenslam.yaml; the `config` parameter pointing at it is set by the launch file,
+# because its path depends on the install layout.
+/**:
+  ros__parameters:
+    scan_topic: /scan
+    odom_frame: odom
+    base_frame: base_link
+    publish_tf: true
+    map_publish_period: 1.0  # seconds
+    webui_port: 8642  # 0 disables the browser debug view

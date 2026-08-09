@@ -1,0 +1,4 @@
+---
+BasedOnStyle: Google
+Standard: c++17
+ColumnLimit: 100

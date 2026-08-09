@@ -1,0 +1,54 @@
+# EvergreenSLAM configuration.
+# Every value here is the default already compiled into the code, listed only for reference.
+# Dropping any entry falls back to that default, so keep just the parts you want to change.
+
+local_trajectory_builder:
+  min_range: 0.3   # m, anything below this is usually the robot itself
+  max_range: 30.0  # m
+  voxel_size: 0.025  # m, thins the cloud that goes into the grid
+
+  # Applied on top of voxel_size for scan matching and for the pose graph node, never for the
+  # grid: the voxel shrinks from max_length until min_num_points survive, so a scan costs about
+  # the same to match in a corridor as in an open hall.
+  adaptive_voxel_filter:
+    max_length: 0.5
+    min_num_points: 200
+
+  # Motion prior for the next scan, and the only one there is on pure lidar hardware. Singer
+  # model: 1/alpha is how long an acceleration stays correlated, sigma is its standard deviation.
+  # Both alphas must be > 0, the filter aborts otherwise.
+  generic_tracking_filter:
+    trans_alpha: 1.0   # 1/s, a robot spends ~1 s getting up to speed or stopping
+    rot_alpha: 2.0     # 1/s, turns start and stop faster than that
+    trans_sigma: 5.0   # m/s^2
+    rot_sigma: 10.0     # rad/s^2
+    # How much the scan match is trusted as a position measurement; below one cell, since the
+    # matcher interpolates inside a cell.
+    measurement_translation_sigma: 0.02  # m
+    measurement_rotation_sigma: 0.01     # rad
+
+  pose_optimization:
+    # Brute-force search window. Wide enough for one keyframe's prediction error is enough; the
+    # cost grows cubically with the window.
+    linear_search_window: 0.15    # m
+    angular_search_window: 0.2   # rad
+    grid_match_weight: 100.0
+    # Pulls the Ceres fine match back toward the coarse result, which keeps it from drifting along
+    # a corridor. Set to 0 to drop the prior.
+    translation_weight: 0.01
+    rotation_weight: 0.04
+
+  motion_filter:
+    # These three thresholds keep the error magnitude between adjacent keyframes constant, which
+    # is what makes the pose graph's fixed sqrt_info = 1e2 valid.
+    max_time_seconds: 5.0
+    max_distance_meters: 0.2
+    max_angle_radians: 0.0175
+
+  active_map:
+    resolution: 0.05           # m/cell
+    num_scans_per_submap: 90   # larger drifts more internally but leaves fewer pose graph nodes
+    castrays_mapping:
+      hit_probability: 0.55
+      miss_probability: 0.49
+      insert_free_space: true
