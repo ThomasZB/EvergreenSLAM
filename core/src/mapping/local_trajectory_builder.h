@@ -15,7 +15,6 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include "common/time.h"
@@ -33,30 +32,35 @@
 
 namespace evergreenslam::mapping {
 
+// Session-agnostic: the backend mints every graph id at ingest, and rotations pass unnoticed.
 class LocalTrajectoryBuilder {
  public:
   struct InsertionResult {
-    NodeId node_id;
+    int node_index = 0;
     TrajectoryNode node;
-    MatchingResult matching_result;
     std::vector<std::shared_ptr<const Submap>> insertion_submaps;
+  };
+  struct MatchingResult {
+    common::Time time;
+    Eigen::Affine2d local_pose = Eigen::Affine2d::Identity();
+    double match_score = 0.0;
+    std::unique_ptr<const InsertionResult> insertion_result = nullptr;
   };
 
   explicit LocalTrajectoryBuilder(
       const LocalTrajectoryBuilderOption& option = LocalTrajectoryBuilderOption());
 
-  std::optional<InsertionResult> AddScan(common::Time time,
-                                         const sensor::TimedPointCloud& point_cloud);
+  std::unique_ptr<MatchingResult> AddScan(common::Time time,
+                                          const sensor::TimedPointCloud& point_cloud);
 
-  void StartNewSession(int session_id);
   void SetDebugSink(std::shared_ptr<debug::DebugSink> debug_sink);
 
   const Eigen::Affine2d& local_pose() const { return local_pose_; }
   const ActiveMap& active_map() const { return active_map_; }
 
  private:
-  std::optional<InsertionResult> AddUndistortedScan(common::Time time,
-                                                    const sensor::PointCloud& point_cloud);
+  std::unique_ptr<MatchingResult> AddUndistortedScan(common::Time time,
+                                                     const sensor::PointCloud& point_cloud);
   sensor::PointCloud CropRange(const sensor::PointCloud& point_cloud) const;
 
   LocalTrajectoryBuilderOption option_;
@@ -72,7 +76,6 @@ class LocalTrajectoryBuilder {
   Eigen::Matrix<double, 3, 3> measurement_covariance_;
 
   Eigen::Affine2d local_pose_ = Eigen::Affine2d::Identity();
-  int session_id_ = 0;
   int next_node_index_ = 0;
 };
 

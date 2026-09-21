@@ -1,0 +1,17 @@
+# Overrides for the classic CARMEN logs (Intel Lab, ACES, Freiburg 079): at ~5 Hz the default
+# Singer process noise out-predicts the matcher's search window.
+local_trajectory_builder:
+  generic_tracking_filter:
+    trans_sigma: 0.5   # m/s^2
+    rot_sigma: 1.0     # rad/s^2
+  pose_optimization:
+    # These robots spin at up to ~1.2 rad per scan. The linear window stays tight: widening it
+    # invites corridor aliasing.
+    angular_search_window: 0.6
+
+# Trimming rides the global solves, so thinning it bounds the CPU.
+lifelong:
+  trim_every_n_optimizations: 4
+  constraint_builder:
+    constraint_sampler:
+      sampling_ratio: 0.5

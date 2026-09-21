@@ -26,16 +26,13 @@ namespace {
 
 namespace transform = utils::transform;
 
-// Scans at 10 Hz from a stamp of the same magnitude a real bag carries.
 common::Time ScanTime(int index) {
   return common::FromUnixSeconds(1785000000.0) + common::FromSeconds(0.1 * index);
 }
 
-// An empty axis aligned room, fully enclosed so every scan sees all four walls.
-//
-// The bounds are deliberately not multiples of the 0.05 m grid resolution: on aligned walls
-// every point sits exactly on a cell boundary, and a rotation of a few ten-thousandths of a
-// radian flips them all together, collapsing the score for reasons unrelated to the code.
+// An empty axis aligned room, fully enclosed. The bounds are deliberately not multiples of the
+// 0.05 m grid resolution: on aligned walls every point sits exactly on a cell boundary and a
+// rotation of a few ten-thousandths of a radian flips them all together.
 constexpr double kRoomMinX = 0.013;
 constexpr double kRoomMaxX = 10.007;
 constexpr double kRoomMinY = 0.021;
@@ -58,8 +55,7 @@ double RangeToWall(const Eigen::Vector2d& point, double angle) {
   return range;
 }
 
-// Every beam is cast from the same pose, so the scan is instantaneous and all offsets are zero;
-// nonzero offsets would make undistortion warp a scan that carries no real distortion.
+// Every beam is cast from the same pose, so the scan is instantaneous and all offsets are zero.
 sensor::TimedPointCloud SimulateScan(const Eigen::Affine2d& world_pose, int num_beams) {
   const double yaw = transform::GetYaw(world_pose);
   sensor::TimedPointCloud cloud;
@@ -91,33 +87,31 @@ TEST(LocalTrajectoryBuilderTest, TracksASimulatedRobotInAClosedRoom) {
   for (int i = 0; i < kNumScans; ++i) {
     const auto result =
         builder.AddScan(ScanTime(i), SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams));
-    if (result.has_value()) {
+    ASSERT_NE(result, nullptr);
+    if (result->insertion_result != nullptr) {
+      const auto& insertion = *result->insertion_result;
       ++num_keyframes;
-      // The first keyframe has no map to match against and scores 0 by
-      // definition, so it is excluded.
+      // The first keyframe has no map to match against and scores 0 by definition.
       if (num_keyframes > 1) {
-        last_score = result->matching_result.match_score;
+        last_score = result->match_score;
         worst_score = std::min(worst_score, last_score);
       }
-      EXPECT_FALSE(result->insertion_submaps.empty());
-      // What the node carries is the adaptively filtered cloud, so its size follows the point
-      // budget rather than the beam count the sensor happened to produce.
-      EXPECT_GE(result->node.point_cloud.size(),
+      EXPECT_FALSE(insertion.insertion_submaps.empty());
+      // The node carries the adaptively filtered cloud, so its size follows the point budget.
+      EXPECT_GE(insertion.node.point_cloud.size(),
                 static_cast<size_t>(options.adaptive_voxel_filter_option.min_num_points));
-      EXPECT_LT(result->node.point_cloud.size(), static_cast<size_t>(kNumBeams));
+      EXPECT_LT(insertion.node.point_cloud.size(), static_cast<size_t>(kNumBeams));
     }
   }
   EXPECT_GT(num_keyframes, 5);
 
-  // The local frame is defined by the first scan, so ground truth is the
-  // motion since then, not the world pose.
+  // The local frame is defined by the first scan, so ground truth is the motion since then.
   const Eigen::Affine2d first_world_pose = WorldPoseAt(0, kNumScans);
   const Eigen::Affine2d expected =
       first_world_pose.inverse() * WorldPoseAt(kNumScans - 1, kNumScans);
   const Eigen::Affine2d actual = builder.local_pose();
 
-  // Over ~4.3 m with no odometry and no noise, error should be at the grid resolution, not at
-  // the metre scale a broken pipeline gives.
+  // Over ~4.3 m with no odometry or noise, error should be at the grid resolution.
   EXPECT_LT((actual.translation() - expected.translation()).norm(), 0.10)
       << "expected " << expected.translation().transpose() << ", got "
       << actual.translation().transpose();
@@ -125,16 +119,15 @@ TEST(LocalTrajectoryBuilderTest, TracksASimulatedRobotInAClosedRoom) {
       std::abs(transform::NormalizeAngle(transform::GetYaw(actual) - transform::GetYaw(expected))),
       0.05);
 
-  // Early keyframes are low by construction: after a single insertion a hit cell only holds
-  // kDefaultHitProbability. What matters is that none is near kMinProbability, which would mean
-  // matching against unknown space, and that a mature map scores close to kMaxProbability.
+  // Early keyframes are low by construction: after one insertion a hit cell only holds
+  // kDefaultHitProbability. None may be near kMinProbability, which would mean matching against
+  // unknown space.
   EXPECT_GT(worst_score, 0.3);
   EXPECT_GT(last_score, 0.7);
 }
 
 // With the default 90 scans per submap the run above never fills one, so the handoff is never
-// exercised: the mature submap is released and matching switches to a younger one with half the
-// scans. That transition is where a frame or lifetime bug would sit.
+// exercised. That transition is where a frame or lifetime bug would sit.
 TEST(LocalTrajectoryBuilderTest, KeepsTrackingAcrossSubmapRotations) {
   constexpr int kNumScans = 200;
   constexpr int kNumBeams = 360;
@@ -147,9 +140,9 @@ TEST(LocalTrajectoryBuilderTest, KeepsTrackingAcrossSubmapRotations) {
   for (int i = 0; i < kNumScans; ++i) {
     const auto result =
         builder.AddScan(ScanTime(i), SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams));
-    if (result.has_value()) {
-      for (const auto& submap : result->insertion_submaps) {
-        submap_indices.insert(submap->id().submap_index);
+    if (result != nullptr && result->insertion_result != nullptr) {
+      for (const auto& submap : result->insertion_result->insertion_submaps) {
+        submap_indices.insert(submap->local_index());
       }
     }
   }
@@ -160,51 +153,8 @@ TEST(LocalTrajectoryBuilderTest, KeepsTrackingAcrossSubmapRotations) {
       WorldPoseAt(0, kNumScans).inverse() * WorldPoseAt(kNumScans - 1, kNumScans);
   const Eigen::Affine2d actual = builder.local_pose();
 
-  // No score assertion here: the score legitimately dips just after each
-  // rotation, because the new matching submap has seen half as many scans.
-  EXPECT_LT((actual.translation() - expected.translation()).norm(), 0.10)
-      << "expected " << expected.translation().transpose() << ", got "
-      << actual.translation().transpose();
-  EXPECT_LT(
-      std::abs(transform::NormalizeAngle(transform::GetYaw(actual) - transform::GetYaw(expected))),
-      0.05);
-}
-
-// A new session is a new bag, and nothing forces its stamps to come after the previous one's.
-// The tracking filter rejects anything older than its whole history, so without a reset the
-// first session would swallow every measurement of the second.
-//
-// The path keeps a constant heading: session two's local frame is session one's final pose, and
-// a rotated frame puts the walls diagonally across the grid, which costs centimetres of drift
-// for reasons unrelated to sessions.
-Eigen::Affine2d StraightPoseAt(int scan_index, int num_scans) {
-  const double s = static_cast<double>(scan_index) / (num_scans - 1);
-  return transform::FromXYTheta(2.0 + 4.0 * s, 2.0 + 1.5 * s, 0.0);
-}
-
-TEST(LocalTrajectoryBuilderTest, KeepsTrackingWhenANewSessionRewindsTheClock) {
-  constexpr int kNumScans = 60;
-  constexpr int kNumBeams = 360;
-
-  LocalTrajectoryBuilder builder{LocalTrajectoryBuilderOption()};
-  for (int i = 0; i < kNumScans; ++i) {
-    builder.AddScan(ScanTime(i) + common::FromSeconds(900.0),
-                    SimulateScan(StraightPoseAt(i, kNumScans), kNumBeams));
-  }
-  const Eigen::Affine2d after_first_session = builder.local_pose();
-
-  builder.StartNewSession(1);
-  for (int i = 0; i < kNumScans; ++i) {
-    builder.AddScan(ScanTime(i), SimulateScan(StraightPoseAt(i, kNumScans), kNumBeams));
-  }
-
-  // local_pose_ carries over, so the second session picks up where the first left off and the
-  // expected total is the path driven twice.
-  const Eigen::Affine2d session_motion =
-      StraightPoseAt(0, kNumScans).inverse() * StraightPoseAt(kNumScans - 1, kNumScans);
-  const Eigen::Affine2d expected = after_first_session * session_motion;
-  const Eigen::Affine2d actual = builder.local_pose();
-
+  // The score legitimately dips just after each rotation: the new matching submap has seen half
+  // as many scans.
   EXPECT_LT((actual.translation() - expected.translation()).norm(), 0.10)
       << "expected " << expected.translation().transpose() << ", got "
       << actual.translation().transpose();
@@ -229,9 +179,7 @@ TEST(LocalTrajectoryBuilderTest, BuildsAMapWithWallsAndFreeSpace) {
 
   const Eigen::Affine2d to_local = WorldPoseAt(0, kNumScans).inverse();
 
-  // The left wall, sampled along the stretch the robot had a clear view of.
-  // Individual cells can be missed at this beam spacing, so the assertion is
-  // on the fraction hit rather than on any one cell.
+  // Individual cells can be missed at this beam spacing, so the assertion is on the fraction hit.
   int num_wall_samples = 0;
   int num_occupied = 0;
   for (float y = 1.f; y <= 4.f; y += 0.05) {
@@ -295,9 +243,7 @@ TEST(LocalTrajectoryBuilderTest, AttachingADebugSinkChangesNothing) {
 
   ASSERT_EQ(without_sink.size(), with_sink.size());
   for (size_t i = 0; i < without_sink.size(); ++i) {
-    // Exact, not near: an observer that moves the result by an ulp is still an observer that
-    // changed the run, and every number this project reports would then depend on who was
-    // watching.
+    // Exact, not near: an observer that moves the result by an ulp still changed the run.
     EXPECT_TRUE((without_sink[i].matrix().array() == with_sink[i].matrix().array()).all())
         << "scan " << i << " moved:\n"
         << without_sink[i].matrix() << "\nversus\n"
@@ -308,6 +254,7 @@ TEST(LocalTrajectoryBuilderTest, AttachingADebugSinkChangesNothing) {
   EXPECT_EQ(sink->last_poses.count("predicted"), 1u);
   EXPECT_EQ(sink->last_poses.count("coarse"), 1u);
   EXPECT_EQ(sink->last_poses.count("matched"), 1u);
+  EXPECT_EQ(sink->last_poses.count("grid"), 1u);
   EXPECT_GT(sink->last_points, 0u);
   EXPECT_GT(sink->last_cells, 0u);
   EXPECT_GT(sink->last_score, 0.0);

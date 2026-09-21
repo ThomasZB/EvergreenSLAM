@@ -22,9 +22,8 @@
 
 namespace evergreenslam::mapping {
 
-// Insertion protocol, in this order: GrowToInclude() for the whole scan, then ApplyLookupTable()
-// per cell, then FinishUpdate(). Growing reallocates and may move the origin, so a grow
-// mid-insertion would invalidate the pending indices in update_indices_.
+// GrowToInclude() for the whole scan, then ApplyLookupTable() per cell, then FinishUpdate():
+// a grow mid-insertion moves the origin and invalidates the pending update_indices_.
 class ProbabilityGrid : public GridMap<uint8_t> {
  public:
   // Origin is meaningless until the first GrowToInclude().
@@ -36,6 +35,8 @@ class ProbabilityGrid : public GridMap<uint8_t> {
       : GridMap<uint8_t>(std::move(data), width, height, resolution, origin_x, origin_y,
                          kUnknownValue) {}
   ~ProbabilityGrid() = default;
+
+  static ProbabilityGrid FromSnapshot(const GridMapu8& snapshot);
 
   void GrowToInclude(const Eigen::Vector2d& min_point, const Eigen::Vector2d& max_point);
   bool ApplyLookupTable(const Eigen::Array2i& cell, const std::vector<uint8_t>& table);
@@ -51,8 +52,7 @@ class ProbabilityGrid : public GridMap<uint8_t> {
   inline const Eigen::AlignedBox2i& known_area() const { return known_area_; }
   bool empty() const { return known_area_.isEmpty(); }
 
-  // Cropped to known_area(), which is lossless because cells outside it are
-  // unknown and so is everything outside the snapshot. 0 x 0 when empty.
+  // Cropped to known_area(); lossless because everything outside either is unknown.
   GridMapu8 ToSnapshot() const;
 
  private:

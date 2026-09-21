@@ -1,0 +1,13 @@
+<!--
+  Ported from cartographer_rviz, Copyright 2016 The Cartographer Authors, Apache License 2.0.
+-->
+
+<library path="evergreenslam_rviz">
+  <class name="evergreenslam_rviz/SubmapsDisplay"
+         type="evergreenslam_rviz::SubmapsDisplay"
+         base_class_type="rviz_common::Display">
+    <description>
+      Draws the EvergreenSLAM map as the submaps it is made of, each at its optimized pose.
+    </description>
+  </class>
+</library>

@@ -24,18 +24,16 @@
 
 namespace evergreenslam::mapping {
 
+// local_index is minted from a counter that never resets; graph ids are the backend's business.
 class ActiveMap {
  public:
   explicit ActiveMap(const ActiveMapOption& option = ActiveMapOption());
 
-  void StartNewSession(int session_id);
-  std::vector<std::shared_ptr<const Submap>> InsertScan(const Eigen::Vector2d& origin,
-                                                        const sensor::PointCloud& point_cloud,
-                                                        const Eigen::Affine2d& local_pose);
+  std::vector<std::shared_ptr<const Submap>> InsertScan(const Eigen::Affine2d& local_pose,
+                                                        const sensor::PointCloud& point_cloud);
 
   // nullptr before the first scan.
   std::shared_ptr<const Submap> matching_submap() const;
-  int session_id() const { return session_id_; }
   const std::vector<std::shared_ptr<Submap>>& submaps() const { return submaps_; }
 
  private:
@@ -44,8 +42,7 @@ class ActiveMap {
   ActiveMapOption option_;
   CastRaysMapping inserter_;
   std::vector<std::shared_ptr<Submap>> submaps_;
-  int session_id_ = 0;
-  int next_submap_index_ = 0;
+  int next_local_index_ = 0;
 };
 
 }  // namespace evergreenslam::mapping

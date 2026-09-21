@@ -1,0 +1,8 @@
+# Overrides for the cartographer Deutsches Museum backpack bags (UTM-30LX, ~37 Hz): one ~2 km
+# session of ~32k keyframes, so trimming and checkpointing ride far fewer solves.
+lifelong:
+  trim_every_n_optimizations: 4
+  checkpoint_min_interval: 300.0
+  constraint_builder:
+    constraint_sampler:
+      sampling_ratio: 0.5

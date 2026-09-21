@@ -1,54 +1,75 @@
-# EvergreenSLAM configuration.
-# Every value here is the default already compiled into the code, listed only for reference.
-# Dropping any entry falls back to that default, so keep just the parts you want to change.
+# The keys a deployment usually touches, at their compiled defaults. The rest is in
+# configs/reference.yaml.
 
 local_trajectory_builder:
   min_range: 0.3   # m, anything below this is usually the robot itself
   max_range: 30.0  # m
-  voxel_size: 0.025  # m, thins the cloud that goes into the grid
-
-  # Applied on top of voxel_size for scan matching and for the pose graph node, never for the
-  # grid: the voxel shrinks from max_length until min_num_points survive, so a scan costs about
-  # the same to match in a corridor as in an open hall.
-  adaptive_voxel_filter:
-    max_length: 0.5
-    min_num_points: 200
-
-  # Motion prior for the next scan, and the only one there is on pure lidar hardware. Singer
-  # model: 1/alpha is how long an acceleration stays correlated, sigma is its standard deviation.
-  # Both alphas must be > 0, the filter aborts otherwise.
-  generic_tracking_filter:
-    trans_alpha: 1.0   # 1/s, a robot spends ~1 s getting up to speed or stopping
-    rot_alpha: 2.0     # 1/s, turns start and stop faster than that
-    trans_sigma: 5.0   # m/s^2
-    rot_sigma: 10.0     # rad/s^2
-    # How much the scan match is trusted as a position measurement; below one cell, since the
-    # matcher interpolates inside a cell.
-    measurement_translation_sigma: 0.02  # m
-    measurement_rotation_sigma: 0.01     # rad
 
   pose_optimization:
-    # Brute-force search window. Wide enough for one keyframe's prediction error is enough; the
-    # cost grows cubically with the window.
-    linear_search_window: 0.15    # m
-    angular_search_window: 0.2   # rad
-    grid_match_weight: 100.0
-    # Pulls the Ceres fine match back toward the coarse result, which keeps it from drifting along
-    # a corridor. Set to 0 to drop the prior.
-    translation_weight: 0.01
-    rotation_weight: 0.04
+    # Cost grows cubically with the window; widen the angular one for a spinning robot.
+    linear_search_window: 0.2
+    angular_search_window: 0.2
 
   motion_filter:
-    # These three thresholds keep the error magnitude between adjacent keyframes constant, which
-    # is what makes the pose graph's fixed sqrt_info = 1e2 valid.
+    # These keep adjacent-keyframe error at the scale constraint_weight assumes; move together.
     max_time_seconds: 5.0
     max_distance_meters: 0.2
     max_angle_radians: 0.0175
 
   active_map:
-    resolution: 0.05           # m/cell
-    num_scans_per_submap: 90   # larger drifts more internally but leaves fewer pose graph nodes
-    castrays_mapping:
-      hit_probability: 0.55
-      miss_probability: 0.49
-      insert_free_space: true
+    resolution: 0.05          # m/cell
+    num_scans_per_submap: 40  # larger drifts more internally but leaves fewer pose graph nodes
+
+# Global pose recovery, shared by loop-closure search and boot relocalization. The linear window
+# and score floor are set per pair by lifelong/constraint_builder.
+global_scan_matcher:
+  fast_correlative:
+    angular_search_window: 0.52  # rad, ~30 degrees
+
+lifelong:
+  optimization:
+    # Solving on every node would spend the whole budget on corrections nobody can observe.
+    optimize_every_n_nodes: 30
+
+  # sqrt_information is the inverse of these, per axis.
+  constraint_weight:
+    odometry_translation_stddev: 0.01      # m
+    odometry_rotation_stddev: 0.01         # rad
+    loop_closure_translation_stddev: 0.01  # m
+    loop_closure_rotation_stddev: 0.01     # rad
+    # Huber knee, translation-equivalent: what keeps one wrong match from bending the map.
+    loop_closure_huber_distance: 0.1  # m
+
+  session_manager:
+    # Off: nothing is judged or frozen; PoseGraph::FreezeFedSession still forces one.
+    auto_freeze: true
+    # Paramters for freezing a session.
+    min_new_area: 200.0  # m^2
+    min_new_area_fraction: 0.1  # of the frozen area; 0 keeps min_new_area alone
+    growth_tolerance: 20.0  # m^2
+    track_growth_tolerance: 10.0  # m^2
+    submaps_without_growth: 7
+    coverage_resolution: 0.15  # m
+    track_resolution: 0.4  # m, node cells; coarser than a re-driven lane's offset
+    frozen_covered_fraction: 0.9
+    freeze_judge:
+      # All finished submaps must clear these in JUDGING.
+      max_translation_stddev: 0.02
+      max_rotation_stddev: 0.005
+
+  # A wrong constraint poisons the graph, so these are strict.
+  constraint_builder:
+    min_score_prominence: 0.1  # score a displaced pose must lose, or it is corridor aliasing
+    # A pair searches search_window_floor plus 5 % of the path since the last valid closure.
+    candidate_slack_per_meter: 0.05
+    search_window_floor: 0.5  # m
+    # Search windows up to tight_window_max cannot alias far and use the looser tight_gates,
+    # which is every pair within about 10 m of the last valid closure.
+    tight_window_max: 1.0
+    wide_gates:
+      min_coarse_score: 0.55        # mean occupancy probability the coarse match must reach
+      min_refined_score: 0.55       # the refined pose, rescored at full resolution
+      max_free_space_fraction: 0.1  # fraction of the scan allowed to land in observed free space
+
+  # Sensor time; a crash loses at most this much graph.
+  checkpoint_min_interval: 30.0

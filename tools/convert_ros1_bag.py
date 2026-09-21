@@ -30,8 +30,14 @@ DECODE_AS = {
     "tf/msg/tfMessage": "tf2_msgs/msg/TFMessage",
     "tf2_msgs/msg/TFMessage": "tf2_msgs/msg/TFMessage",
     "sensor_msgs/msg/LaserScan": "sensor_msgs/msg/LaserScan",
+    "sensor_msgs/msg/MultiEchoLaserScan": "sensor_msgs/msg/MultiEchoLaserScan",
     "nav_msgs/msg/Odometry": "nav_msgs/msg/Odometry",
 }
+
+# A multi-echo scan (cartographer's backpack bags) becomes a plain LaserScan carrying the first
+# echo, which is what a single-echo scanner would have reported; a beam with no echo is +inf so
+# the consumer's range crop drops it.
+WRITE_AS = {"sensor_msgs/msg/MultiEchoLaserScan": "sensor_msgs/msg/LaserScan"}
 
 
 def header2(header1):
@@ -55,6 +61,34 @@ def convert_laser_scan(msg):
         range_max=msg.range_max,
         ranges=msg.ranges,
         intensities=msg.intensities,
+    )
+
+
+def convert_multi_echo_laser_scan(msg):
+    import numpy
+
+    def first_or(values, default):
+        return float(values[0]) if len(values) else default
+
+    ranges = numpy.asarray(
+        [first_or(echo.echoes, float("inf")) for echo in msg.ranges], dtype=numpy.float32
+    )
+    intensities = numpy.asarray(
+        [first_or(echo.echoes, 0.0) for echo in msg.intensities], dtype=numpy.float32
+    )
+    if len(intensities) != len(ranges):
+        intensities = numpy.zeros(0, dtype=numpy.float32)
+    return ROS2.types["sensor_msgs/msg/LaserScan"](
+        header=header2(msg.header),
+        angle_min=msg.angle_min,
+        angle_max=msg.angle_max,
+        angle_increment=msg.angle_increment,
+        time_increment=msg.time_increment,
+        scan_time=msg.scan_time,
+        range_min=msg.range_min,
+        range_max=msg.range_max,
+        ranges=ranges,
+        intensities=intensities,
     )
 
 
@@ -125,6 +159,7 @@ def convert_odometry(msg):
 CONVERTERS = {
     "tf2_msgs/msg/TFMessage": convert_tf,
     "sensor_msgs/msg/LaserScan": convert_laser_scan,
+    "sensor_msgs/msg/MultiEchoLaserScan": convert_multi_echo_laser_scan,
     "nav_msgs/msg/Odometry": convert_odometry,
 }
 
@@ -145,16 +180,18 @@ def main():
                 skipped[f"{src_conn.topic} ({src_conn.msgtype})"] = src_conn.msgcount
                 continue
             topic = src_conn.topic if src_conn.topic.startswith("/") else "/" + src_conn.topic
+            out_type = WRITE_AS.get(msgtype, msgtype)
             connections[src_conn.id] = (
-                writer.add_connection(topic, msgtype, typestore=ROS2),
+                writer.add_connection(topic, out_type, typestore=ROS2),
                 msgtype,
+                out_type,
             )
         for src_conn, timestamp, raw in reader.messages():
             if src_conn.id not in connections:
                 continue
-            dst_conn, msgtype = connections[src_conn.id]
+            dst_conn, msgtype, out_type = connections[src_conn.id]
             msg = CONVERTERS[msgtype](ROS1.deserialize_ros1(raw, msgtype))
-            writer.write(dst_conn, timestamp, ROS2.serialize_cdr(msg, msgtype))
+            writer.write(dst_conn, timestamp, ROS2.serialize_cdr(msg, out_type))
             written[dst_conn.topic] += 1
 
     for topic, count in sorted(written.items()):

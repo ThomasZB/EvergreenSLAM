@@ -70,8 +70,14 @@ inline const std::vector<double>& ValueToProbabilityTable() {
 inline double ValueToProbability(uint8_t value) { return ValueToProbabilityTable()[value]; }
 inline bool IsKnownValue(uint8_t value) { return (value & (kUpdateMarker - 1)) != kUnknownValue; }
 
-// Maps each current cell value to the value after multiplying its odds by
-// `odds`, marker already set. Entry 0 starts from a prior of 0.5.
+// Distance from 0.5, not from `kUnknownProbability`: one update out of unknown lands right next
+// to 0.5 in either direction.
+inline int ValueConfidence(uint8_t value) {
+  static const int neutral = ProbabilityToValue(0.5);
+  return std::abs(static_cast<int>(value) - neutral);
+}
+
+// Entry 0 starts from a prior of 0.5.
 inline std::vector<uint8_t> ComputeLookupTableToApplyOdds(double odds) {
   std::vector<uint8_t> table(kValueCount);
   table[kUnknownValue] = ProbabilityToValue(ProbabilityFromOdds(odds)) + kUpdateMarker;

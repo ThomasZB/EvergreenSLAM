@@ -4,3 +4,11 @@ CLAUDE.md
 compile_commands.json
 .cache/
 bags/
+build-*
+runs/
+.clangd
+.DS_Store
+.pixi/
+install/
+log/
+.vscode

@@ -1,0 +1,7 @@
+int32 session_id
+int32 submap_index
+---
+# Empty on failure, with error_message set.
+string error_message
+int32 submap_version
+SubmapTexture texture

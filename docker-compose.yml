@@ -1,16 +1,23 @@
-# One dev image (adapters/ros2/Dockerfile), the repo mounted at /ws, build trees in a named
+# One dev image (adapters/ros2/evergreenslam_ros/Dockerfile), the repo mounted at /ws, build trees in a named
 # volume so they survive between runs and never touch the source tree.
+#
+# For day-to-day work on macOS prefer pixi.toml (native build, rviz2, no mounts); this file
+# remains the Linux gcc -O2 / TSan gate that macOS clang cannot stand in for.
 #
 #   docker compose build                     # (re)build the image
 #   docker compose run --rm core-test       # core alone on Linux gcc: cmake + ctest
-#   docker compose run --rm ros-build       # ROS 2 adapter: build + tests
+#   docker compose run --rm core-tsan       # lifelong tests under ThreadSanitizer (T9 gate)
+#   docker compose run --rm ros-build       # colcon build + test of adapters/ros2/ (msgs, node, rviz plugin)
 #   docker compose run --rm shell           # interactive shell in the image
 #
 #   BAG=bags/wg_cafe docker compose up bag  # offline replay, webui at http://localhost:8642
 #   docker compose up live                  # live node: /scan in, webui at :8642
 #   BAG=bags/wg_cafe docker compose run --rm bag-play   # feed the live node over DDS
 #
-# Tunables via env: BAG (rosbag2 dir, relative to the repo root so it is visible in /ws),
+# Tunables via env: BAG (rosbag2 dir — either relative to the repo root, or an absolute path
+# on the host; absolute paths are bind-mounted into the container automatically),
+# BAG_ROOT (defaults to BAG; set to a parent directory when BAG contains symlinks
+# that point outside it, e.g. BAG_ROOT=/path/to/date_dir BAG=$BAG_ROOT/merged),
 # SCAN_TOPIC (/scan), BASE_FRAME (base_link), EXTRA (appended to the bag command verbatim,
 # e.g. EXTRA="--reference_frame map --speed 4"), WEBUI_PORT (8642), ROS_DOMAIN_ID (0).
 #
@@ -23,31 +30,45 @@
 
 x-dev: &dev
   image: evergreenslam:ros2
-  build: adapters/ros2
+  build: adapters/ros2/evergreenslam_ros
   working_dir: /ws
   volumes:
     - .:/ws
     - build-cache:/out
   environment:
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    # Fast DDS publishes synchronously by default; a multi-MB /map to a slow subscriber then
+    # stalls the publishing thread.
+    RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
     # $$-escaped in the commands below: compose interpolates the whole file even for services
     # it is not starting, so a compose-time ${BAG:?} would make `up live` demand a bag too.
     BAG: ${BAG:-}
+    BAG_ROOT: ${BAG_ROOT:-${BAG:-}}
 
 services:
   core-test:
     <<: *dev
     command: >
-      bash -lc "cmake -S /ws -B /out/core -DCMAKE_BUILD_TYPE=Release
+      bash -lc "cmake -S /ws/core -B /out/core -DCMAKE_BUILD_TYPE=Release
       -DEVERGREENSLAM_BUILD_TESTS=ON
       && cmake --build /out/core -j8 && ctest --test-dir /out/core --output-on-failure"
 
+  # T9's race gate: core rebuilt with -fsanitize=thread, lifelong tests only.
+  core-tsan:
+    <<: *dev
+    command: bash -lc "tools/run_tsan.sh /ws /out/core-tsan"
+
+  # A colcon workspace with adapters/ros2/ as its source. The plugin builds here only for the gcc gate;
+  # there is no rviz2 in the image.
   ros-build:
     <<: *dev
     command: >
-      bash -lc "cmake -S /ws/adapters/ros2 -B /out/ros -DCMAKE_BUILD_TYPE=Release
-      -DBUILD_TESTING=ON
-      && cmake --build /out/ros -j8 && ctest --test-dir /out/ros --output-on-failure"
+      bash -lc "colcon --log-base /out/log build --base-paths /ws/adapters/ros2 --build-base /out/colcon
+      --install-base /out/install
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      && colcon --log-base /out/log test --base-paths /ws/adapters/ros2 --build-base /out/colcon
+      --install-base /out/install
+      && colcon test-result --test-result-base /out/colcon --verbose"
 
   bag:
     <<: *dev
@@ -56,9 +77,13 @@ services:
         condition: service_completed_successfully
     ports:
       - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
+    volumes:
+      - .:/ws
+      - build-cache:/out
+      - ${BAG_ROOT:-${BAG:-.}}:${BAG_ROOT:-${BAG:-/tmp/no-bag}}:ro
     command: >
-      bash -lc "/out/ros/bag_laser_odometry
-      --bag $${BAG:?set BAG to a rosbag2 dir relative to the repo root}
+      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros bag_laser_odometry
+      --bag $${BAG:?set BAG to a rosbag2 dir}
       --config configs/evergreenslam.yaml --scan_topic ${SCAN_TOPIC:-/scan}
       --base_frame ${BASE_FRAME:-base_link} --webui_port ${WEBUI_PORT:-8642} ${EXTRA:-}"
 
@@ -71,14 +96,18 @@ services:
     ports:
       - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
     command: >
-      bash -lc "/out/ros/laser_odometry_node --ros-args
+      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros laser_odometry_node --ros-args
       -p config:=configs/evergreenslam.yaml -p base_frame:=${BASE_FRAME:-base_link}
       -p webui_port:=${WEBUI_PORT:-8642} -r scan:=${SCAN_TOPIC:-/scan}"
 
   bag-play:
     <<: *dev
     network_mode: bridge
-    command: bash -lc "ros2 bag play $${BAG:?set BAG to a rosbag2 dir relative to the repo root}"
+    volumes:
+      - .:/ws
+      - build-cache:/out
+      - ${BAG_ROOT:-${BAG:-.}}:${BAG_ROOT:-${BAG:-/tmp/no-bag}}:ro
+    command: bash -lc "ros2 bag play $${BAG:?set BAG to a rosbag2 dir}"
 
   shell:
     <<: *dev

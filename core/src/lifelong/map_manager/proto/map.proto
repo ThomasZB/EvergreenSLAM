@@ -1,0 +1,126 @@
+// Persisted form of the pose graph: one file per session plus a manifest.
+
+syntax = "proto3";
+
+package evergreenslam.lifelong.proto;
+
+message Pose2d {
+  double x = 1;
+  double y = 2;
+  double theta = 3;
+}
+
+// Row major 3x3, stored in full: sqrt information is not symmetric in general.
+message Matrix3d {
+  repeated double data = 1;
+}
+
+message PointCloud {
+  // x0, y0, x1, y1, ... in the node's own frame.
+  repeated double xy = 1;
+}
+
+message SubmapId {
+  int32 session_id = 1;
+  int32 submap_index = 2;
+}
+
+message NodeId {
+  int32 session_id = 1;
+  int32 node_index = 2;
+}
+
+message VariableId {
+  enum Kind {
+    NODE = 0;
+    SUBMAP = 1;
+  }
+  Kind kind = 1;
+  int32 session_id = 2;
+  int32 index = 3;
+}
+
+enum SessionState {
+  ACTIVE = 0;
+  FROZEN = 1;
+}
+
+// Cells in the submap frame: a world point is Submap.global_pose * cell.
+message Grid {
+  int32 width = 1;
+  int32 height = 2;
+  double resolution = 3;
+  double origin_x = 4;
+  double origin_y = 5;
+  bytes cells = 6;
+}
+
+message Submap {
+  SubmapId id = 1;
+  Pose2d local_pose = 2;
+  Pose2d global_pose = 3;
+  int32 num_scans = 4;
+  bool finished = 5;
+  Grid grid = 6;
+}
+
+message Node {
+  NodeId id = 1;
+  int64 time_nanos = 2;
+  Pose2d local_pose = 3;
+  Pose2d global_pose = 4;
+  PointCloud point_cloud = 5;
+  repeated SubmapId containing_submap_ids = 6;
+}
+
+message Constraint {
+  enum Type {
+    INTRA_SUBMAP = 0;
+    INTER_SUBMAP = 1;
+    PRIOR = 2;
+  }
+  Type type = 1;
+  VariableId from = 2;
+  VariableId to = 3;
+  Pose2d relative_pose = 4;
+  Matrix3d sqrt_information = 5;
+  bool recovered = 6;
+}
+
+message Session {
+  int32 session_index = 1;
+  SessionState state = 2;
+  int64 start_time_nanos = 3;
+  int64 last_node_time_nanos = 4;
+  Pose2d local_to_global = 5;
+  int32 next_submap_index = 6;
+  int32 next_node_index = 7;
+}
+
+message SessionFile {
+  int32 version = 1;
+  Session session = 2;
+  repeated Submap submaps = 3;
+  repeated Node nodes = 4;
+  repeated Constraint constraints = 5;
+}
+
+// The boot seed when it is newer than the checkpoint.
+message LastPose {
+  NodeId node_id = 1;
+  int64 time_nanos = 2;
+  Pose2d global_pose = 3;
+}
+
+message ManifestEntry {
+  int32 session_index = 1;
+  SessionState state = 2;
+  string file_name = 3;
+  int32 last_fed_boot = 4;
+}
+
+message Manifest {
+  int32 version = 1;
+  repeated ManifestEntry sessions = 2;
+  int32 boot_count = 3;
+}

@@ -41,12 +41,12 @@ LocalTrajectoryBuilder::LocalTrajectoryBuilder(const LocalTrajectoryBuilderOptio
       active_map_(option.active_map_option),
       measurement_covariance_(MeasurementCovariance(option.tracking_filter_option)) {}
 
-std::optional<LocalTrajectoryBuilder::InsertionResult> LocalTrajectoryBuilder::AddUndistortedScan(
+std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::AddUndistortedScan(
     common::Time time, const sensor::PointCloud& point_cloud) {
   const sensor::PointCloud dense = voxel_filter_.Filter(CropRange(point_cloud));
   if (dense.empty()) {
     LOG(WARNING) << "empty scan after range crop and voxel filter, dropped";
-    return std::nullopt;
+    return nullptr;
   }
   const sensor::PointCloud filtered = adaptive_voxel_filter_.Filter(dense);
 
@@ -60,34 +60,39 @@ std::optional<LocalTrajectoryBuilder::InsertionResult> LocalTrajectoryBuilder::A
   const std::shared_ptr<const Submap> matching_submap = active_map_.matching_submap();
   if (matching_submap != nullptr && !matching_submap->grid().empty()) {
     const GridMapu8& grid_map = matching_submap->Snapshot();
+    const Eigen::Affine2d& grid_pose = matching_submap->local_pose();
     const Eigen::Affine2d predicted_pose = pose;
-    Eigen::Affine2d coarse_pose = pose;
-    match_score = pose_optimization_.Match(filtered, grid_map, pose, &coarse_pose);
+    Eigen::Affine2d pose_in_grid = Eigen::Affine2d(grid_pose.inverse() * pose);
+    Eigen::Affine2d coarse_in_grid = pose_in_grid;
+    match_score = pose_optimization_.Match(filtered, grid_map, pose_in_grid, &coarse_in_grid);
+    pose = grid_pose * pose_in_grid;
     if (debug_sink_ != nullptr) {
-      debug_sink_->PublishScanMatch(
-          time, {{"predicted", predicted_pose}, {"coarse", coarse_pose}, {"matched", pose}},
-          filtered, grid_map, match_score);
+      debug_sink_->PublishScanMatch(time,
+                                    {{"predicted", predicted_pose},
+                                     {"coarse", Eigen::Affine2d(grid_pose * coarse_in_grid)},
+                                     {"matched", pose},
+                                     {"grid", grid_pose}},
+                                    filtered, grid_map, match_score);
     }
   }
 
   local_pose_ = pose;
   tracking_filter_.Update({time, local_pose_, measurement_covariance_});
 
+  auto result = std::make_unique<MatchingResult>();
+  result->time = time;
+  result->local_pose = local_pose_;
+  result->match_score = match_score;
   if (motion_filter_.IsSimilar(time, local_pose_)) {
-    return std::nullopt;
+    return result;
   }
-  InsertionResult result;
-  result.node_id = NodeId{session_id_, next_node_index_++};
-  result.node.time = time;
-  result.node.local_pose = local_pose_;
-  result.node.point_cloud = filtered;
-  result.matching_result = MatchingResult{time, local_pose_, match_score};
-  result.insertion_submaps = active_map_.InsertScan(
-      local_pose_.translation(), sensor::TransformPointCloud(dense, local_pose_), local_pose_);
+  result->insertion_result = std::make_unique<InsertionResult>(
+      InsertionResult{next_node_index_++, TrajectoryNode{time, local_pose_, filtered},
+                      active_map_.InsertScan(local_pose_, dense)});
   return result;
 }
 
-std::optional<LocalTrajectoryBuilder::InsertionResult> LocalTrajectoryBuilder::AddScan(
+std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::AddScan(
     common::Time time, const sensor::TimedPointCloud& point_cloud) {
   // With no motion estimate yet the identity pair degenerates to stripping the offsets.
   Eigen::Affine2d start_pose = Eigen::Affine2d::Identity();
@@ -101,14 +106,6 @@ std::optional<LocalTrajectoryBuilder::InsertionResult> LocalTrajectoryBuilder::A
     end_pose = pose_at(time + point_cloud.points().back().offset);
   }
   return AddUndistortedScan(time, sensor::Undistort(point_cloud, start_pose, end_pose));
-}
-
-void LocalTrajectoryBuilder::StartNewSession(int session_id) {
-  active_map_.StartNewSession(session_id);
-  motion_filter_.Reset();
-  tracking_filter_.Reset();
-  session_id_ = session_id;
-  next_node_index_ = 0;
 }
 
 void LocalTrajectoryBuilder::SetDebugSink(std::shared_ptr<debug::DebugSink> debug_sink) {

@@ -1,0 +1,184 @@
+# Every option EvergreenSLAM reads, at its compiled default. An omitted key falls back to it; a
+# key in the wrong section is ignored.
+
+local_trajectory_builder:
+  min_range: 0.3     # m, anything below this is usually the robot itself
+  max_range: 30.0    # m, beyond this a return is dropped rather than trusted
+  voxel_size: 0.025  # m, thins the cloud that goes into the grid
+
+  # For matching and the graph node, never the grid: shrinks until min_num_points survive.
+  adaptive_voxel_filter:
+    max_length: 0.5      # m, coarsest voxel the filter starts from
+    min_num_points: 200  # points the filter refines until it keeps
+
+  # Singer model: 1/alpha is how long an acceleration stays correlated, sigma its stddev.
+  generic_tracking_filter:
+    trans_alpha: 1.0  # 1/s, a robot spends ~1 s getting up to speed or stopping
+    rot_alpha: 2.0    # 1/s, turns start and stop faster than that
+    trans_sigma: 5.0  # m/s^2, translational process noise
+    rot_sigma: 10.0   # rad/s^2, rotational process noise
+    # Below one cell: the matcher interpolates inside a cell.
+    measurement_translation_sigma: 0.02  # m
+    measurement_rotation_sigma: 0.01     # rad
+
+  pose_optimization:
+    # Brute-force window; cost grows cubically with it.
+    linear_search_window: 0.2   # m
+    angular_search_window: 0.2  # rad
+    grid_match_weight: 100.0    # weight of the grid residual in the Ceres fine match
+    # Pulls the fine match back toward the coarse result; 0 drops the prior.
+    translation_weight: 0.01
+    rotation_weight: 0.04
+
+  motion_filter:
+    # Keeps adjacent-keyframe error constant, which is what makes the fixed constraint stddevs valid.
+    max_time_seconds: 5.0      # s since the last keyframe
+    max_distance_meters: 0.2   # m since the last keyframe
+    max_angle_radians: 0.0175  # rad since the last keyframe
+
+  active_map:
+    resolution: 0.05          # m/cell
+    num_scans_per_submap: 40  # larger drifts more internally but leaves fewer pose graph nodes
+    castrays_mapping:
+      hit_probability: 0.55    # probability an endpoint cell is updated toward
+      miss_probability: 0.49   # probability a cell the ray passed through is updated toward
+      insert_free_space: true  # false only updates hits, which leaves the map without free space
+
+# Shared by loop-closure search and boot relocalization. The linear window and score floor are
+# set per pair by lifelong/constraint_builder.
+global_scan_matcher:
+  fast_correlative:
+    # A match with no prior ignores the window and searches the whole submap over all headings.
+    angular_search_window: 0.52  # rad, ~30 degrees
+    # Number of multi-resolution levels; the coarsest one pools 2^(depth - 1) cells.
+    branch_and_bound_depth: 7
+
+# The lifelong backend. Unknown keys are warned about.
+lifelong:
+  optimization:
+    # Solving on every node would spend the whole budget on corrections nobody can observe. The
+    # cadence is the only recurring solve trigger: closures only add edges and wait for it; boot,
+    # first anchoring, freeze and Finish each solve once on their own.
+    optimize_every_n_nodes: 30
+    max_num_iterations: 50  # Ceres iteration cap per solve
+    num_threads: 1          # Ceres solver threads
+
+  # sqrt_information is the inverse of these, per axis.
+  constraint_weight:
+    odometry_translation_stddev: 0.01      # m, intra-submap node-to-submap edges
+    odometry_rotation_stddev: 0.01         # rad
+    # Accepted inter-submap matches. The translational weight of a closure is further divided by
+    # sqrt(1 + (lever_arm * loop_closure_rotation_stddev / loop_closure_translation_stddev)^2).
+    loop_closure_translation_stddev: 0.01  # m
+    loop_closure_rotation_stddev: 0.01     # rad
+    # Translation-equivalent: the loss sees the whole whitened residual.
+    loop_closure_huber_distance: 0.1  # m
+
+  session_manager:
+    # Off: nothing is ever judged or frozen and the boot session keeps the frame; a freeze can
+    # still be forced through PoseGraph::FreezeFedSession.
+    auto_freeze: true
+    # Each unfrozen session runs a phase machine, stepped after every cadence solve and only once
+    # it has a frozen link. LOCALIZING until the union of its finished submaps' cells outside
+    # the frozen layer reaches min(min_new_area, min_new_area_fraction x frozen area) (a submap
+    # covered >= frozen_covered_fraction adds nothing), then EXPANDING. Growth is area AND
+    # track, the union of the session's node cells outside the frozen sessions' node cells: a
+    # finished submap adding less than either tolerance enters NO_GROWTH, and
+    # submaps_without_growth more finished submaps under baseline + tolerance reach JUDGING, the
+    # covariance gate; a rise of both above it returns to EXPANDING. The track keeps a
+    # re-driven lap, which adds area at its rim but no new cells to stand in, from resetting
+    # the count. A floating session gets no more submaps and goes to JUDGING as soon as it is
+    # worth freezing.
+    min_new_area: 200.0          # m^2
+    min_new_area_fraction: 0.1   # of the frozen area; 0 keeps min_new_area alone
+    growth_tolerance: 20.0       # m^2
+    track_growth_tolerance: 10.0 # m^2 of track cells
+    submaps_without_growth: 7
+    coverage_resolution: 0.15    # m, the coarse cells the frozen layer is compared at
+    track_resolution: 0.4        # m, the node cells; coarser than a re-driven lane's offset
+    frozen_covered_fraction: 0.9
+    freeze_judge:
+      # Per-axis stddevs of a submap's marginal covariance, checked in JUDGING. Simulation values.
+      max_translation_stddev: 0.02
+      max_rotation_stddev: 0.005
+
+  constraint_builder:
+    # Acceptance only; the matcher is in global_scan_matcher. A wrong constraint poisons the graph.
+    constraint_sampler:
+      # Fraction of node search rounds that run at all; deterministic counter, no RNG.
+      sampling_ratio: 1.0
+      # Per-round budget of coarse+refine matches when the caller passes none.
+      max_matches_per_round: 8
+    # A submap is a candidate when the node lies within its known footprint plus a slack growing
+    # with the path each session walked since its last valid closure. Frozen endpoints add nothing.
+    candidate_slack_per_meter: 0.05
+    max_candidate_slack: 30.0
+    # The graph-prior coarse window is this floor plus the slack, so a session that closes often
+    # searches under a metre.
+    search_window_floor: 0.5
+    # A same-session closure counts as valid only when the node is at least this many node
+    # indices away from the submap's node range; cross-session closures always count.
+    min_loop_node_gap: 20
+    # Coarse windows around an operator's initial pose, which replaces the graph's estimate.
+    relocalization_linear_search_window: 2.0
+    relocalization_angular_search_window: 0.5
+    max_constraint_distance: 15.0  # m, a closure beyond this is ignored
+    # A window this narrow cannot alias far, so tight_gates may accept a scene that changed since
+    # mapping; wider pairs keep wide_gates. Reached within about 10 m of the last valid closure.
+    tight_window_max: 1.0
+    tight_gates:
+      min_coarse_score: 0.4
+      min_refined_score: 0.45
+      max_free_space_fraction: 0.3
+    wide_gates:
+      min_coarse_score: 0.55
+      min_refined_score: 0.55
+      max_free_space_fraction: 0.1
+    # Refinement moving the coarse result further than this means the peak was not real.
+    max_refinement_translation: 0.25
+    max_refinement_rotation: 0.1
+    # Displacing the refined pose must cost this much score, or the match is corridor aliasing.
+    prominence_translation: 0.5
+    prominence_rotation: 0.3
+    min_score_prominence: 0.1
+    # A cell at or below this counts as observed free; unknown cells do not count.
+    free_space_probability: 0.4
+    # Cached branch-and-bound stacks; one costs about 7.7x its grid. 0 disables the cache.
+    precomputation_cache_size: 32
+    # Worker threads for the per-pair match chain; 0 picks a hardware default.
+    num_match_workers: 0
+
+  trimmer:
+    selector:
+      # Coarse grids for the two coverage signals: submap footprints and node positions.
+      submap_coverage_resolution: 0.15
+      node_coverage_resolution: 0.3
+      # Area covered by newer submaps, and nodes sharing coarse cells with newer outside nodes.
+      min_covered_fraction: 0.9
+      min_covering_newer_submaps: 2
+      min_covered_node_fraction: 0.8
+      # "any" trims on either signal, "all" requires both.
+      coverage_mode: any
+      # Submaps a session keeps however redundant; freezing is gated on minted submaps, not these.
+      min_surviving_submaps: 2
+      # Newest finished submaps per session that neither get trimmed nor cover: a match in flight
+      # may still name what they would cover.
+      keep_newest_submaps: 2
+    max_submaps_per_round: 2  # submaps a trim round may delete
+    # Per-axis stddev floor on recovered constraints; must be at least the odometry stddev.
+    min_recovered_stddev: 0.01
+    # A longer tree edge becomes an absolute prior, but only on a freeze-grade endpoint.
+    max_binary_constraint_length: 10.0
+    prior_max_translation_stddev: 0.02
+    prior_max_rotation_stddev: 0.005
+
+  # Trimming is what bounds memory by area instead of runtime; off only for A/B comparisons. Off
+  # also skips the overlap trim a freeze runs first, so a frozen file then holds the whole session.
+  trim: true
+  # One Markov-blanket covariance per trimmed submap; raise to thin the trims on long runs.
+  trim_every_n_optimizations: 1
+  # Seconds of sensor time between checkpoints. Finish, freeze and rotation always write, and
+  # last_pose follows every keyframe.
+  checkpoint_min_interval: 30.0
+  # Boot-time GC: an unfrozen session unfed for this many boots is deleted at Start. 0 disables.
+  gc_unfrozen_after_n_boots: 5

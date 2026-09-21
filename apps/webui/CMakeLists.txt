@@ -5,7 +5,7 @@ find_package(Threads REQUIRED)
 set(EVERGREENSLAM_WEBUI_WWW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/www"
     CACHE PATH "Directory served by the webui")
 
-add_library(evergreenslam_webui STATIC src/web_debug_sink.cc)
+add_library(evergreenslam_webui STATIC src/web_debug_sink.cc src/pose_graph_view.cc)
 target_include_directories(evergreenslam_webui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # SYSTEM so the vendored header's warnings are not ours to fix.
 target_include_directories(evergreenslam_webui SYSTEM PRIVATE

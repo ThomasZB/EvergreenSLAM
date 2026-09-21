@@ -23,7 +23,7 @@ namespace evergreenslam::mapping {
 struct ActiveMapOption {
   double resolution = 0.05;  // m/cell
   // A larger submap drifts more internally but leaves fewer pose graph nodes.
-  int num_scans_per_submap = 90;
+  int num_scans_per_submap = 40;
   CastRaysMappingOption inserter_option;
 
   friend std::ostream& operator<<(std::ostream& os, const ActiveMapOption& option) {

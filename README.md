@@ -14,3 +14,31 @@ Its design philosophy is simple:
 - **Agent-ready**
 
 The goal is to make SLAM a background spatial service rather than a manually operated mapping tool.
+
+## Build
+
+```bash
+cmake -S core -B build -DEVERGREENSLAM_BUILD_TESTS=ON && cmake --build build -j8 && ctest --test-dir build
+```
+
+Dependencies: Eigen, Ceres, glog, yaml-cpp, protobuf (library and `protoc`), OpenMP, gtest.
+`core/` does not depend on ROS.
+
+```bash
+# macOS
+brew install eigen ceres-solver glog yaml-cpp protobuf libomp googletest
+
+# Debian / Ubuntu
+sudo apt install libeigen3-dev libceres-dev libgoogle-glog-dev libyaml-cpp-dev \
+                 libprotobuf-dev protobuf-compiler libgtest-dev
+```
+
+Alternatively, let [pixi](https://pixi.sh) fetch everything, ROS 2 Jazzy and rviz2 included, into `.pixi/`
+(macOS Apple Silicon and Linux; see the header of `pixi.toml` for the full task list):
+
+```bash
+pixi run core-test                      # core alone, no ROS
+pixi run -e ros ros-test                # ROS 2 adapter
+pixi run -e ros bag bags/wg_cafe        # offline replay, webui at http://localhost:8642
+pixi run -e ros rviz
+```

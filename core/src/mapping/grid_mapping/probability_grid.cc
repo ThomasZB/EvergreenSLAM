@@ -18,6 +18,16 @@
 
 namespace evergreenslam::mapping {
 
+ProbabilityGrid ProbabilityGrid::FromSnapshot(const GridMapu8& snapshot) {
+  ProbabilityGrid grid(snapshot.data(), snapshot.width(), snapshot.height(), snapshot.resolution(),
+                       snapshot.origin_x(), snapshot.origin_y());
+  if (snapshot.width() > 0 && snapshot.height() > 0) {
+    grid.known_area_.extend(Eigen::Vector2i(0, 0));
+    grid.known_area_.extend(Eigen::Vector2i(snapshot.width() - 1, snapshot.height() - 1));
+  }
+  return grid;
+}
+
 void ProbabilityGrid::GrowToInclude(const Eigen::Vector2d& min_point,
                                     const Eigen::Vector2d& max_point) {
   CHECK(update_indices_.empty())

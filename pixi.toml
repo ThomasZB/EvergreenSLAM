@@ -1,0 +1,127 @@
+# Native dev environment (macOS / Linux) via pixi + RoboStack. Mirrors docker-compose.yml:
+#
+#   pixi run core-test                 # core alone: cmake + ctest (no ROS)
+#   pixi run -e ros ros-build          # colcon build of adapters/ros2/ into build-pixi/{colcon,install}
+#   pixi run -e ros ros-test           # colcon test of the same, with the results printed
+#   pixi run -e ros bag bags/wg_cafe   # offline replay, webui at http://localhost:8642
+#   pixi run -e ros live               # live node: /scan in, webui at :8642
+#   pixi run -e ros bag-play bags/wg_cafe [-- -r 4]   # feed the live node over DDS
+#   pixi run -e ros rviz               # rviz2 with the submap display and the project's config
+#   pixi shell -e ros                  # interactive shell; then: source build-pixi/install/setup.zsh
+#
+# Tunables via env, same names as docker-compose.yml: SCAN_TOPIC (/scan), BASE_FRAME (base_link),
+# WEBUI_PORT (8642), EXTRA (appended to the bag command verbatim, e.g. EXTRA="--speed 4"),
+# ROS_DOMAIN_ID (0). The bag path is a plain argument, absolute or relative; no mounts.
+#
+# The default environment is ROS-free, matching core/'s no-ROS rule; `-e ros` adds RoboStack
+# Jazzy. Build trees go to build-pixi/ (gitignored). CMAKE_PREFIX_PATH is pinned to the env so a
+# Homebrew Eigen/Ceres next door is never picked up.
+#
+# The ROS side is an ordinary colcon workspace: the three ament packages live in adapters/ros2/, and the
+# repo builds unchanged from any ws/src. Here colcon's build and install bases are under
+# build-pixi/, and the run tasks source build-pixi/install/setup.bash inside their own bash: on
+# macOS that is what puts the overlay on DYLD_LIBRARY_PATH (rmw dlopens a message package's
+# typesupport by bare name), and exported from outside it would be stripped again by /bin/bash.
+#
+# macOS: tools/pixi_osx_sdk.sh runs on activation and pins SDKROOT to an SDK the env's ld64 can
+# read -- the macOS 27 SDK trips it and the whole link fails on undefined libc symbols. Set
+# SDKROOT yourself to override. After changing it, wipe build-pixi/: CMAKE_OSX_SYSROOT is cached.
+#
+# This does not replace the Docker image: the Linux gcc -O2 ctest and the TSan gate
+# (docker compose run --rm core-test / core-tsan) stay there, see docs/ROADMAP.md item 21.
+
+[workspace]
+name = "evergreenslam"
+channels = ["https://prefix.dev/robostack-jazzy", "conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+cmake = ">=3.16"
+ninja = "*"
+cxx-compiler = "*"
+pkg-config = "*"
+eigen = "*"
+ceres-solver = "*"
+glog = "*"
+yaml-cpp = ">=0.8"
+protobuf = "*"
+libprotobuf = "*"
+gtest = "*"
+
+[target.osx.dependencies]
+llvm-openmp = "*"
+
+[target.osx.activation]
+scripts = ["tools/pixi_osx_sdk.sh"]
+
+[feature.ros.dependencies]
+ros-jazzy-ros-base = "*"
+ros-jazzy-rclcpp = "*"
+ros-jazzy-sensor-msgs = "*"
+ros-jazzy-nav-msgs = "*"
+ros-jazzy-geometry-msgs = "*"
+ros-jazzy-tf2 = "*"
+ros-jazzy-tf2-msgs = "*"
+ros-jazzy-tf2-ros = "*"
+ros-jazzy-rosbag2-cpp = "*"
+ros-jazzy-rosbag2-storage-sqlite3 = "*"
+ros-jazzy-rosbag2-storage-mcap = "*"
+ros-jazzy-ros2bag = "*"
+ros-jazzy-launch-ros = "*"
+ros-jazzy-ros2launch = "*"
+ros-jazzy-rviz2 = "*"
+ros-jazzy-rviz-common = "*"
+ros-jazzy-rviz-rendering = "*"
+ros-jazzy-rviz-ogre-vendor = "*"
+ros-jazzy-pluginlib = "*"
+ros-jazzy-visualization-msgs = "*"
+ros-jazzy-rosidl-default-generators = "*"
+colcon-common-extensions = ">=0.3.0,<0.4"
+
+[environments]
+ros = { features = ["ros"], solve-group = "default" }
+
+[tasks.core-configure]
+cmd = "cmake -S core -B build-pixi/core -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$CONDA_PREFIX -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew -DEVERGREENSLAM_BUILD_TESTS=ON"
+
+[tasks.core-build]
+cmd = "cmake --build build-pixi/core"
+depends-on = ["core-configure"]
+
+[tasks.core-test]
+cmd = "ctest --test-dir build-pixi/core --output-on-failure"
+depends-on = ["core-build"]
+
+# COLCON_IGNORE in build-pixi/: cmake build trees carry CMakeLists.txt files of their own (the
+# compiler probes), which a colcon run over the whole repo would otherwise take for packages.
+[feature.ros.tasks.ros-build]
+cmd = "mkdir -p build-pixi && touch build-pixi/COLCON_IGNORE && colcon --log-base build-pixi/log build --base-paths adapters/ros2 --build-base build-pixi/colcon --install-base build-pixi/install --cmake-args -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$CONDA_PREFIX -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew -DBUILD_TESTING=ON"
+
+[feature.ros.tasks.ros-test]
+cmd = "colcon --log-base build-pixi/log test --base-paths adapters/ros2 --build-base build-pixi/colcon --install-base build-pixi/install && colcon test-result --test-result-base build-pixi/colcon --verbose"
+depends-on = ["ros-build"]
+
+# bash -c for the ${VAR:-default} expansions; pixi's own task shell does not support them and a
+# task-level env would override the caller's variables instead of defaulting them.
+# RMW_FASTRTPS_PUBLICATION_MODE: Fast DDS publishes synchronously by default, and a multi-MB /map
+# going to a slow rviz then blocks the publishing thread for hundreds of ms.
+[feature.ros.tasks.bag]
+env = { RMW_FASTRTPS_PUBLICATION_MODE = "ASYNCHRONOUS" }
+cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros bag_laser_odometry --bag \"$0\" --config configs/evergreenslam.yaml --scan_topic \"${SCAN_TOPIC:-/scan}\" --base_frame \"${BASE_FRAME:-base_link}\" --webui_port \"${WEBUI_PORT:-8642}\" ${EXTRA:-}' {{ bag }}"
+args = [{ arg = "bag" }]
+depends-on = ["ros-build"]
+
+[feature.ros.tasks.live]
+env = { RMW_FASTRTPS_PUBLICATION_MODE = "ASYNCHRONOUS" }
+cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros laser_odometry_node --ros-args -p config:=configs/evergreenslam.yaml -p base_frame:=\"${BASE_FRAME:-base_link}\" -p webui_port:=\"${WEBUI_PORT:-8642}\" -r scan:=\"${SCAN_TOPIC:-/scan}\"'"
+depends-on = ["ros-build"]
+
+# Through tools/bag_play.py: keeps the player's space/arrow-key controls but unhangs its
+# macOS-only Ctrl-C stall (see the script). Player flags go after "--": bag-play <bag> -- -r 4
+[feature.ros.tasks.bag-play]
+cmd = "python tools/bag_play.py {{ bag }}"
+args = [{ arg = "bag" }]
+
+[feature.ros.tasks.rviz]
+cmd = "bash -c 'source build-pixi/install/setup.bash && exec rviz2 -d adapters/ros2/evergreenslam_rviz/config/evergreenslam.rviz'"
+depends-on = ["ros-build"]

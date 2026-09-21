@@ -5,7 +5,8 @@
 -Icore/src
 -Iapps/webui/src
 -Iapps/webui/third_party
--Iadapters/ros2/src
+-Iadapters/ros2/evergreenslam_ros/src
+-Iadapters/ros2/evergreenslam_rviz/include
 
 -I/opt/homebrew/include
 -I/opt/homebrew/include/eigen3

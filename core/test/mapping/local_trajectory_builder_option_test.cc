@@ -86,10 +86,10 @@ active_map:
             unknown.end());
 }
 
-// configs/evergreenslam.yaml documents the defaults, so it must reproduce them
-// exactly, and must not carry a key nothing reads.
-TEST(LocalTrajectoryBuilderOptionTest, ShippedConfigMatchesTheDefaults) {
-  const std::string path = std::string(EVERGREENSLAM_CONFIG_DIR) + "/evergreenslam.yaml";
+// Both shipped configs carry defaults only, so each must reproduce them exactly and must not
+// carry a key nothing reads.
+void ExpectFileMatchesTheDefaults(const std::string& name) {
+  const std::string path = std::string(EVERGREENSLAM_CONFIG_DIR) + "/" + name;
   const LocalTrajectoryBuilderOption option = LoadLocalTrajectoryBuilderOptionFromFile(path);
   const LocalTrajectoryBuilderOption defaults;
 
@@ -146,6 +146,14 @@ TEST(LocalTrajectoryBuilderOptionTest, ShippedConfigMatchesTheDefaults) {
                    defaults.active_map_option.inserter_option.miss_probability);
   EXPECT_EQ(option.active_map_option.inserter_option.insert_free_space,
             defaults.active_map_option.inserter_option.insert_free_space);
+}
+
+TEST(LocalTrajectoryBuilderOptionTest, ShippedConfigMatchesTheDefaults) {
+  ExpectFileMatchesTheDefaults("evergreenslam.yaml");
+}
+
+TEST(LocalTrajectoryBuilderOptionTest, ReferenceConfigMatchesTheDefaults) {
+  ExpectFileMatchesTheDefaults("reference.yaml");
 }
 
 }  // namespace

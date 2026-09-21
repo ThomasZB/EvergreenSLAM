@@ -16,26 +16,31 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "debug/debug_sink.h"
+
+namespace evergreenslam::lifelong {
+class PoseGraph;
+}  // namespace evergreenslam::lifelong
 
 namespace evergreenslam::webui {
 
 struct WebDebugSinkOption {
   int port = 8080;
   std::string www_dir = EVERGREENSLAM_WEBUI_WWW_DIR;
-  // Wall clock, not scan time: this bounds how often a human sees a new map, and a replay may
-  // run at any speed. The grid copy is the one part of publishing that is not cheap.
+  // Wall clock, not scan time: a replay may run at any speed.
   double map_period_seconds = 0.2;
+  bool serve_submaps = true;
 };
 
-// Latest wins with a depth of one: a browser that cannot keep up misses frames, it never slows
-// the pipeline down. Nothing here blocks the publishing thread.
+// Latest wins, depth one; nothing here blocks the publishing thread.
 class WebDebugSink : public debug::DebugSink {
  public:
   using Option = WebDebugSinkOption;
@@ -48,16 +53,21 @@ class WebDebugSink : public debug::DebugSink {
                         const sensor::PointCloud& point_cloud, const mapping::GridMapu8& grid_map,
                         double score) override;
 
-  // The run is over but the map is still worth looking at. Returns when the process is
-  // interrupted, so callers that just want the server torn down can skip it.
+  void PublishGlobalMap(const mapping::GridMapu8& grid_map);
+
+  // Non-const because enqueueing is a mutation; the read itself happens on a backend task.
+  void PublishPoseGraph(lifelong::PoseGraph& pose_graph);
+
   void WaitForever();
 
   int port() const { return option_.port; }
 
  private:
   struct Impl;
+  using SubmapKey = std::pair<int, int>;  // session index, submap index
 
-  void CopyGrid(const mapping::GridMapu8& grid_map);
+  void CopyGrid(const mapping::GridMapu8& grid_map, const Eigen::Affine2d& grid_pose);
+  static std::vector<uint8_t> EncodeGrid(const mapping::GridMapu8& grid_map);
 
   Option option_;
   std::unique_ptr<Impl> impl_;
@@ -65,17 +75,23 @@ class WebDebugSink : public debug::DebugSink {
 
   std::mutex mutex_;
   std::condition_variable frame_ready_;
+  // Held without its closing brace: the sequence numbers are stamped on at send time.
   std::string latest_frame_;
-  uint64_t frame_seq_ = 0;
-  // Decoded to one byte per cell, 0..100 occupancy and 255 unknown, so the raw cell encoding in
-  // probability_values.h stays the only definition of itself.
+  uint64_t stream_seq_ = 0;
+  // One byte per cell, 0..100 occupancy and 255 unknown.
   std::vector<uint8_t> map_blob_;
   uint64_t map_seq_ = 0;
-  // Kept here rather than accumulated in the browser so that opening the page late, or after the
-  // run has ended, still shows the whole track.
+  // Stamped next to map_seq so the page places the raster with the copy it belongs to.
+  Eigen::Affine2d map_pose_ = Eigen::Affine2d::Identity();
+  std::vector<uint8_t> global_map_blob_;
+  uint64_t global_map_seq_ = 0;
+  std::string graph_json_;
+  uint64_t graph_seq_ = 0;
+  std::map<SubmapKey, std::shared_ptr<const std::vector<uint8_t>>> submap_blobs_;
   std::vector<double> trajectory_;
   std::chrono::steady_clock::time_point last_map_copy_;
   std::atomic<bool> stopping_{false};
+  std::atomic<bool> graph_request_pending_{false};
 };
 
 }  // namespace evergreenslam::webui
