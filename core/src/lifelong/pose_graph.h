@@ -14,6 +14,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "common/time.h"
+#include "lifelong/anchors/anchor_store.h"
 #include "lifelong/backend_handles.h"
 #include "lifelong/constraints/constraint_builder.h"
 #include "lifelong/map_manager/map_manager.h"
@@ -45,7 +47,8 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
                      const std::string& map_directory = "");
   ~PoseGraph();
 
-  void Start(common::Time time, std::optional<Eigen::Affine2d> initial_global_pose = std::nullopt);
+  void Start(common::Time time, std::optional<Eigen::Affine2d> initial_global_pose = std::nullopt,
+             bool seed_from_previous_boot = true);
   void AddInsertionResult(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
   void Finish();
 
@@ -73,6 +76,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   bool AddConstraintIfEndpointsLive(const Constraint& constraint) override;
   TrimReport ApplyTrim(const TrimRequest& request) override;
   void RemoveSession(SessionId id);
+  void RepublishActiveSessionToGlobal();
 
   void Optimize();
   void OptimizeOnTask();
@@ -85,7 +89,21 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   SessionId RotateAndFreezeFedSessionOnTask(SessionId id) override;
   void TrimSubmapsOnTask(const std::vector<SubmapId>& ids) override;
   // The freeze sequence on demand, verdict or not; returns at once.
-  void FreezeFedSession();
+  void FreezeFedSession(std::optional<SessionId> expected = std::nullopt);
+
+  // Backend task only, like every anchor read: the hooks rebind anchors on the queue.
+  const AnchorStore& anchors() const { return anchor_store_; }
+  std::optional<NodeId> last_ingested_node() const;
+  struct SaveAnchorResult {
+    enum class Refusal { NONE, NO_KEYFRAME, NODE_GONE, NOT_PERSISTED };
+    // Empty exactly when refused: an anchor that did not reach disk may be reissued after a kill.
+    std::optional<Anchor> anchor;
+    Refusal refusal = Refusal::NONE;
+  };
+  SaveAnchorResult SaveAnchorOnTask(bool keep_scan, std::optional<AnchorId> rebind = std::nullopt);
+  // Whether the checkpoint landed; true without a map directory.
+  bool CheckpointOnTask();
+  SessionId boot_first_session() const { return boot_first_session_; }
 
   // Graph and Problem must be re-keyed together, on the queue only. Returns old id -> new id.
   std::map<SubmapId, SubmapId> TransferUnfinishedSubmaps(SessionId from, SessionId to);
@@ -115,11 +133,10 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
   void FinishBatch();
   bool CheckpointDue() const;
-  void CheckpointFedSession();
+  bool CheckpointFedSession();
   void RelocalizeOnTask(const std::optional<Eigen::Affine2d>& prior);
   bool ReseedOnFirstAnchoring(const Constraint& constraint);
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);
-  void RepublishActiveSessionToGlobal();
   void EnqueueNodeSearch();
   void SearchForFinishedSubmaps(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
 
@@ -131,12 +148,15 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   SessionManager session_manager_;
   ConstraintBuilder constraint_builder_;
   PoseGraphTrimmer trimmer_;
+  // Before map_manager_, which holds a reference to it.
+  AnchorStore anchor_store_;
   std::shared_ptr<MapManager> map_manager_;
 
   mutable std::mutex active_session_to_global_mutex_;
   std::optional<Eigen::Affine2d> active_session_to_global_;
 
   bool started_ = false;
+  SessionId boot_first_session_;
   std::map<int, SubmapId> submap_translation_;
   std::set<int> retired_local_indices_;
   NodeId last_ingested_node_;

@@ -160,7 +160,8 @@ WebDebugSink::WebDebugSink(const Option& option)
                       ",\"map_pose\":" + PoseJson(map_pose_) +
                       ",\"global_map_seq\":" + std::to_string(global_map_seq_) +
                       ",\"graph_seq\":" + std::to_string(graph_seq_) +
-                      ",\"traj_len\":" + std::to_string(trajectory_.size() / 2) + "}";
+                      ",\"traj_len\":" + std::to_string(trajectory_.size() / 2) +
+                      ",\"epoch\":" + std::to_string(epoch_) + "}";
             }
           }
           // Outside the lock, always: a blocking write to a stalled browser would park the
@@ -335,6 +336,21 @@ void WebDebugSink::PublishPoseGraph(lifelong::PoseGraph& pose_graph) {
     frame_ready_.notify_all();
     graph_request_pending_ = false;
   });
+}
+
+void WebDebugSink::Reset() {
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    graph_json_.clear();
+    submap_blobs_.clear();
+    global_map_blob_.clear();
+    trajectory_.clear();
+    ++epoch_;
+    ++graph_seq_;
+    ++global_map_seq_;
+    ++stream_seq_;
+  }
+  frame_ready_.notify_all();
 }
 
 void WebDebugSink::WaitForever() {

@@ -1,0 +1,37 @@
+// Persisted anchor table: <map_dir>/anchors.g<generation>.pb, named by the manifest.
+
+syntax = "proto3";
+
+package evergreenslam.lifelong.proto;
+
+import "lifelong/map_manager/proto/map.proto";
+
+message Anchor {
+  enum State {
+    BOUND = 0;
+    REBOUND = 1;
+    ORPHAN = 2;
+  }
+  enum OrphanReason {
+    NONE = 0;
+    TRIMMED_NO_SUCCESSOR = 1;
+    SESSION_REMOVED = 2;
+    SUBMAP_MISSING = 3;
+  }
+  uint64 id = 1;
+  SubmapId submap_id = 2;
+  Pose2d submap_from_anchor = 3;
+  NodeId node_id = 4;
+  int64 saved_at_nanos = 5;
+  State state = 6;
+  OrphanReason orphan_reason = 7;
+  // Unset when the anchor keeps no scan; an empty cloud is still set.
+  PointCloud scan = 8;
+}
+
+message AnchorFile {
+  int32 version = 1;
+  // A high-water mark: never derived from the rows, never lowered.
+  uint64 next_id = 2;
+  repeated Anchor anchors = 3;
+}

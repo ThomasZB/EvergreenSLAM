@@ -305,9 +305,14 @@ int SessionManager::Refresh(SessionId id, ExpansionState& state) {
   return new_submaps;
 }
 
-void SessionManager::FreezeFedSession() {
-  handle_.Enqueue([this] {
+void SessionManager::FreezeFedSession(std::optional<SessionId> expected) {
+  handle_.Enqueue([this, expected] {
     if (freezing_ || !fed_session_.has_value()) {
+      return;
+    }
+    if (expected.has_value() && *expected != *fed_session_) {
+      LOG(WARNING) << "freeze of session " << expected->session_index << " dropped: session "
+                   << fed_session_->session_index << " is fed now";
       return;
     }
     const PoseGraphData& graph = handle_.graph();

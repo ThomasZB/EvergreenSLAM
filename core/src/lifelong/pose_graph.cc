@@ -14,7 +14,9 @@
 #include <glog/logging.h>
 
 #include <future>
+#include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "lifelong/constraints/match_worker_pool.h"
@@ -54,7 +56,7 @@ PoseGraph::PoseGraph(const PoseGraphOption& option, const std::string& map_direc
       constraint_builder_(*this, option_.constraint_builder, option_.constraint_weight),
       trimmer_(*this, option_.trimmer) {
   if (!map_directory.empty()) {
-    map_manager_ = std::make_shared<MapManager>(map_directory);
+    map_manager_ = std::make_shared<MapManager>(map_directory, anchor_store_);
     session_manager_.AddObserver(map_manager_);
   }
   session_manager_.AddObserver(std::make_shared<SessionAlignmentObserver>(*this));
@@ -65,7 +67,8 @@ PoseGraph::~PoseGraph() {
   WaitUntilQuiescent();
 }
 
-void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_global_pose) {
+void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_global_pose,
+                      bool seed_from_previous_boot) {
   CHECK(!started_) << "Start boots the backend once";
   started_ = true;
   submap_translation_.clear();
@@ -76,8 +79,20 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
 
   std::optional<Eigen::Affine2d> alignment = initial_global_pose;
   if (map_manager_ != nullptr) {
-    const std::optional<MapManager::LoadResult> loaded = map_manager_->Load(data_);
-    map_manager_->RecordBoot();
+    const MapManager::LoadOutcome outcome = map_manager_->Load(data_);
+    if (std::holds_alternative<MapManager::LoadFailure>(outcome)) {
+      const MapManager::LoadFailure& failure = std::get<MapManager::LoadFailure>(outcome);
+      LOG(FATAL) << "refusing to boot on a damaged map directory: " << map_manager_->directory()
+                 << ": " << ToString(failure.reason) << ": " << failure.detail;
+    }
+    std::optional<MapManager::LoadResult> loaded;
+    if (std::holds_alternative<MapManager::LoadResult>(outcome)) {
+      loaded = std::get<MapManager::LoadResult>(outcome);
+    }
+    map_manager_->RemoveUnreferencedFiles();
+    if (!map_manager_->RecordBoot().has_value()) {
+      LOG(FATAL) << "map directory is not writable: " << map_manager_->directory();
+    }
     if (loaded.has_value()) {
       LOG(INFO) << "loaded " << loaded->num_sessions << " sessions (" << loaded->num_frozen_sessions
                 << " frozen) from " << map_manager_->directory() << ", boot "
@@ -86,7 +101,18 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
         data_.FinishSubmaps(unfrozen.id);
       }
       optimization_.BuildFrom(data_);
+    }
+    std::optional<AnchorTable> anchors = map_manager_->ReadAnchors();
+    CHECK(anchors.has_value()) << "refusing to boot on an unreadable "
+                               << map_manager_->anchors_file_name().value_or("anchor file")
+                               << " in " << map_manager_->directory();
+    anchor_store_.Restore(std::move(*anchors));
+    if (loaded.has_value()) {
       GcFloatingSessions(*loaded);
+    }
+    anchor_store_.Reconcile(data_);
+    map_manager_->Commit(data_);
+    if (loaded.has_value()) {
       std::optional<common::Time> checkpoint_time;
       if (loaded->last_checkpoint_node.has_value() &&
           data_.HasNode(*loaded->last_checkpoint_node)) {
@@ -95,14 +121,14 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
         Drain();
         const Node& checkpoint_node = data_.node(*loaded->last_checkpoint_node);
         checkpoint_time = checkpoint_node.constant_data.time;
-        if (!alignment.has_value()) {
+        if (seed_from_previous_boot && !alignment.has_value()) {
           // Re-read after the solve, so the alignment and the graph agree.
           alignment = checkpoint_node.global_pose;
         }
       }
       // The per-keyframe last pose beats the checkpoint only when newer and still in the map.
       const std::optional<MapManager::LastPose> last_pose = map_manager_->ReadLastPose();
-      if (!initial_global_pose.has_value() && last_pose.has_value() &&
+      if (seed_from_previous_boot && !initial_global_pose.has_value() && last_pose.has_value() &&
           data_.HasSession(SessionOf(last_pose->node_id)) && !data_.HasNode(last_pose->node_id) &&
           (!checkpoint_time.has_value() || last_pose->time > *checkpoint_time)) {
         alignment = last_pose->global_pose;
@@ -111,7 +137,8 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
   }
 
   last_checkpoint_time_ = time;
-  session_manager_.Start(time, alignment.value_or(Eigen::Affine2d::Identity()));
+  boot_first_session_ =
+      session_manager_.Start(time, alignment.value_or(Eigen::Affine2d::Identity()));
   Drain();
   RepublishActiveSessionToGlobal();
 }
@@ -238,11 +265,50 @@ bool PoseGraph::CheckpointDue() const {
          option_.checkpoint_min_interval;
 }
 
-void PoseGraph::CheckpointFedSession() {
+bool PoseGraph::CheckpointFedSession() {
   const std::optional<SessionId> fed = session_manager_.fed_session();
   CHECK(fed.has_value()) << "checkpoints only happen after Start opened the fed session";
-  map_manager_->Checkpoint(data_, *fed);
+  if (!map_manager_->Checkpoint(data_, *fed)) {
+    return false;
+  }
   last_checkpoint_time_ = data_.session(*fed).last_node_time;
+  return true;
+}
+
+bool PoseGraph::CheckpointOnTask() { return map_manager_ == nullptr || CheckpointFedSession(); }
+
+std::optional<NodeId> PoseGraph::last_ingested_node() const {
+  if (last_ingested_node_index_ < 0) {
+    return std::nullopt;
+  }
+  return last_ingested_node_;
+}
+
+PoseGraph::SaveAnchorResult PoseGraph::SaveAnchorOnTask(bool keep_scan,
+                                                        std::optional<AnchorId> rebind) {
+  using Refusal = SaveAnchorResult::Refusal;
+  const std::optional<NodeId> node = last_ingested_node();
+  if (!node.has_value()) {
+    return SaveAnchorResult{std::nullopt, Refusal::NO_KEYFRAME};
+  }
+  const std::optional<Anchor> previous =
+      rebind.has_value() ? anchor_store_.Get(*rebind) : std::nullopt;
+  std::optional<Anchor> anchor = rebind.has_value()
+                                     ? anchor_store_.Rebind(data_, *rebind, *node, keep_scan)
+                                     : anchor_store_.Save(data_, *node, keep_scan);
+  if (!anchor.has_value()) {
+    return SaveAnchorResult{std::nullopt, Refusal::NODE_GONE};
+  }
+  // A refused save leaves the table as the disk has it, or the next commit would land it anyway.
+  if (map_manager_ != nullptr && !CheckpointFedSession()) {
+    if (previous.has_value()) {
+      anchor_store_.Replace(*previous);
+    } else {
+      anchor_store_.Erase(anchor->id);
+    }
+    return SaveAnchorResult{std::nullopt, Refusal::NOT_PERSISTED};
+  }
+  return SaveAnchorResult{std::move(anchor), Refusal::NONE};
 }
 
 void PoseGraph::WaitUntilQuiescent() {
@@ -301,6 +367,7 @@ bool PoseGraph::AddConstraintIfEndpointsLive(const Constraint& constraint) {
 TrimReport PoseGraph::ApplyTrim(const TrimRequest& request) {
   // The graph's report is what tells the Problem which blocks to drop.
   TrimReport report = data_.ApplyTrim(request);
+  anchor_store_.OnTrim(report);
   for (const SubmapId& id : request.deleted_submap_ids) {
     optimization_.RemoveVariable(VariableId::Of(id));
   }
@@ -327,6 +394,7 @@ void PoseGraph::RemoveSession(SessionId id) {
     variables.push_back(VariableId::Of(node_id));
   }
   data_.RemoveSession(id);
+  anchor_store_.OnSessionRemoved(id);
   for (const VariableId& variable : variables) {
     optimization_.RemoveVariable(variable);
   }
@@ -368,6 +436,7 @@ SessionId PoseGraph::RotateAndFreezeFedSessionOnTask(SessionId id) {
       it = submap_translation_.erase(it);
     }
   }
+  anchor_store_.OnSubmapsTransferred(adoption);
   data_.FreezeSession(id);
   optimization_.FreezeSession(id);
   return next;
@@ -383,9 +452,9 @@ void PoseGraph::TrimSubmapsOnTask(const std::vector<SubmapId>& ids) {
   trimmer_.TrimToCompletionOnTask();
 }
 
-void PoseGraph::FreezeFedSession() {
+void PoseGraph::FreezeFedSession(std::optional<SessionId> expected) {
   CHECK(started_) << "boot through Start first";
-  session_manager_.FreezeFedSession();
+  session_manager_.FreezeFedSession(expected);
 }
 
 std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from, SessionId to) {

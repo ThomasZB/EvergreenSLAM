@@ -1,7 +1,7 @@
 /**
- * @file laser_odometry_node.cc
+ * @file evergreenslam_node.cc
  * @author hang chen (chen@hang.plus)
- * @brief Live ROS 2 node: LaserScan in, odometry, tf and an occupancy grid out.
+ * @brief Live ROS 2 node: LaserScan in; odometry, tf, the lifelong map and the agent service out.
  * @version 0.1
  * @date 2026-08-04
  *
@@ -14,15 +14,22 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
+#include <mutex>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 
 #include "laser_scan_converter.h"
+#include "lifelong/map_manager/map_root.h"
 #include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_option.h"
 #include "mapping/local_trajectory_builder.h"
@@ -31,6 +38,9 @@
 #include "utils/transform/transform.h"
 #ifdef EVERGREENSLAM_WITH_WEBUI
 #include "web_debug_sink.h"
+#endif
+#ifdef EVERGREENSLAM_WITH_AGENT
+#include "agent_host.h"
 #endif
 
 namespace evergreenslam::ros2 {
@@ -49,9 +59,9 @@ double QuaternionToYaw(const geometry_msgs::msg::Quaternion& q) {
 
 }  // namespace
 
-class LaserOdometryNode : public rclcpp::Node {
+class EvergreenSlamNode : public rclcpp::Node {
  public:
-  LaserOdometryNode() : Node("laser_odometry") {
+  EvergreenSlamNode() : Node("evergreenslam") {
     const std::string config = declare_parameter<std::string>("config", "");
     const std::string scan_topic = declare_parameter<std::string>("scan_topic", "scan");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
@@ -59,22 +69,38 @@ class LaserOdometryNode : public rclcpp::Node {
     publish_tf_ = declare_parameter<bool>("publish_tf", true);
     map_publish_period_ = declare_parameter<double>("map_publish_period", 1.0);
 
-    mapping::LocalTrajectoryBuilderOption option;
     if (!config.empty()) {
-      option = mapping::LoadLocalTrajectoryBuilderOptionFromFile(config);
+      option_ = mapping::LoadLocalTrajectoryBuilderOptionFromFile(config);
     }
-    builder_ = std::make_unique<mapping::LocalTrajectoryBuilder>(option);
-
-    const bool lifelong = declare_parameter<bool>("lifelong", true);
-    const std::string map_dir = declare_parameter<std::string>("map_dir", "");
-    if (lifelong) {
-      lifelong::PoseGraphOption backend_option;
+    lifelong_ = declare_parameter<bool>("lifelong", true);
+    // Absolute by default: under `ros2 run` a relative root follows the caller's cwd.
+    map_root_ = ExpandHome(declare_parameter<std::string>("map_root", "~/.evergreenslam/maps"));
+    const std::string map = declare_parameter<std::string>("map", "");
+    if (lifelong_) {
       if (!config.empty()) {
-        backend_option = lifelong::LoadPoseGraphOptionFromFile(config);
+        backend_option_ = lifelong::LoadPoseGraphOptionFromFile(config);
       }
-      backend_ = std::make_unique<lifelong::PoseGraph>(backend_option, map_dir);
       map_frame_ = declare_parameter<std::string>("map_frame", "map");
+      if (!map_root_.empty()) {
+        map_name_ = lifelong::MapRoot(map_root_).ChooseAtBoot(map);
+        if (!lifelong::MapRoot::IsValidName(map_name_)) {
+          throw std::invalid_argument("map name must match [a-z0-9][a-z0-9_-]*: " + map_name_);
+        }
+      }
     }
+    ignore_last_pose_ = declare_parameter<bool>("ignore_last_pose", false);
+    const int agent_port = declare_parameter<int>("agent_port", 8643);
+    const std::string agent_bind = declare_parameter<std::string>("agent_bind", "127.0.0.1");
+#ifdef EVERGREENSLAM_WITH_AGENT
+    agent_option_ = {agent_port, agent_bind, map_root_, ""};
+    if (!lifelong_ && agent_port > 0) {
+      RCLCPP_WARN(get_logger(), "agent service off: it needs the backend (lifelong)");
+    }
+#else
+    if (agent_port > 0) {
+      RCLCPP_WARN(get_logger(), "agent service off: built without EVERGREENSLAM_WITH_AGENT");
+    }
+#endif
 
 #ifdef EVERGREENSLAM_WITH_WEBUI
     const int webui_port = declare_parameter<int>("webui_port", 0);
@@ -82,7 +108,6 @@ class LaserOdometryNode : public rclcpp::Node {
       webui::WebDebugSinkOption webui_option;
       webui_option.port = webui_port;
       web_debug_sink_ = std::make_shared<webui::WebDebugSink>(webui_option);
-      builder_->SetDebugSink(web_debug_sink_);
     }
 #endif
 
@@ -90,8 +115,10 @@ class LaserOdometryNode : public rclcpp::Node {
     tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
+    BuildPipeline();
+
     odom_publisher_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
-    if (backend_ == nullptr) {
+    if (!lifelong_) {
       // With the backend on, PoseGraphPublisher owns "map"; two publishers would fight over it.
       map_publisher_ =
           create_publisher<nav_msgs::msg::OccupancyGrid>("map", rclcpp::QoS(1).transient_local());
@@ -100,22 +127,13 @@ class LaserOdometryNode : public rclcpp::Node {
     scan_subscription_ = create_subscription<sensor_msgs::msg::LaserScan>(
         scan_topic, rclcpp::SensorDataQoS(),
         [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan) { HandleScan(*scan); });
-    if (backend_ != nullptr) {
+    if (lifelong_) {
       initial_pose_subscription_ =
           create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
               "initialpose", 10,
               [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr message) {
                 HandleInitialPose(*message);
               });
-
-      PoseGraphPublisher::GlobalMapHook hook;
-#ifdef EVERGREENSLAM_WITH_WEBUI
-      if (web_debug_sink_ != nullptr) {
-        hook = [this](const mapping::GridMapu8& grid) { web_debug_sink_->PublishGlobalMap(grid); };
-      }
-#endif
-      pose_graph_publisher_ =
-          std::make_unique<PoseGraphPublisher>(*this, *backend_, map_frame_, std::move(hook));
       graph_timer_ = create_wall_timer(std::chrono::duration<double>(map_publish_period_), [this] {
         // Start() writes the graph on this thread; a task enqueued before it would race it.
         if (!backend_started_) {
@@ -130,9 +148,126 @@ class LaserOdometryNode : public rclcpp::Node {
 #endif
       });
     }
+#ifdef EVERGREENSLAM_WITH_AGENT
+    // A timer, not the scan callback: the robot may be idle when the agent asks.
+    if (lifelong_ && !map_root_.empty()) {
+      switch_timer_ =
+          create_wall_timer(std::chrono::milliseconds(200), [this] { SwitchMapIfRequested(); });
+    }
+#endif
+  }
+
+  // ~PoseGraph only drains; without Finish the fed session since its last checkpoint is lost.
+  ~EvergreenSlamNode() override {
+#ifdef EVERGREENSLAM_WITH_AGENT
+    switch_timer_.reset();
+#endif
+    graph_timer_.reset();
+    Teardown();
   }
 
  private:
+  static std::string ExpandHome(const std::string& path) {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || path.empty() || path[0] != '~' || (path.size() > 1 && path[1] != '/')) {
+      return path;
+    }
+    return home + path.substr(1);
+  }
+
+  // The per-map objects. One executor thread runs this, the scan callback and both timers, so
+  // none of them can see a half-built pipeline.
+  void BuildPipeline() {
+    builder_ = std::make_unique<mapping::LocalTrajectoryBuilder>(option_);
+#ifdef EVERGREENSLAM_WITH_WEBUI
+    if (web_debug_sink_ != nullptr) {
+      builder_->SetDebugSink(web_debug_sink_);
+    }
+#endif
+    if (!lifelong_) {
+      return;
+    }
+    std::string map_dir;
+    if (!map_root_.empty()) {
+      map_dir = lifelong::MapRoot(map_root_).Resolve(map_name_);
+      std::error_code error;
+      std::filesystem::create_directories(map_dir, error);
+      if (error) {
+        throw std::runtime_error("cannot create map directory " + map_dir + ": " + error.message());
+      }
+      RCLCPP_INFO(get_logger(), "map %s at %s", map_name_.c_str(), map_dir.c_str());
+    } else {
+      RCLCPP_INFO(get_logger(), "map_root is empty: nothing persists");
+    }
+    backend_ = std::make_unique<lifelong::PoseGraph>(backend_option_, map_dir);
+
+    PoseGraphPublisher::GlobalMapHook hook;
+#ifdef EVERGREENSLAM_WITH_WEBUI
+    if (web_debug_sink_ != nullptr) {
+      hook = [this](const mapping::GridMapu8& grid) { web_debug_sink_->PublishGlobalMap(grid); };
+    }
+#endif
+    pose_graph_publisher_ =
+        std::make_unique<PoseGraphPublisher>(*this, *backend_, map_frame_, std::move(hook));
+#ifdef EVERGREENSLAM_WITH_AGENT
+    agent_option_.map_name = map_name_;
+    agent_host_ =
+        AgentHost::Create(agent_option_, *backend_, [this](const agent::MapSwitchRequest& request) {
+          std::lock_guard<std::mutex> lock(switch_mutex_);
+          pending_switch_ = request;
+          return true;
+        });
+#endif
+  }
+
+  void Teardown() {
+#ifdef EVERGREENSLAM_WITH_AGENT
+    if (agent_host_ != nullptr) {
+      agent_host_->Stop();
+      agent_host_.reset();
+    }
+#endif
+    pose_graph_publisher_.reset();
+    if (backend_started_) {
+      RCLCPP_INFO(get_logger(), "finishing the pose graph");
+      backend_->Finish();
+    }
+    backend_.reset();
+    backend_started_ = false;
+    builder_.reset();
+  }
+
+#ifdef EVERGREENSLAM_WITH_AGENT
+  // Never from the service's hook: the old service, whose worker runs the hook, goes here.
+  void SwitchMapIfRequested() {
+    std::optional<agent::MapSwitchRequest> request;
+    {
+      std::lock_guard<std::mutex> lock(switch_mutex_);
+      request.swap(pending_switch_);
+    }
+    if (!request.has_value()) {
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "switching from map %s to %s map %s", map_name_.c_str(),
+                request->create ? "the new" : "the saved", request->name.c_str());
+    Teardown();
+#ifdef EVERGREENSLAM_WITH_WEBUI
+    if (web_debug_sink_ != nullptr) {
+      web_debug_sink_->Reset();
+    }
+#endif
+    map_name_ = request->name;
+    BuildPipeline();
+    if (agent_host_ != nullptr) {
+      if (agent_host_->port() > 0) {
+        RCLCPP_INFO(get_logger(), "agent service back on port %d", agent_host_->port());
+      } else {
+        RCLCPP_ERROR(get_logger(), "agent service could not rebind: egs is unreachable");
+      }
+    }
+  }
+#endif
+
   void HandleScan(const sensor_msgs::msg::LaserScan& scan) {
     if (!ResolveExtrinsic(scan.header.frame_id)) {
       return;
@@ -145,14 +280,28 @@ class LaserOdometryNode : public rclcpp::Node {
 
     if (backend_ != nullptr && !backend_started_) {
       // Boot on the sensor clock, not ours.
-      backend_->Start(timed_scan.time);
+      backend_->Start(timed_scan.time, std::nullopt, !ignore_last_pose_);
       backend_started_ = true;
+      // Only a map that booted becomes `current`: Start stops on a damaged directory.
+      if (!map_root_.empty() && !lifelong::MapRoot(map_root_).WriteCurrent(map_name_)) {
+        RCLCPP_WARN(get_logger(), "could not record %s as the current map", map_name_.c_str());
+      }
+#ifdef EVERGREENSLAM_WITH_AGENT
+      if (agent_host_ != nullptr) {
+        agent_host_->OnBackendStarted();
+      }
+#endif
     }
 
     const auto matching = builder_->AddScan(timed_scan.time, timed_scan.point_cloud);
     if (matching != nullptr && matching->insertion_result != nullptr && backend_ != nullptr) {
       backend_->AddInsertionResult(*matching->insertion_result);
     }
+#ifdef EVERGREENSLAM_WITH_AGENT
+    if (agent_host_ != nullptr) {
+      agent_host_->Update(timed_scan.time, builder_->local_pose(), timed_scan.point_cloud);
+    }
+#endif
     Publish(ToRosTime(timed_scan.time), builder_->local_pose());
   }
 
@@ -283,6 +432,13 @@ class LaserOdometryNode : public rclcpp::Node {
   // Declared first so it is destroyed last: the builder holds a raw pointer to it.
   std::shared_ptr<webui::WebDebugSink> web_debug_sink_;
 #endif
+  mapping::LocalTrajectoryBuilderOption option_;
+  lifelong::PoseGraphOption backend_option_;
+  bool lifelong_ = true;
+  // Empty: no persistence and no agent service.
+  std::string map_root_;
+  std::string map_name_;
+
   std::unique_ptr<mapping::LocalTrajectoryBuilder> builder_;
   std::unique_ptr<lifelong::PoseGraph> backend_;
   bool backend_started_ = false;
@@ -305,17 +461,23 @@ class LaserOdometryNode : public rclcpp::Node {
   bool extrinsic_resolved_ = false;
   rclcpp::Time last_map_publish_{0, 0, RCL_ROS_TIME};
 
-  // After backend_: it holds a reference to it and drains the queue on destruction. The timer
-  // comes last so it stops firing before the publisher goes.
   std::unique_ptr<PoseGraphPublisher> pose_graph_publisher_;
   rclcpp::TimerBase::SharedPtr graph_timer_;
+  bool ignore_last_pose_ = false;
+#ifdef EVERGREENSLAM_WITH_AGENT
+  AgentHostOption agent_option_;
+  std::unique_ptr<AgentHost> agent_host_;
+  rclcpp::TimerBase::SharedPtr switch_timer_;
+  std::mutex switch_mutex_;
+  std::optional<agent::MapSwitchRequest> pending_switch_;
+#endif
 };
 
 }  // namespace evergreenslam::ros2
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<evergreenslam::ros2::LaserOdometryNode>());
+  rclcpp::spin(std::make_shared<evergreenslam::ros2::EvergreenSlamNode>());
   rclcpp::shutdown();
   return 0;
 }

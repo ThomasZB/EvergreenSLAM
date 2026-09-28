@@ -61,5 +61,21 @@ TEST_F(FileTest, WriteReplacesExistingContents) {
   EXPECT_EQ(ReadFile(path), "new");
 }
 
+TEST_F(FileTest, FailedRenameReportsFailureAndRemovesTheTempFile) {
+  const std::string path = PathOf("blocked.bin");
+  ASSERT_TRUE(std::filesystem::create_directory(path));
+  EXPECT_FALSE(WriteFileAtomically(path, "payload"));
+  EXPECT_FALSE(std::filesystem::exists(path + ".tmp"));
+  EXPECT_TRUE(std::filesystem::is_directory(path));
+}
+
+TEST_F(FileTest, UnopenableTempFileIsAFailureAndLeftAlone) {
+  const std::string path = PathOf("data.bin");
+  ASSERT_TRUE(std::filesystem::create_directories(path + ".tmp/occupied"));
+  EXPECT_FALSE(WriteFileAtomically(path, "payload"));
+  EXPECT_TRUE(std::filesystem::is_directory(path + ".tmp/occupied"));
+  EXPECT_FALSE(std::filesystem::exists(path));
+}
+
 }  // namespace
 }  // namespace evergreenslam::common

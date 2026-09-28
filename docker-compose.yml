@@ -7,6 +7,7 @@
 #   docker compose build                     # (re)build the image
 #   docker compose run --rm core-test       # core alone on Linux gcc: cmake + ctest
 #   docker compose run --rm core-tsan       # lifelong tests under ThreadSanitizer (T9 gate)
+#   docker compose run --rm agent-test      # adapters/agent: service ctest + egs suite against it
 #   docker compose run --rm ros-build       # colcon build + test of adapters/ros2/ (msgs, node, rviz plugin)
 #   docker compose run --rm shell           # interactive shell in the image
 #
@@ -19,7 +20,15 @@
 # BAG_ROOT (defaults to BAG; set to a parent directory when BAG contains symlinks
 # that point outside it, e.g. BAG_ROOT=/path/to/date_dir BAG=$BAG_ROOT/merged),
 # SCAN_TOPIC (/scan), BASE_FRAME (base_link), EXTRA (appended to the bag command verbatim,
-# e.g. EXTRA="--reference_frame map --speed 4"), WEBUI_PORT (8642), ROS_DOMAIN_ID (0).
+# e.g. EXTRA="--reference_frame map --speed 4"), WEBUI_PORT (8642), ROS_DOMAIN_ID (0),
+# MAP_ROOT (the directory of named maps, relative to the repo root; live defaults to runs/maps)
+# and MAP (the map to boot, <MAP_ROOT>/<MAP>/; unset = the root's `current`, `default` on a
+# fresh root).
+#
+# live persists into <MAP_ROOT>/<MAP>/ and serves the agent API (adapters/agent/API.md) on
+# 127.0.0.1:8643; only live switches maps at runtime (`egs map new|open`). bag persists (and
+# serves the agent API) only with MAP_ROOT set; without it "agent service off: it needs a map
+# root" is the expected message.
 #
 # bag and live build (incrementally) through ros-build before starting, so a plain
 # `docker compose up live` on a fresh clone works. live and bag-play sit on the default
@@ -44,6 +53,8 @@ x-dev: &dev
     # it is not starting, so a compose-time ${BAG:?} would make `up live` demand a bag too.
     BAG: ${BAG:-}
     BAG_ROOT: ${BAG_ROOT:-${BAG:-}}
+    MAP_ROOT: ${MAP_ROOT:-}
+    MAP: ${MAP:-}
 
 services:
   core-test:
@@ -52,6 +63,13 @@ services:
       bash -lc "cmake -S /ws/core -B /out/core -DCMAKE_BUILD_TYPE=Release
       -DEVERGREENSLAM_BUILD_TESTS=ON
       && cmake --build /out/core -j8 && ctest --test-dir /out/core --output-on-failure"
+
+  agent-test:
+    <<: *dev
+    command: >
+      bash -lc "cmake -S /ws/adapters/agent -B /out/agent -DCMAKE_BUILD_TYPE=Release
+      && cmake --build /out/agent -j8 && ctest --test-dir /out/agent --output-on-failure
+      && EGS_FAKE_HOST=/out/agent/fake_host python3 -m unittest discover -s /ws/adapters/agent/egs/tests"
 
   # T9's race gate: core rebuilt with -fsanitize=thread, lifelong tests only.
   core-tsan:
@@ -77,15 +95,18 @@ services:
         condition: service_completed_successfully
     ports:
       - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
+      - "127.0.0.1:8643:8643"
     volumes:
       - .:/ws
       - build-cache:/out
       - ${BAG_ROOT:-${BAG:-.}}:${BAG_ROOT:-${BAG:-/tmp/no-bag}}:ro
     command: >
-      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros bag_laser_odometry
+      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros evergreenslam_bag
       --bag $${BAG:?set BAG to a rosbag2 dir}
       --config configs/evergreenslam.yaml --scan_topic ${SCAN_TOPIC:-/scan}
-      --base_frame ${BASE_FRAME:-base_link} --webui_port ${WEBUI_PORT:-8642} ${EXTRA:-}"
+      --base_frame ${BASE_FRAME:-base_link} --webui_port ${WEBUI_PORT:-8642}
+      $${MAP_ROOT:+--map_root $$MAP_ROOT} $${MAP:+--map $$MAP}
+      --agent_bind 0.0.0.0 --agent_port 8643 ${EXTRA:-}"
 
   live:
     <<: *dev
@@ -95,10 +116,13 @@ services:
     network_mode: bridge
     ports:
       - "${WEBUI_PORT:-8642}:${WEBUI_PORT:-8642}"
+      - "127.0.0.1:8643:8643"
     command: >
-      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros laser_odometry_node --ros-args
+      bash -lc "source /out/install/setup.bash && ros2 run evergreenslam_ros evergreenslam_node --ros-args
       -p config:=configs/evergreenslam.yaml -p base_frame:=${BASE_FRAME:-base_link}
-      -p webui_port:=${WEBUI_PORT:-8642} -r scan:=${SCAN_TOPIC:-/scan}"
+      -p webui_port:=${WEBUI_PORT:-8642} -p agent_bind:=0.0.0.0 -p agent_port:=8643
+      -p map_root:=$${MAP_ROOT:-runs/maps} $${MAP:+-p map:=$$MAP}
+      -r scan:=${SCAN_TOPIC:-/scan}"
 
   bag-play:
     <<: *dev

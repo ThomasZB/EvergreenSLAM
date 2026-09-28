@@ -25,6 +25,7 @@
 #include "lifelong/map_manager/map_manager.h"
 #include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_option.h"
+#include "testing/load_map.h"
 #include "testing/loop_scenario.h"
 #include "utils/transform/transform.h"
 
@@ -162,12 +163,14 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
 
   // The floater was last fed at boot 2; with the threshold at 3 it survives through boot 5 and
   // must be swept at boot 6.
+  std::optional<std::string> floating_file;
   for (int boot = 3; boot <= 5; ++boot) {
     PoseGraph backend(NoFreeze(option), directory);
     backend.Start(TestTime(total_steps + boot));
     EXPECT_EQ(backend.map_manager()->boot_count(), boot);
     EXPECT_TRUE(backend.graph().HasSession(floating_session))
         << "swept at boot " << boot << ", before the lag exceeded the threshold";
+    floating_file = backend.map_manager()->FileNameOf(floating_session);
   }
 
   PoseGraph backend(NoFreeze(option), directory);
@@ -175,8 +178,8 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
   EXPECT_EQ(backend.map_manager()->boot_count(), 6);
 
   EXPECT_FALSE(backend.graph().HasSession(floating_session));
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) /
-                                       MapManager::SessionFileName(floating_session)))
+  ASSERT_TRUE(floating_file.has_value());
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / *floating_file))
       << "the swept session's file must go with it";
   const SessionId empty_replacement{frozen_session.session_index + 1};
   EXPECT_FALSE(backend.graph().HasSession(empty_replacement));
@@ -197,7 +200,7 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
   // Graph and manifest agree: a fresh load returns exactly the sessions the live graph holds.
   PoseGraphData reloaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(reloaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, reloaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_frozen_sessions, 1);
   EXPECT_EQ(reloaded.sessions().size(), backend.graph().sessions().size());

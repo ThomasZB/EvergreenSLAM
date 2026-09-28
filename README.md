@@ -42,3 +42,10 @@ pixi run -e ros ros-test                # ROS 2 adapter
 pixi run -e ros bag bags/wg_cafe        # offline replay, webui at http://localhost:8642
 pixi run -e ros rviz
 ```
+
+### ROS 2
+
+The repo doubles as a colcon workspace source (ROS 2 Jazzy): clone it into any `ws/src`, then
+`rosdep install --from-paths src --ignore-src -y && colcon build`. It builds three packages, the
+live node `evergreenslam_node` and the offline bag tool `evergreenslam_bag` among them; see
+[`adapters/ros2/evergreenslam_ros/README.md`](adapters/ros2/evergreenslam_ros/README.md#build).

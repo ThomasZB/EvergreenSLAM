@@ -9,7 +9,8 @@ residual it carries, submap footprints and the freeze verdict.
 the serialisation live here, next to the page that parses them.
 
 The HTTP server is [cpp-httplib](https://github.com/yhirose/cpp-httplib) (MIT), vendored as a
-single header in `third_party/`. No other dependency, and no build step for the page.
+single header in the repository's top-level `third_party/`, shared with the agent service. No
+other dependency, and no build step for the page.
 
 ## Running it
 
@@ -17,11 +18,11 @@ The viewer attaches to whatever drives the pipeline. Both ROS 2 entry points tak
 
 ```bash
 # offline, paced to real time so it is watchable
-bag_laser_odometry --bag <rosbag2 dir> --config configs/evergreenslam.yaml \
+evergreenslam_bag --bag <rosbag2 dir> --config configs/evergreenslam.yaml \
   --scan_topic /base_scan --base_frame base_footprint --webui_port 8642 --speed 4
 
 # live
-ros2 run evergreenslam_ros laser_odometry_node --ros-args -p webui_port:=8642
+ros2 run evergreenslam_ros evergreenslam_node --ros-args -p webui_port:=8642
 ```
 
 Then open `http://localhost:8642`. Drag to pan, wheel to zoom, `f` to follow the robot, `c` to
@@ -34,7 +35,7 @@ hue so an overlap shows which two disagree.
 `--webui_port` implies `--speed 1`; pass `--speed 0` after it to run unpaced. The offline tool
 keeps serving after the run ends so the finished map is still there to look at.
 
-`-DEVERGREENSLAM_WITH_WEBUI=OFF` removes it, cpp-httplib included, from the build entirely.
+`-DEVERGREENSLAM_WITH_WEBUI=OFF` removes it from the build entirely.
 
 ## Attaching the backend
 
@@ -140,5 +141,5 @@ queue; it writes nothing to the graph and costs the calling thread, not the back
 **The matching submap is not the global map.** The sink is handed whatever the matcher matched
 against, in the frontend's local frame, so the track runs off the edge of it and it has to be
 aligned before it can be drawn over anything the backend produced. `/global_map` is the whole
-thing composed at optimized poses; `bag_laser_odometry --out_prefix` writes the same as a PGM at
+thing composed at optimized poses; `evergreenslam_bag --out_prefix` writes the same as a PGM at
 the end of a run.

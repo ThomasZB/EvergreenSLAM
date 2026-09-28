@@ -45,29 +45,37 @@ file(GLOB_RECURSE EVERGREENSLAM_SOURCES CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc")
 
 # protoc by hand rather than protobuf_generate_cpp: the module's output layout depends on the
-# protobuf version, and the generated header has to be reachable as
-# "lifelong/map_manager/proto/map.pb.h" like every other include in the tree.
+# protobuf version, and the generated headers have to be reachable as
+# "lifelong/map_manager/proto/<name>.pb.h" like every other include in the tree.
 set(EVERGREENSLAM_PROTO_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
-set(EVERGREENSLAM_PROTO_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/lifelong/map_manager/proto/map.proto")
-set(EVERGREENSLAM_PROTO_SRC
-    "${EVERGREENSLAM_PROTO_DIR}/lifelong/map_manager/proto/map.pb.cc")
-set(EVERGREENSLAM_PROTO_HDR
-    "${EVERGREENSLAM_PROTO_DIR}/lifelong/map_manager/proto/map.pb.h")
-add_custom_command(
-  OUTPUT ${EVERGREENSLAM_PROTO_SRC} ${EVERGREENSLAM_PROTO_HDR}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${EVERGREENSLAM_PROTO_DIR}
-  COMMAND protobuf::protoc --cpp_out=${EVERGREENSLAM_PROTO_DIR}
-          -I "${CMAKE_CURRENT_SOURCE_DIR}/src" ${EVERGREENSLAM_PROTO_FILE}
-  DEPENDS ${EVERGREENSLAM_PROTO_FILE} protobuf::protoc
-  COMMENT "protoc lifelong/map_manager/proto/map.proto"
-  VERBATIM)
+set(EVERGREENSLAM_PROTO_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/lifelong/map_manager/proto")
+set(EVERGREENSLAM_PROTO_NAMES map anchors)
+set(EVERGREENSLAM_PROTO_FILES)
+foreach(proto_name ${EVERGREENSLAM_PROTO_NAMES})
+  list(APPEND EVERGREENSLAM_PROTO_FILES "${EVERGREENSLAM_PROTO_SOURCE_DIR}/${proto_name}.proto")
+endforeach()
+set(EVERGREENSLAM_PROTO_SRCS)
+foreach(proto_name ${EVERGREENSLAM_PROTO_NAMES})
+  set(proto_file "${EVERGREENSLAM_PROTO_SOURCE_DIR}/${proto_name}.proto")
+  set(proto_src "${EVERGREENSLAM_PROTO_DIR}/lifelong/map_manager/proto/${proto_name}.pb.cc")
+  set(proto_hdr "${EVERGREENSLAM_PROTO_DIR}/lifelong/map_manager/proto/${proto_name}.pb.h")
+  # Every proto as a dependency: anchors.proto imports map.proto.
+  add_custom_command(
+    OUTPUT ${proto_src} ${proto_hdr}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${EVERGREENSLAM_PROTO_DIR}
+    COMMAND protobuf::protoc --cpp_out=${EVERGREENSLAM_PROTO_DIR}
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/src" ${proto_file}
+    DEPENDS ${EVERGREENSLAM_PROTO_FILES} protobuf::protoc
+    COMMENT "protoc lifelong/map_manager/proto/${proto_name}.proto"
+    VERBATIM)
+  list(APPEND EVERGREENSLAM_PROTO_SRCS ${proto_src})
+endforeach()
 
-add_library(evergreenslam STATIC ${EVERGREENSLAM_SOURCES} ${EVERGREENSLAM_PROTO_SRC})
+add_library(evergreenslam STATIC ${EVERGREENSLAM_SOURCES} ${EVERGREENSLAM_PROTO_SRCS})
 target_include_directories(evergreenslam PUBLIC
                            "${CMAKE_CURRENT_SOURCE_DIR}/src")
-# PRIVATE: the generated header is an implementation detail of map_manager (decision 3), so
-# nothing outside this library may reach it.
+# PRIVATE: the generated headers are an implementation detail of map_manager (decision 3), so
+# nothing outside this library may reach them.
 target_include_directories(evergreenslam PRIVATE "${EVERGREENSLAM_PROTO_DIR}")
 target_link_libraries(evergreenslam PUBLIC
                       Eigen3::Eigen
@@ -77,7 +85,7 @@ target_link_libraries(evergreenslam PUBLIC
                       OpenMP::OpenMP_CXX)
 target_link_libraries(evergreenslam PRIVATE protobuf::libprotobuf)
 target_compile_options(evergreenslam PRIVATE -Wall -Wextra -Wno-unused-parameter)
-set_source_files_properties(${EVERGREENSLAM_PROTO_SRC} PROPERTIES COMPILE_OPTIONS "-w")
+set_source_files_properties(${EVERGREENSLAM_PROTO_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
 
 if(EVERGREENSLAM_BUILD_TESTS)
   find_package(GTest REQUIRED)

@@ -10,24 +10,27 @@ already links, so `core` needs no change; Humble's 0.7 exports only the bare tar
 
 | target | what it is |
 | --- | --- |
-| `bag_laser_odometry` | reads a rosbag2 directly and scores the result against a reference trajectory in the same bag. The primary verification path. |
-| `laser_odometry_node` | live node: `/scan` in, `/odom` + tf + `OccupancyGrid` out |
+| `evergreenslam_bag` | reads a rosbag2 directly and scores the result against a reference trajectory in the same bag. The primary verification path. |
+| `evergreenslam_node` | live node: `/scan` in; `/odom`, tf, the lifelong map and the agent service out |
 | `laser_scan_converter` | `sensor_msgs/LaserScan` to `sensor::PointCloud` |
 | `pose_graph_publisher` | the lifelong graph as rviz topics: submap list and textures, trajectory and constraint markers, global map |
 
 ## Build
 
-`adapters/ros2/` is a colcon workspace source: clone the repo under any `ws/src` and
+The repo is a colcon workspace source: from a fresh clone,
 
 ```bash
+mkdir -p ws/src && cd ws && git clone <repo> src/EvergreenSLAM
+rosdep install --from-paths src --ignore-src -y
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash          # .zsh on macOS
-ros2 launch evergreenslam_ros laser_odometry.launch.py
+ros2 launch evergreenslam_ros evergreenslam.launch.py
 ```
 
 builds `evergreenslam_msgs`, this package and the rviz plugin (`adapters/ros2/evergreenslam_rviz`).
-`core/` and `apps/webui/` carry `COLCON_IGNORE`: they are not packages, this package pulls them
-in with `add_subdirectory`.
+`core/`, `apps/webui/` and `adapters/agent/` carry `COLCON_IGNORE`: they are not packages, this
+package pulls them in with `add_subdirectory`, and its `package.xml` declares core's system
+dependencies (Eigen, Ceres, glog, yaml-cpp, protobuf) so that `rosdep` installs them.
 
 Day to day, through pixi + RoboStack (macOS Apple Silicon or Linux; rviz2 and `ros2 bag play`
 share the loopback with the node, so DDS discovery needs no network setup). The tasks wrap the
@@ -100,7 +103,7 @@ python3 tools/convert_carmen_log.py intel.clf bags/intel
 ## Replay a bag
 
 ```bash
-bag_laser_odometry --bag <rosbag2 dir> --config configs/evergreenslam.yaml \
+evergreenslam_bag --bag <rosbag2 dir> --config configs/evergreenslam.yaml \
   --scan_topic /base_scan --base_frame base_footprint --reference_frame map
 ```
 
@@ -112,8 +115,10 @@ The lifelong backend (pose graph, loop closure, freezing, trimming, persistence)
 default; `--no_backend` keeps the raw laser odometry as a baseline. With the backend the tool
 also writes `<out_prefix>_nodes.csv` (optimized keyframe poses) and
 `<out_prefix>_global_map.pgm` (all sessions' submaps composed at optimized poses), and
-`--map_dir <dir>` loads a saved map at boot and checkpoints into it during the run — running
-the same command twice continues the first run's map.
+`--map_root <dir>` loads the map `<dir>/<name>/` at boot and checkpoints into it during the run —
+running the same command twice continues the first run's map. `--map <name>` picks the map
+(default: the name in `<dir>/current`, else `default`); an old flat map directory opens as
+`--map_root <parent> --map <dirname>`. The bag tool never switches maps at runtime.
 
 Reported: absolute error against the reference (rms / worst / final), per-scan relative error,
 final drift as a percentage of the reference path, and — with the backend — loop closure,
@@ -136,7 +141,7 @@ reference draws one corridor twice at ~40 degrees while the estimate draws it on
 ## Live node
 
 ```bash
-ros2 launch evergreenslam_ros laser_odometry.launch.py
+ros2 launch evergreenslam_ros evergreenslam.launch.py
 ros2 bag play <rosbag2 dir>
 ```
 
@@ -145,7 +150,7 @@ The launch file reads the ROS-side parameters (topic, frames, webui port) from
 directly still works — the scan topic is a parameter, with a remap-friendly default:
 
 ```bash
-ros2 run evergreenslam_ros laser_odometry_node --ros-args \
+ros2 run evergreenslam_ros evergreenslam_node --ros-args \
   -p config:=configs/evergreenslam.yaml -p base_frame:=base_footprint -r scan:=/base_scan
 ```
 
@@ -155,7 +160,32 @@ BEST_EFFORT.
 
 Parameters: `config`, `scan_topic` (`scan`), `odom_frame` (`odom`), `base_frame` (`base_link`),
 `publish_tf` (`true`), `map_publish_period` (`1.0` s), `webui_port` (`0` = off), `lifelong`
-(`true`), `map_dir` (`""` = no persistence), `map_frame` (`map`).
+(`true`), `map_root` (`~/.evergreenslam/maps`; `""` = no persistence and no agent service), `map`
+(`""` = the root's `current`, else `default`), `map_frame` (`map`), `agent_port` (`8643`, `0` =
+off), `agent_bind` (`127.0.0.1`), `ignore_last_pose` (`false`).
+
+### Maps
+
+A map root holds named maps, each a map directory of its own, plus a `current` file naming the
+map the node boots when `map` is empty:
+
+```
+<map_root>/
+  current            # "default\n"
+  default/           # manifest.pb, session files, anchors, last_pose.pb, memory/, views/, snapshots/
+  lab/
+```
+
+The node records a map in `current` once it has booted (on the first scan, after the pose graph
+started), so a map that never booted is never recorded. Opening a damaged map directory, at boot or
+through `egs map open`, kills the node on its first scan. The agent can start a fresh map (`egs map
+new <name>`) or open a saved one (`egs map open <name>`); nothing is deleted. The node then stops
+the agent service, finishes the pose graph, and boots the named map in the same process: the agent
+port closes for a few seconds and comes back on the new map. The webui drops the old map's graph,
+textures and trajectory, and an open page reloads itself. An opened map seeds its pose from its own
+`last_pose.pb`: if the robot moved while another map was open, correct it with `egs init-pose
+--place <p>` or `egs relocalize`. The odom frame restarts at identity with the new map (the frontend
+is rebuilt); the laser extrinsic and tf state carry over.
 
 With the backend on (the default), `/map` carries the assembled global map in `map_frame` and
 tf gains `map -> odom` with the optimizer's correction, so RViz composes the corrected robot

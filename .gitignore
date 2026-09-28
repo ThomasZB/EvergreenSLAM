@@ -12,3 +12,5 @@ runs/
 install/
 log/
 .vscode
+.claude/worktrees/
+build-agent/

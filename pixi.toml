@@ -1,6 +1,8 @@
 # Native dev environment (macOS / Linux) via pixi + RoboStack. Mirrors docker-compose.yml:
 #
 #   pixi run core-test                 # core alone: cmake + ctest (no ROS)
+#   pixi run agent-test                # adapters/agent: ctest + egs suite against the real service
+#   pixi run egs-test                  # egs CLI alone, against its Python fake service
 #   pixi run -e ros ros-build          # colcon build of adapters/ros2/ into build-pixi/{colcon,install}
 #   pixi run -e ros ros-test           # colcon test of the same, with the results printed
 #   pixi run -e ros bag bags/wg_cafe   # offline replay, webui at http://localhost:8642
@@ -11,7 +13,10 @@
 #
 # Tunables via env, same names as docker-compose.yml: SCAN_TOPIC (/scan), BASE_FRAME (base_link),
 # WEBUI_PORT (8642), EXTRA (appended to the bag command verbatim, e.g. EXTRA="--speed 4"),
-# ROS_DOMAIN_ID (0). The bag path is a plain argument, absolute or relative; no mounts.
+# ROS_DOMAIN_ID (0), MAP_ROOT and MAP (unset = the root's `current`, `default` on a fresh root).
+# live persists into <MAP_ROOT>/<MAP>/ (MAP_ROOT default runs/maps) and serves the agent API on
+# 127.0.0.1:8643. bag persists only with MAP_ROOT set (agent API: EXTRA="--agent_port 8643").
+# The bag path is a plain argument, absolute or relative; no mounts.
 #
 # The default environment is ROS-free, matching core/'s no-ROS rule; `-e ros` adds RoboStack
 # Jazzy. Build trees go to build-pixi/ (gitignored). CMAKE_PREFIX_PATH is pinned to the env so a
@@ -92,6 +97,24 @@ depends-on = ["core-configure"]
 cmd = "ctest --test-dir build-pixi/core --output-on-failure"
 depends-on = ["core-build"]
 
+# The agent layer (adapters/agent/) builds on its own next to core; see its CMakeLists.txt.
+[tasks.agent-configure]
+cmd = "cmake -S adapters/agent -B build-pixi/agent -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$CONDA_PREFIX -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew"
+
+[tasks.agent-build]
+cmd = "cmake --build build-pixi/agent"
+depends-on = ["agent-configure"]
+
+# ctest, then the egs suite with its integration test against the real service (fake_host).
+[tasks.agent-test]
+cmd = "ctest --test-dir build-pixi/agent --output-on-failure && python3 -m unittest discover -s adapters/agent/egs/tests"
+env = { EGS_FAKE_HOST = "build-pixi/agent/fake_host" }
+depends-on = ["agent-build"]
+
+# egs alone against its fake service; the integration test skips without EGS_FAKE_HOST.
+[tasks.egs-test]
+cmd = "python3 -m unittest discover -s adapters/agent/egs/tests"
+
 # COLCON_IGNORE in build-pixi/: cmake build trees carry CMakeLists.txt files of their own (the
 # compiler probes), which a colcon run over the whole repo would otherwise take for packages.
 [feature.ros.tasks.ros-build]
@@ -107,13 +130,13 @@ depends-on = ["ros-build"]
 # going to a slow rviz then blocks the publishing thread for hundreds of ms.
 [feature.ros.tasks.bag]
 env = { RMW_FASTRTPS_PUBLICATION_MODE = "ASYNCHRONOUS" }
-cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros bag_laser_odometry --bag \"$0\" --config configs/evergreenslam.yaml --scan_topic \"${SCAN_TOPIC:-/scan}\" --base_frame \"${BASE_FRAME:-base_link}\" --webui_port \"${WEBUI_PORT:-8642}\" ${EXTRA:-}' {{ bag }}"
+cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros evergreenslam_bag --bag \"$0\" --config configs/evergreenslam.yaml --scan_topic \"${SCAN_TOPIC:-/scan}\" --base_frame \"${BASE_FRAME:-base_link}\" --webui_port \"${WEBUI_PORT:-8642}\" ${MAP_ROOT:+--map_root $MAP_ROOT} ${MAP:+--map $MAP} ${EXTRA:-}' {{ bag }}"
 args = [{ arg = "bag" }]
 depends-on = ["ros-build"]
 
 [feature.ros.tasks.live]
 env = { RMW_FASTRTPS_PUBLICATION_MODE = "ASYNCHRONOUS" }
-cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros laser_odometry_node --ros-args -p config:=configs/evergreenslam.yaml -p base_frame:=\"${BASE_FRAME:-base_link}\" -p webui_port:=\"${WEBUI_PORT:-8642}\" -r scan:=\"${SCAN_TOPIC:-/scan}\"'"
+cmd = "bash -c 'source build-pixi/install/setup.bash && exec ros2 run evergreenslam_ros evergreenslam_node --ros-args -p config:=configs/evergreenslam.yaml -p base_frame:=\"${BASE_FRAME:-base_link}\" -p webui_port:=\"${WEBUI_PORT:-8642}\" -p agent_port:=8643 -p map_root:=\"${MAP_ROOT:-runs/maps}\" ${MAP:+-p map:=$MAP} -r scan:=\"${SCAN_TOPIC:-/scan}\"'"
 depends-on = ["ros-build"]
 
 # Through tools/bag_play.py: keeps the player's space/arrow-key controls but unhangs its

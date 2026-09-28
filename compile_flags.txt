@@ -4,7 +4,8 @@
 -I.
 -Icore/src
 -Iapps/webui/src
--Iapps/webui/third_party
+-Ithird_party
+-Iadapters/agent
 -Iadapters/ros2/evergreenslam_ros/src
 -Iadapters/ros2/evergreenslam_rviz/include
 

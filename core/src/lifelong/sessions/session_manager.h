@@ -110,7 +110,7 @@ class SessionManager {
   void OnOptimizedOnTask();
 
   // The freeze sequence without a verdict; queued, like everything that touches the graph.
-  void FreezeFedSession();
+  void FreezeFedSession(std::optional<SessionId> expected = std::nullopt);
 
   // After a fed freeze this is already the replacement session.
   std::optional<SessionId> fed_session() const { return fed_session_; }
@@ -121,6 +121,8 @@ class SessionManager {
   const FreezeJudge& freeze_judge() const { return judge_; }
   const FrozenCoverage& coverage() const { return coverage_; }
   const std::map<SessionId, ExpansionState>& expansion() const { return expansion_; }
+  // Backend task only. A freeze sequence is queued and assumes its session outlives it.
+  bool freezing() const { return freezing_; }
 
  private:
   int Refresh(SessionId id, ExpansionState& state);

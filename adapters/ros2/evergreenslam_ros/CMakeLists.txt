@@ -46,6 +46,11 @@ if(EVERGREENSLAM_WITH_WEBUI)
   add_subdirectory(${EVERGREENSLAM_ROOT}/apps/webui ${CMAKE_CURRENT_BINARY_DIR}/webui)
 endif()
 
+option(EVERGREENSLAM_WITH_AGENT "Build the agent HTTP service (adapters/agent/API.md)" ON)
+if(EVERGREENSLAM_WITH_AGENT)
+  add_subdirectory(${EVERGREENSLAM_ROOT}/adapters/agent/service ${CMAKE_CURRENT_BINARY_DIR}/agent)
+endif()
+
 # Per-package C++ typesupport targets rather than ament_target_dependencies or ${pkg}_TARGETS:
 # both also link the packages' Python typesupport libraries, which on RoboStack macOS fail to
 # load outside a Python interpreter (unresolved _PyExc_* symbols at dyld time).
@@ -58,16 +63,26 @@ add_library(evergreenslam_ros_common src/laser_scan_converter.cc src/pose_graph_
 target_include_directories(evergreenslam_ros_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(evergreenslam_ros_common PUBLIC evergreenslam ${ROS_TARGETS})
 
-add_executable(laser_odometry_node src/laser_odometry_node.cc)
-target_link_libraries(laser_odometry_node PRIVATE evergreenslam_ros_common)
+add_executable(evergreenslam_node src/evergreenslam_node.cc)
+target_link_libraries(evergreenslam_node PRIVATE evergreenslam_ros_common)
 
-add_executable(bag_laser_odometry src/bag_laser_odometry_main.cc)
-target_link_libraries(bag_laser_odometry PRIVATE evergreenslam_ros_common)
+add_executable(evergreenslam_bag src/evergreenslam_bag_main.cc)
+target_link_libraries(evergreenslam_bag PRIVATE evergreenslam_ros_common)
 
 if(EVERGREENSLAM_WITH_WEBUI)
-  foreach(target laser_odometry_node bag_laser_odometry)
+  foreach(target evergreenslam_node evergreenslam_bag)
     target_link_libraries(${target} PRIVATE evergreenslam_webui)
     target_compile_definitions(${target} PRIVATE EVERGREENSLAM_WITH_WEBUI)
+  endforeach()
+endif()
+
+if(EVERGREENSLAM_WITH_AGENT)
+  add_library(evergreenslam_agent_host src/agent_host.cc)
+  target_include_directories(evergreenslam_agent_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(evergreenslam_agent_host PUBLIC evergreenslam_agent)
+  foreach(target evergreenslam_node evergreenslam_bag)
+    target_link_libraries(${target} PRIVATE evergreenslam_agent_host)
+    target_compile_definitions(${target} PRIVATE EVERGREENSLAM_WITH_AGENT)
   endforeach()
 endif()
 
@@ -82,7 +97,7 @@ if(BUILD_TESTING)
   add_test(NAME laser_scan_converter_test COMMAND laser_scan_converter_test)
 endif()
 
-install(TARGETS laser_odometry_node bag_laser_odometry
+install(TARGETS evergreenslam_node evergreenslam_bag
         DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY ${EVERGREENSLAM_ROOT}/configs
         DESTINATION share/${PROJECT_NAME})

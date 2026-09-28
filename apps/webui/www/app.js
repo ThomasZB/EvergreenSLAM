@@ -192,6 +192,14 @@ const events = new EventSource('events');
 events.onmessage = message => {
   const frame = JSON.parse(message.data);
   state.frame = frame;
+  // A new epoch is another map: its submaps reuse the cached textures' keys.
+  if (frame.epoch !== undefined) {
+    if (state.epoch !== undefined && frame.epoch !== state.epoch) {
+      location.reload();
+      return;
+    }
+    state.epoch = frame.epoch;
+  }
   state.frames++;
   const matched = frame.poses.matched;
   if (matched) {

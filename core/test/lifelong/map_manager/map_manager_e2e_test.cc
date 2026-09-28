@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "../testing/explicit_ingest.h"
+#include "../testing/load_map.h"
 #include "common/time.h"
 #include "lifelong/constraints/constraint_builder.h"
 #include "lifelong/map_manager/map_manager.h"
@@ -274,7 +275,8 @@ TEST(MapManagerE2eTest, CheckpointSurvivesAKillAndMappingContinuesOnTheRestoredM
 
   PoseGraph restarted(NoFreezeOption());
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(restarted.mutable_graph());
+  const std::optional<MapManager::LoadResult> result =
+      testing::LoadMap(reader, restarted.mutable_graph());
   ASSERT_TRUE(result.has_value());
   ASSERT_EQ(result->unfrozen_sessions.size(), 1u);
   const SessionId session = result->unfrozen_sessions.front().id;
@@ -329,7 +331,7 @@ TEST(MapManagerE2eTest, CheckpointSurvivesAKillAndMappingContinuesOnTheRestoredM
   EXPECT_LT(error_after, 0.25) << "the trajectory after the restart is not sane";
   EXPECT_LT(error_after, error_before + 0.1);
   manager->Checkpoint(restarted.graph(), session);
-  EXPECT_TRUE(reader.InspectSessionFile(session).has_value());
+  EXPECT_TRUE(manager->InspectSessionFile(session).has_value());
 }
 
 TEST(MapManagerE2eTest, TheFrozenFileIsWrittenFromTheFreezeCallback) {
@@ -368,7 +370,7 @@ TEST(MapManagerE2eTest, TheFrozenFileIsWrittenFromTheFreezeCallback) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_sessions, 2);
   EXPECT_EQ(result->num_frozen_sessions, 1);
@@ -434,7 +436,7 @@ TEST(MapManagerE2eTest, IndicesTrimmedBetweenCheckpointsAreNeverReissued) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  ASSERT_TRUE(reader.Load(loaded).has_value());
+  ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
   EXPECT_EQ(loaded.id_allocator().next_submap_index(session), next_submap_after_trim);
   EXPECT_EQ(loaded.id_allocator().next_node_index(session), next_node_after_trim);
   EXPECT_EQ(loaded.AllocateSubmapId(session).submap_index, next_submap_after_trim);

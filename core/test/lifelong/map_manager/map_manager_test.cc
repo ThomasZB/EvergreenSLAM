@@ -1,7 +1,7 @@
 /**
  * @file map_manager_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief Round trip, frozen file immutability, atomic checkpoints, version and corruption.
+ * @brief Round trip, frozen file immutability, atomic commits, version and corruption.
  * @version 0.1
  * @date 2026-08-09
  *
@@ -17,14 +17,22 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "../testing/load_map.h"
 #include "lifelong/optimization/optimization_option.h"
+#include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_data.h"
 #include "mapping/grid_mapping/castrays_mapping.h"
 #include "mapping/submap.h"
@@ -81,8 +89,8 @@ Eigen::Matrix3d MakeInformation(double seed) {
   return matrix;
 }
 
-// Three doubles cannot round trip a rotation matrix bitwise; what is exact is the [x, y, theta]
-// projection, so the loaded pose must equal that coefficient for coefficient.
+// Three doubles cannot round trip a rotation matrix bitwise; translation is exact, the rotation
+// only to the ulp (glibc's atan2(sin t, cos t) is not the identity for every t, macOS's is).
 void ExpectPoseRestored(const Eigen::Affine2d& original, const Eigen::Affine2d& loaded) {
   const Eigen::Affine2d expected = transform::FromArray3(transform::ToArray3(original));
   EXPECT_EQ(expected.translation().x(), loaded.translation().x());
@@ -91,7 +99,7 @@ void ExpectPoseRestored(const Eigen::Affine2d& original, const Eigen::Affine2d& 
   EXPECT_EQ(original.translation().y(), loaded.translation().y());
   for (int row = 0; row < 2; ++row) {
     for (int col = 0; col < 2; ++col) {
-      EXPECT_EQ(expected.linear()(row, col), loaded.linear()(row, col));
+      EXPECT_NEAR(expected.linear()(row, col), loaded.linear()(row, col), 1e-15);
     }
   }
   EXPECT_NEAR(transform::GetYaw(original), transform::GetYaw(loaded), 1e-15);
@@ -253,6 +261,28 @@ std::string ReadWhole(const std::string& path) {
   return buffer.str();
 }
 
+std::optional<AnchorTable> ReadAnchorsFromDisk(const std::string& directory) {
+  MapManager reader(directory);
+  PoseGraphData graph;
+  testing::LoadMap(reader, graph);
+  return reader.ReadAnchors();
+}
+
+// Restore resets the revision to the "as read" baseline; renaming a submap to itself bumps it
+// without touching a row, so the next commit writes exactly the restored table.
+void MarkChanged(AnchorStore& store) {
+  const std::vector<Anchor> all = store.All();
+  std::map<SubmapId, SubmapId> identity;
+  for (const Anchor& anchor : all) {
+    if (anchor.state != AnchorState::ORPHAN) {
+      identity.emplace(anchor.submap_id, anchor.submap_id);
+    }
+  }
+  const int64_t before = store.revision();
+  store.OnSubmapsTransferred(identity);
+  CHECK_NE(store.revision(), before) << "needs a live anchor to bump the revision";
+}
+
 TEST(MapManagerTest, RoundTripsAWholeGraph) {
   const std::string directory = MakeTempDir("roundtrip");
   BuiltGraph built = BuildGraph();
@@ -261,7 +291,7 @@ TEST(MapManagerTest, RoundTripsAWholeGraph) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_sessions, 2);
   EXPECT_EQ(result->num_frozen_sessions, 1);
@@ -302,7 +332,7 @@ TEST(MapManagerTest, RestoresEveryConstraintOfTheActiveSessionBitwise) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  ASSERT_TRUE(reader.Load(loaded).has_value());
+  ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
 
   std::vector<Constraint> expected;
   for (const Constraint& constraint : built.graph.constraints()) {
@@ -342,9 +372,8 @@ TEST(MapManagerTest, FrozenFileIsNeverRewritten) {
   MapManager manager(directory);
   manager.OnSessionFrozen(built.graph, built.frozen_session);
 
-  const std::string frozen_path =
-      (std::filesystem::path(directory) / MapManager::SessionFileName(built.frozen_session))
-          .string();
+  const std::string frozen_file = *manager.FileNameOf(built.frozen_session);
+  const std::string frozen_path = (std::filesystem::path(directory) / frozen_file).string();
   const std::string before = ReadWhole(frozen_path);
   ASSERT_FALSE(before.empty());
 
@@ -355,6 +384,7 @@ TEST(MapManagerTest, FrozenFileIsNeverRewritten) {
     manager.Checkpoint(built.graph, built.active_session);
   }
   EXPECT_EQ(before, ReadWhole(frozen_path));
+  EXPECT_EQ(manager.FileNameOf(built.frozen_session), frozen_file);
   EXPECT_EQ(manager.num_checkpoints_written(), 5);
 }
 
@@ -365,7 +395,7 @@ TEST(MapManagerTest, CheckpointInterruptedBeforeRenameLeavesThePreviousOneLoadab
   SaveWholeGraph(manager, built);
 
   const std::filesystem::path active_path =
-      std::filesystem::path(directory) / MapManager::SessionFileName(built.active_session);
+      std::filesystem::path(directory) / *manager.FileNameOf(built.active_session);
   const std::string good = ReadWhole(active_path.string());
 
   // A kill between the write and the rename leaves exactly this behind.
@@ -376,9 +406,12 @@ TEST(MapManagerTest, CheckpointInterruptedBeforeRenameLeavesThePreviousOneLoadab
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  ASSERT_TRUE(reader.Load(loaded).has_value());
+  ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
   ExpectSessionRestored(built.graph, loaded, built.active_session);
   EXPECT_EQ(good, ReadWhole(active_path.string()));
+  EXPECT_TRUE(std::filesystem::exists(active_path.string() + ".tmp")) << "Load is read-only";
+  reader.RemoveUnreferencedFiles();
+  EXPECT_FALSE(std::filesystem::exists(active_path.string() + ".tmp"));
 }
 
 TEST(MapManagerTest, RefusesAFileFromAnOlderFormatVersion) {
@@ -390,8 +423,7 @@ TEST(MapManagerTest, RefusesAFileFromAnOlderFormatVersion) {
   // Field 1 varint kMapFormatVersion leads every file we write; patching the value back is what a
   // previous-version writer would have produced. Older formats are refused whole.
   const std::string path =
-      (std::filesystem::path(directory) / MapManager::SessionFileName(built.active_session))
-          .string();
+      (std::filesystem::path(directory) / *manager.FileNameOf(built.active_session)).string();
   std::string contents = ReadWhole(path);
   ASSERT_GE(contents.size(), 2u);
   ASSERT_EQ(static_cast<uint8_t>(contents[0]), 0x08);
@@ -404,15 +436,16 @@ TEST(MapManagerTest, RefusesAFileFromAnOlderFormatVersion) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  EXPECT_FALSE(reader.Load(loaded).has_value());
-  EXPECT_EQ(reader.InspectSessionFile(built.active_session)->version, kMapFormatVersion - 1);
+  EXPECT_EQ(testing::LoadFailureOf(reader, loaded),
+            MapManager::LoadFailure::Reason::UNSUPPORTED_VERSION);
+  EXPECT_EQ(manager.InspectSessionFile(built.active_session)->version, kMapFormatVersion - 1);
 }
 
 TEST(MapManagerTest, RefusesACorruptOrMissingMapWithoutCrashing) {
   const std::string empty_directory = MakeTempDir("empty");
   PoseGraphData nothing;
   MapManager reader(empty_directory);
-  EXPECT_FALSE(reader.Load(nothing).has_value());
+  EXPECT_TRUE(std::holds_alternative<MapManager::FreshDirectory>(reader.Load(nothing)));
   EXPECT_TRUE(nothing.sessions().empty());
 
   const std::string directory = MakeTempDir("corrupt");
@@ -422,15 +455,15 @@ TEST(MapManagerTest, RefusesACorruptOrMissingMapWithoutCrashing) {
 
   {
     std::ofstream stream(
-        (std::filesystem::path(directory) / MapManager::SessionFileName(built.active_session))
-            .string(),
+        (std::filesystem::path(directory) / *manager.FileNameOf(built.active_session)).string(),
         std::ios::binary | std::ios::trunc);
     const std::string garbage(512, '\xff');
     stream.write(garbage.data(), static_cast<std::streamsize>(garbage.size()));
   }
   PoseGraphData loaded;
   MapManager corrupt_reader(directory);
-  EXPECT_FALSE(corrupt_reader.Load(loaded).has_value());
+  EXPECT_EQ(testing::LoadFailureOf(corrupt_reader, loaded),
+            MapManager::LoadFailure::Reason::CORRUPT_SESSION_FILE);
 
   const std::string manifest_path = (std::filesystem::path(directory) / "manifest.pb").string();
   {
@@ -440,7 +473,102 @@ TEST(MapManagerTest, RefusesACorruptOrMissingMapWithoutCrashing) {
   }
   PoseGraphData other;
   MapManager broken_manifest(directory);
-  EXPECT_FALSE(broken_manifest.Load(other).has_value());
+  EXPECT_EQ(testing::LoadFailureOf(broken_manifest, other),
+            MapManager::LoadFailure::Reason::UNREADABLE_MANIFEST);
+}
+
+// next_id travels as written, not re-derived from the rows; the scan keeps "absent" apart from
+// "empty".
+TEST(MapManagerTest, AnchorsRoundTripWithTheirHighWaterMark) {
+  const std::string directory = MakeTempDir("anchors");
+  AnchorTable table;
+  table.next_id = 20;
+  Anchor with_scan;
+  with_scan.id = 3;
+  with_scan.submap_id = SubmapId{1, 4};
+  with_scan.submap_from_anchor = transform::FromXYTheta(0.731, -1.249, 2.917);
+  with_scan.node_id = NodeId{1, 57};
+  with_scan.saved_at = TestTime(57);
+  with_scan.state = AnchorState::REBOUND;
+  with_scan.scan = RingCloud(2.3);
+  Anchor orphan;
+  orphan.id = 5;
+  orphan.submap_id = SubmapId{2, 0};
+  orphan.node_id = NodeId{2, 3};
+  orphan.saved_at = TestTime(80);
+  orphan.state = AnchorState::ORPHAN;
+  orphan.orphan_reason = OrphanReason::SESSION_REMOVED;
+  Anchor empty_scan;
+  empty_scan.id = 8;
+  empty_scan.submap_id = SubmapId{0, 2};
+  empty_scan.node_id = NodeId{0, 21};
+  empty_scan.saved_at = TestTime(21);
+  empty_scan.scan = sensor::PointCloud();
+  table.anchors = {with_scan, orphan, empty_scan};
+
+  AnchorStore store;
+  store.Restore(table);
+  MarkChanged(store);
+  MapManager writer(directory, store);
+  writer.Commit(PoseGraphData());
+  ASSERT_EQ(writer.num_anchor_writes(), 1);
+  const std::optional<AnchorTable> loaded = ReadAnchorsFromDisk(directory);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->next_id, 20u);
+  ASSERT_EQ(loaded->anchors.size(), 3u);
+  for (size_t i = 0; i < table.anchors.size(); ++i) {
+    const Anchor& original = table.anchors[i];
+    const Anchor& restored = loaded->anchors[i];
+    EXPECT_EQ(restored.id, original.id);
+    EXPECT_EQ(restored.submap_id, original.submap_id);
+    EXPECT_EQ(restored.node_id, original.node_id);
+    EXPECT_EQ(restored.saved_at, original.saved_at);
+    EXPECT_EQ(restored.state, original.state);
+    EXPECT_EQ(restored.orphan_reason, original.orphan_reason);
+    ExpectPoseRestored(original.submap_from_anchor, restored.submap_from_anchor);
+    ASSERT_EQ(restored.scan.has_value(), original.scan.has_value()) << "anchor " << original.id;
+    if (original.scan.has_value()) {
+      ExpectCloudRestored(*original.scan, *restored.scan);
+    }
+  }
+
+  const std::optional<std::string> committed = writer.anchors_file_name();
+  writer.Commit(PoseGraphData());
+  EXPECT_EQ(writer.num_anchor_writes(), 1) << "an unchanged table is not rewritten";
+  EXPECT_EQ(writer.anchors_file_name(), committed);
+}
+
+TEST(MapManagerTest, MissingAnchorsFileIsEmptyAndAnUnreadableOneIsRefused) {
+  const std::string directory = MakeTempDir("anchors_missing");
+  const std::optional<AnchorTable> missing = ReadAnchorsFromDisk(directory);
+  ASSERT_TRUE(missing.has_value());
+  EXPECT_EQ(missing->next_id, 1u);
+  EXPECT_TRUE(missing->anchors.empty());
+
+  AnchorTable table;
+  table.next_id = 4;
+  Anchor anchor;
+  anchor.id = 2;
+  anchor.submap_id = SubmapId{0, 1};
+  anchor.node_id = NodeId{0, 5};
+  table.anchors = {anchor};
+  AnchorStore store;
+  store.Restore(table);
+  MarkChanged(store);
+  MapManager writer(directory, store);
+  writer.Commit(PoseGraphData());
+  const std::string path =
+      (std::filesystem::path(directory) / *writer.anchors_file_name()).string();
+  {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    const std::string garbage(64, '\xff');
+    stream.write(garbage.data(), static_cast<std::streamsize>(garbage.size()));
+  }
+  EXPECT_FALSE(ReadAnchorsFromDisk(directory).has_value());
+
+  // Named by the manifest but gone is a broken map, not an empty table.
+  ASSERT_TRUE(std::filesystem::remove(path));
+  EXPECT_FALSE(ReadAnchorsFromDisk(directory).has_value());
 }
 
 TEST(MapManagerTest, RoundTripsAGraphThatHasBeenTrimmed) {
@@ -460,7 +588,7 @@ TEST(MapManagerTest, RoundTripsAGraphThatHasBeenTrimmed) {
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   ExpectSessionRestored(built.graph, loaded, built.active_session);
 
@@ -515,7 +643,7 @@ TEST(MapManagerTest, MultipleUnfrozenSessionsRoundTripWithoutOverwritingEachOthe
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_sessions, 3);
   EXPECT_EQ(result->num_frozen_sessions, 1);
@@ -578,7 +706,7 @@ TEST(MapManagerTest, AConstraintMigratesToItsNextUnfrozenEndpointWhenItsOwnerFre
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_frozen_sessions, 2);
   ASSERT_EQ(result->unfrozen_sessions.size(), 1u);
@@ -606,7 +734,7 @@ TEST(MapManagerTest, BootCountIncrementsAcrossBootsAndStampsTheFedSession) {
   {
     PoseGraphData loaded;
     MapManager manager(directory);
-    const std::optional<MapManager::LoadResult> result = manager.Load(loaded);
+    const std::optional<MapManager::LoadResult> result = testing::LoadMap(manager, loaded);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(manager.boot_count(), 1);
     ASSERT_EQ(result->unfrozen_sessions.size(), 1u);
@@ -617,7 +745,7 @@ TEST(MapManagerTest, BootCountIncrementsAcrossBootsAndStampsTheFedSession) {
   {
     PoseGraphData loaded;
     MapManager manager(directory);
-    const std::optional<MapManager::LoadResult> result = manager.Load(loaded);
+    const std::optional<MapManager::LoadResult> result = testing::LoadMap(manager, loaded);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(manager.boot_count(), 2);
     ASSERT_EQ(result->unfrozen_sessions.size(), 1u);
@@ -634,18 +762,19 @@ TEST(MapManagerTest, RemoveSessionDeletesTheFileAndTheManifestEntryAndScrubsRefe
   manager.OnSessionFrozen(built.graph, built.frozen_session);
   manager.Checkpoint(built.graph, fed);
   ASSERT_TRUE(manager.InspectSessionFile(built.active_session).has_value());
+  const std::string removed_file = *manager.FileNameOf(built.active_session);
 
   // The graph drops the session and every constraint touching it, then the manager deletes the
   // file and manifest entry, so no other file can hand a dangling constraint back.
   built.graph.RemoveSession(built.active_session);
   manager.RemoveSession(built.graph, built.active_session);
   EXPECT_FALSE(manager.InspectSessionFile(built.active_session).has_value());
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) /
-                                       MapManager::SessionFileName(built.active_session)));
+  EXPECT_FALSE(manager.FileNameOf(built.active_session).has_value());
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / removed_file));
 
   PoseGraphData loaded;
   MapManager reader(directory);
-  const std::optional<MapManager::LoadResult> result = reader.Load(loaded);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->num_sessions, 2);
   ASSERT_EQ(result->unfrozen_sessions.size(), 1u);
@@ -657,6 +786,442 @@ TEST(MapManagerTest, RemoveSessionDeletesTheFileAndTheManifestEntryAndScrubsRefe
       EXPECT_NE(constraint.to->session(), built.active_session);
     }
   }
+}
+
+std::string NextSessionFile(const MapManager& manager, SessionId id) {
+  char name[64];
+  std::snprintf(name, sizeof(name), "session_%06d.g%lld.pb", id.session_index,
+                static_cast<long long>(manager.generation() + 1));
+  return name;
+}
+
+// A directory where the next generation's file goes: the rename onto it fails. Not empty, so no
+// cleanup of a failed write can take it for its own temp file.
+std::filesystem::path Block(const std::string& directory, const std::string& file_name) {
+  const std::filesystem::path path = std::filesystem::path(directory) / file_name;
+  std::filesystem::create_directories(path / "occupied");
+  return path;
+}
+
+// Commit 1 saves the whole graph with one anchor; commit 2 adds a node, a constraint and a second
+// anchor, and the hook copies the directory right before its manifest is written.
+struct InterruptedCommit {
+  std::string directory;
+  std::string previous;
+  std::string killed;
+  BuiltGraph built;
+  NodeId added_node;
+  AnchorId earlier = 0;
+  AnchorId later = 0;
+  int64_t previous_generation = 0;
+  std::vector<std::string> new_files;
+};
+
+InterruptedCommit RunInterruptedCommit(const std::string& name) {
+  InterruptedCommit run;
+  run.directory = MakeTempDir(name);
+  run.previous = MakeTempDir(name + "_previous");
+  run.killed = MakeTempDir(name + "_killed");
+  run.built = BuildGraph();
+  PoseGraphData& graph = run.built.graph;
+  const SessionId active = run.built.active_session;
+
+  AnchorStore store;
+  MapManager manager(run.directory, store);
+  manager.OnSessionFrozen(graph, run.built.frozen_session);
+  run.earlier = store.Save(graph, graph.session(active).node_ids.front(), false)->id;
+  manager.Checkpoint(graph, active);
+  const Node& last = graph.node(graph.session(active).node_ids.back());
+  manager.WriteLastPose(last);
+  run.previous_generation = manager.generation();
+  std::filesystem::copy(
+      run.directory, run.previous,
+      std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+
+  Node node;
+  node.id = graph.AllocateNodeId(active);
+  node.constant_data.time = TestTime(19);
+  node.constant_data.local_pose = transform::FromXYTheta(10.3, 0.9, -0.2);
+  node.constant_data.point_cloud = RingCloud(1.61);
+  node.global_pose = transform::FromXYTheta(10.4, 0.95, -0.18);
+  graph.AddNode(node, {graph.session(active).submap_ids.back()});
+  Constraint constraint;
+  constraint.type = Constraint::Type::INTRA_SUBMAP;
+  constraint.from = VariableId::Of(graph.session(active).submap_ids.back());
+  constraint.to = VariableId::Of(node.id);
+  constraint.relative_pose = transform::FromXYTheta(0.41, 0.07, -0.13);
+  constraint.sqrt_information = MakeInformation(5.5);
+  graph.AddConstraint(constraint);
+  run.added_node = node.id;
+  run.later = store.Save(graph, node.id, false)->id;
+
+  manager.set_before_manifest_write_hook([&run] {
+    for (const auto& item : std::filesystem::directory_iterator(run.directory)) {
+      const std::string file = item.path().filename().string();
+      if (file.find(".g" + std::to_string(run.previous_generation + 1) + ".pb") !=
+          std::string::npos) {
+        run.new_files.push_back(file);
+      }
+    }
+    std::filesystem::copy(run.directory, run.killed,
+                          std::filesystem::copy_options::recursive |
+                              std::filesystem::copy_options::overwrite_existing);
+  });
+  manager.Checkpoint(graph, active);
+  EXPECT_EQ(manager.generation(), run.previous_generation + 1);
+  return run;
+}
+
+void ExpectSameGraph(const PoseGraphData& expected, const PoseGraphData& actual) {
+  ASSERT_EQ(expected.sessions().size(), actual.sessions().size());
+  for (const auto& [id, session] : expected.sessions()) {
+    ASSERT_TRUE(actual.HasSession(id));
+    ExpectSessionRestored(expected, actual, id);
+  }
+  EXPECT_EQ(expected.constraints().size(), actual.constraints().size());
+}
+
+TEST(MapManagerTest, CommitIsAtomic) {
+  const InterruptedCommit run = RunInterruptedCommit("commit_atomic");
+  ASSERT_FALSE(run.new_files.empty());
+
+  PoseGraphData previous;
+  MapManager previous_reader(run.previous);
+  ASSERT_TRUE(testing::LoadMap(previous_reader, previous).has_value());
+
+  PoseGraphData killed;
+  MapManager killed_reader(run.killed);
+  ASSERT_TRUE(testing::LoadMap(killed_reader, killed).has_value());
+  EXPECT_EQ(killed_reader.generation(), run.previous_generation);
+  ExpectSameGraph(previous, killed);
+  EXPECT_FALSE(killed.HasNode(run.added_node));
+  const std::optional<AnchorTable> killed_table = killed_reader.ReadAnchors();
+  ASSERT_TRUE(killed_table.has_value());
+  AnchorStore killed_anchors;
+  killed_anchors.Restore(*killed_table);
+  EXPECT_FALSE(killed_anchors.Get(run.later).has_value()) << "the aborted commit's anchor leaked";
+  const std::optional<ResolvedAnchor> earlier = killed_anchors.Resolve(killed, run.earlier);
+  ASSERT_TRUE(earlier.has_value());
+  EXPECT_EQ(earlier->state, AnchorState::BOUND);
+  EXPECT_TRUE(earlier->global_pose.has_value());
+
+  PoseGraphData committed;
+  MapManager committed_reader(run.directory);
+  ASSERT_TRUE(testing::LoadMap(committed_reader, committed).has_value());
+  EXPECT_EQ(committed_reader.generation(), run.previous_generation + 1);
+  ExpectSessionRestored(run.built.graph, committed, run.built.frozen_session);
+  ExpectSessionRestored(run.built.graph, committed, run.built.active_session);
+  EXPECT_TRUE(committed.HasNode(run.added_node));
+  EXPECT_EQ(committed.constraints().size(), killed.constraints().size() + 1);
+  const std::optional<AnchorTable> committed_table = committed_reader.ReadAnchors();
+  ASSERT_TRUE(committed_table.has_value());
+  EXPECT_EQ(committed_table->anchors.size(), 2u);
+}
+
+TEST(MapManagerTest, MidCommitGarbageIsRemovedAtLoad) {
+  const InterruptedCommit run = RunInterruptedCommit("commit_garbage");
+  const std::filesystem::path killed(run.killed);
+  ASSERT_FALSE(run.new_files.empty());
+  for (const std::string& file : run.new_files) {
+    ASSERT_TRUE(std::filesystem::exists(killed / file)) << file;
+  }
+  std::filesystem::create_directories(killed / "memory");
+  const std::string lookalike = "memory/" + run.new_files.front();
+  {
+    std::ofstream(killed / lookalike) << "not ours";
+  }
+  {
+    std::ofstream(killed / "notes.txt") << "not ours either";
+  }
+
+  PoseGraphData graph;
+  MapManager reader(run.killed);
+  ASSERT_TRUE(testing::LoadMap(reader, graph).has_value());
+  for (const std::string& file : run.new_files) {
+    EXPECT_TRUE(std::filesystem::exists(killed / file)) << "Load is read-only";
+  }
+  reader.RemoveUnreferencedFiles();
+  for (const std::string& file : run.new_files) {
+    EXPECT_FALSE(std::filesystem::exists(killed / file)) << file << " outlived the collection";
+  }
+  for (const SessionId id : {run.built.frozen_session, run.built.active_session}) {
+    ASSERT_TRUE(reader.FileNameOf(id).has_value());
+    EXPECT_TRUE(std::filesystem::exists(killed / *reader.FileNameOf(id)));
+  }
+  ASSERT_TRUE(reader.anchors_file_name().has_value());
+  EXPECT_TRUE(std::filesystem::exists(killed / *reader.anchors_file_name()));
+  EXPECT_TRUE(std::filesystem::exists(killed / "manifest.pb"));
+  EXPECT_TRUE(std::filesystem::exists(killed / MapManager::LastPoseFileName()));
+  EXPECT_TRUE(std::filesystem::exists(killed / lookalike));
+  EXPECT_TRUE(std::filesystem::exists(killed / "notes.txt"));
+  EXPECT_TRUE(reader.ReadLastPose().has_value());
+}
+
+TEST(MapManagerTest, FailedFileWriteLeavesPreviousGeneration) {
+  const std::string directory = MakeTempDir("commit_failed");
+  BuiltGraph built = BuildGraph();
+  MapManager manager(directory);
+  SaveWholeGraph(manager, built);
+  const int64_t generation = manager.generation();
+  const std::string manifest_path = (std::filesystem::path(directory) / "manifest.pb").string();
+  const std::string manifest_before = ReadWhole(manifest_path);
+  const std::optional<std::string> active_file = manager.FileNameOf(built.active_session);
+  const int checkpoints = manager.num_checkpoints_written();
+
+  const std::filesystem::path blocker_path =
+      Block(directory, NextSessionFile(manager, built.active_session));
+  built.graph.SetSubmapGlobalPose(built.graph.session(built.active_session).submap_ids.front(),
+                                  transform::FromXYTheta(3.3, 1.1, 0.4));
+  manager.Checkpoint(built.graph, built.active_session);
+  EXPECT_EQ(manager.generation(), generation);
+  EXPECT_EQ(manager.FileNameOf(built.active_session), active_file);
+  EXPECT_EQ(manager.num_checkpoints_written(), checkpoints);
+  EXPECT_EQ(ReadWhole(manifest_path), manifest_before);
+  EXPECT_FALSE(std::filesystem::exists(blocker_path.string() + ".tmp"));
+  {
+    PoseGraphData loaded;
+    MapManager reader(directory);
+    ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
+    EXPECT_EQ(reader.generation(), generation);
+  }
+
+  std::filesystem::remove_all(blocker_path);
+  manager.Checkpoint(built.graph, built.active_session);
+  EXPECT_EQ(manager.generation(), generation + 1);
+  EXPECT_EQ(manager.num_checkpoints_written(), checkpoints + 1);
+  PoseGraphData loaded;
+  MapManager reader(directory);
+  ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
+  EXPECT_EQ(reader.generation(), generation + 1);
+  ExpectSessionRestored(built.graph, loaded, built.active_session);
+}
+
+// The freeze commit fails: the session is frozen in the graph but ACTIVE on disk. The next commit
+// of any kind writes its frozen file and migrates its constraints, as the freeze would have.
+TEST(MapManagerTest, FailedFreezeCommitIsHealedByTheNextCheckpoint) {
+  const std::string directory = MakeTempDir("heal_freeze");
+  BuiltGraph built = BuildGraph();
+  const SessionId fed = AddFedSession(built);
+  MapManager manager(directory);
+  manager.OnSessionFrozen(built.graph, built.frozen_session);
+  ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
+  const int frozen_files = manager.num_frozen_files_written();
+
+  built.graph.FreezeSession(built.active_session);
+  const std::filesystem::path blocker =
+      Block(directory, NextSessionFile(manager, built.active_session));
+  manager.OnSessionFrozen(built.graph, built.active_session);
+  EXPECT_EQ(manager.num_frozen_files_written(), frozen_files);
+  EXPECT_FALSE(manager.InspectSessionFile(built.active_session)->frozen);
+
+  std::filesystem::remove_all(blocker);
+  ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
+  EXPECT_EQ(manager.num_frozen_files_written(), frozen_files + 1);
+  EXPECT_TRUE(manager.InspectSessionFile(built.active_session)->frozen);
+
+  PoseGraphData loaded;
+  MapManager reader(directory);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->num_frozen_sessions, 2);
+  EXPECT_TRUE(loaded.session(built.active_session).frozen());
+  ExpectSessionRestored(built.graph, loaded, built.active_session);
+  EXPECT_EQ(static_cast<int>(loaded.constraints().size()),
+            CountNonFullyFrozenConstraints(built.graph));
+
+  // The late callback of a freeze a commit already healed writes nothing twice.
+  const std::string frozen_file = *manager.FileNameOf(built.active_session);
+  manager.OnSessionFrozen(built.graph, built.active_session);
+  EXPECT_EQ(manager.FileNameOf(built.active_session), frozen_file);
+  EXPECT_EQ(manager.num_frozen_files_written(), frozen_files + 1);
+}
+
+// The removal commit fails: the session is gone from the graph but still listed with its file.
+// The next commit drops it, or the session would come back at the next boot.
+TEST(MapManagerTest, FailedRemoveSessionIsHealedByTheNextCheckpoint) {
+  const std::string directory = MakeTempDir("heal_remove");
+  BuiltGraph built = BuildGraph();
+  const SessionId fed = AddFedSession(built);
+  MapManager manager(directory);
+  manager.OnSessionFrozen(built.graph, built.frozen_session);
+  ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
+  const std::string removed_file = *manager.FileNameOf(built.active_session);
+
+  built.graph.RemoveSession(built.active_session);
+  const std::filesystem::path blocker = Block(directory, NextSessionFile(manager, fed));
+  EXPECT_FALSE(manager.RemoveSession(built.graph, built.active_session));
+  EXPECT_TRUE(manager.FileNameOf(built.active_session).has_value());
+  EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(directory) / removed_file));
+
+  std::filesystem::remove_all(blocker);
+  ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
+  EXPECT_FALSE(manager.FileNameOf(built.active_session).has_value());
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / removed_file));
+
+  PoseGraphData loaded;
+  MapManager reader(directory);
+  const std::optional<MapManager::LoadResult> result = testing::LoadMap(reader, loaded);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(loaded.HasSession(built.active_session));
+  EXPECT_EQ(result->num_sessions, 2);
+}
+
+// Whatever fails in a commit, the anchors file or the manifest itself, it is abandoned whole: its
+// files are gone, the previous generation stays published, and the next commit carries its work.
+TEST(MapManagerTest, FailedAnchorsOrManifestWriteAbandonsTheCommit) {
+  const std::string directory = MakeTempDir("abandon");
+  BuiltGraph built = BuildGraph();
+  AnchorStore store;
+  MapManager manager(directory, store);
+  manager.OnSessionFrozen(built.graph, built.frozen_session);
+  ASSERT_TRUE(manager.Checkpoint(built.graph, built.active_session));
+  const std::filesystem::path root(directory);
+  const auto listing = [&root] {
+    std::set<std::string> names;
+    for (const auto& item : std::filesystem::directory_iterator(root)) {
+      names.insert(item.path().filename().string());
+    }
+    return names;
+  };
+
+  const AnchorId id =
+      store.Save(built.graph, built.graph.session(built.active_session).node_ids.back(), false)->id;
+  const int64_t generation = manager.generation();
+  std::set<std::string> before = listing();
+  const std::filesystem::path anchors_blocker =
+      Block(directory, "anchors.g" + std::to_string(generation + 1) + ".pb");
+  before.insert(anchors_blocker.filename().string());
+  EXPECT_FALSE(manager.Checkpoint(built.graph, built.active_session));
+  EXPECT_EQ(manager.generation(), generation);
+  EXPECT_EQ(listing(), before) << "the abandoned commit left a file behind";
+  std::filesystem::remove_all(anchors_blocker);
+
+  const int boots = manager.boot_count();
+  before = listing();
+  const std::filesystem::path manifest_blocker = Block(directory, "manifest.pb.tmp");
+  before.insert(manifest_blocker.filename().string());
+  EXPECT_FALSE(manager.Checkpoint(built.graph, built.active_session));
+  EXPECT_FALSE(manager.RecordBoot().has_value());
+  EXPECT_EQ(manager.boot_count(), boots) << "a boot counts only once its manifest lands";
+  EXPECT_EQ(manager.generation(), generation);
+  EXPECT_EQ(listing(), before) << "the abandoned commit left a file behind";
+  std::filesystem::remove_all(manifest_blocker);
+
+  ASSERT_TRUE(manager.Checkpoint(built.graph, built.active_session));
+  EXPECT_EQ(manager.generation(), generation + 1);
+  EXPECT_EQ(manager.num_anchor_writes(), 1);
+  PoseGraphData loaded;
+  MapManager reader(directory);
+  ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
+  const std::optional<AnchorTable> table = reader.ReadAnchors();
+  ASSERT_TRUE(table.has_value());
+  ASSERT_EQ(table->anchors.size(), 1u);
+  EXPECT_EQ(table->anchors[0].id, id);
+}
+
+std::map<std::string, std::string> TopLevelFiles(const std::string& directory) {
+  std::map<std::string, std::string> files;
+  for (const auto& item : std::filesystem::directory_iterator(directory)) {
+    if (item.is_regular_file()) {
+      files[item.path().filename().string()] = ReadWhole(item.path().string());
+    }
+  }
+  return files;
+}
+
+// Every way a map directory can be damaged is refused whole: Load touches no file, and a backend
+// booted on it stops instead of starting an empty map over files it would then garbage collect
+// and anchor ids it would reissue.
+TEST(MapManagerTest, DamagedManifestRefusesToBoot) {
+  using Reason = MapManager::LoadFailure::Reason;
+  const auto damage = [](const std::string& name, const auto& corrupt) {
+    const std::string directory = MakeTempDir(name);
+    BuiltGraph built = BuildGraph();
+    AnchorStore store;
+    MapManager manager(directory, store);
+    manager.OnSessionFrozen(built.graph, built.frozen_session);
+    store.Save(built.graph, built.graph.session(built.active_session).node_ids.front(), false);
+    manager.Checkpoint(built.graph, built.active_session);
+    ASSERT_TRUE(manager.anchors_file_name().has_value());
+    corrupt(std::filesystem::path(directory), manager, built);
+  };
+  const auto expect_refused = [](const std::string& directory, Reason reason) {
+    const std::map<std::string, std::string> before = TopLevelFiles(directory);
+    PoseGraphData graph;
+    MapManager reader(directory);
+    EXPECT_EQ(testing::LoadFailureOf(reader, graph), reason) << directory;
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_DEATH(
+        {
+          PoseGraph backend(PoseGraphOption(), directory);
+          backend.Start(TestTime(0));
+        },
+        std::string("refusing to boot on a damaged map directory: .*") + ToString(reason));
+    EXPECT_EQ(TopLevelFiles(directory), before) << "a refused load or boot touched " << directory;
+  };
+
+  damage("damaged_v3", [&](const std::filesystem::path& directory, MapManager&, BuiltGraph&) {
+    std::string contents = ReadWhole((directory / "manifest.pb").string());
+    ASSERT_GE(contents.size(), 2u);
+    ASSERT_EQ(static_cast<uint8_t>(contents[0]), 0x08);
+    ASSERT_EQ(static_cast<uint8_t>(contents[1]), static_cast<uint8_t>(kMapFormatVersion));
+    contents[1] = static_cast<char>(3);
+    std::ofstream(directory / "manifest.pb", std::ios::binary | std::ios::trunc) << contents;
+    expect_refused(directory.string(), Reason::UNSUPPORTED_VERSION);
+  });
+  damage("damaged_manifest", [&](const std::filesystem::path& directory, MapManager&, BuiltGraph&) {
+    std::ofstream(directory / "manifest.pb", std::ios::binary | std::ios::trunc)
+        << std::string(64, '\xfe');
+    expect_refused(directory.string(), Reason::UNREADABLE_MANIFEST);
+  });
+  damage("damaged_missing_session", [&](const std::filesystem::path& directory, MapManager& manager,
+                                        BuiltGraph& built) {
+    ASSERT_TRUE(std::filesystem::remove(directory / *manager.FileNameOf(built.active_session)));
+    expect_refused(directory.string(), Reason::MISSING_SESSION_FILE);
+  });
+  damage("damaged_corrupt_session",
+         [&](const std::filesystem::path& directory, MapManager& manager, BuiltGraph& built) {
+           std::ofstream(directory / *manager.FileNameOf(built.frozen_session),
+                         std::ios::binary | std::ios::trunc)
+               << std::string(512, '\xff');
+           expect_refused(directory.string(), Reason::CORRUPT_SESSION_FILE);
+         });
+  damage("damaged_lost_manifest",
+         [&](const std::filesystem::path& directory, MapManager&, BuiltGraph&) {
+           ASSERT_TRUE(std::filesystem::remove(directory / "manifest.pb"));
+           expect_refused(directory.string(), Reason::LOST_MANIFEST);
+         });
+
+  // Neither a stray temp file nor someone else's file makes a new directory a damaged map.
+  const std::string fresh = MakeTempDir("fresh_with_strays");
+  std::ofstream(std::filesystem::path(fresh) / "manifest.pb.tmp") << "half a manifest";
+  std::ofstream(std::filesystem::path(fresh) / "session_000000.g1.pb.tmp") << "half a session";
+  std::ofstream(std::filesystem::path(fresh) / "notes.txt") << "not ours";
+  PoseGraphData graph;
+  MapManager reader(fresh);
+  EXPECT_TRUE(std::holds_alternative<MapManager::FreshDirectory>(reader.Load(graph)));
+  reader.RemoveUnreferencedFiles();
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(fresh) / "manifest.pb.tmp"));
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(fresh) / "session_000000.g1.pb.tmp"));
+  EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(fresh) / "notes.txt"));
+}
+
+// Booting on a directory no commit can land in would lose every checkpoint and save that follows.
+TEST(MapManagerTest, ReadOnlyMapDirectoryRefusesToBoot) {
+  if (::geteuid() == 0) {
+    GTEST_SKIP() << "root ignores mode bits";
+  }
+  const std::string directory = MakeTempDir("read_only");
+  std::filesystem::permissions(
+      directory, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_DEATH(
+      {
+        PoseGraph backend(PoseGraphOption(), directory);
+        backend.Start(TestTime(0));
+      },
+      "map directory is not writable: .*read_only");
+  std::filesystem::permissions(directory, std::filesystem::perms::owner_all);
 }
 
 // Proto types live inside map_manager and nowhere else.
@@ -682,6 +1247,7 @@ TEST(MapManagerTest, NoProtoHeaderLeaksOutsideMapManager) {
       }
       const std::string contents = ReadWhole(path);
       if (contents.find("map.pb.h") != std::string::npos ||
+          contents.find("anchors.pb.h") != std::string::npos ||
           contents.find("proto_conversion.h") != std::string::npos) {
         offenders.push_back(path);
       }

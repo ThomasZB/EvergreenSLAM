@@ -29,6 +29,64 @@ proto::SessionState ToProtoState(SessionState state) {
   return state == SessionState::FROZEN ? proto::FROZEN : proto::ACTIVE;
 }
 
+proto::Anchor::State ToProtoState(AnchorState state) {
+  switch (state) {
+    case AnchorState::BOUND:
+      return proto::Anchor::BOUND;
+    case AnchorState::REBOUND:
+      return proto::Anchor::REBOUND;
+    case AnchorState::ORPHAN:
+      return proto::Anchor::ORPHAN;
+  }
+  LOG(FATAL) << "unhandled anchor state";
+  return proto::Anchor::ORPHAN;
+}
+
+AnchorState FromProtoState(proto::Anchor::State state) {
+  switch (state) {
+    case proto::Anchor::BOUND:
+      return AnchorState::BOUND;
+    case proto::Anchor::REBOUND:
+      return AnchorState::REBOUND;
+    case proto::Anchor::ORPHAN:
+      return AnchorState::ORPHAN;
+    default:
+      LOG(FATAL) << "unknown anchor state " << static_cast<int>(state);
+  }
+  return AnchorState::ORPHAN;
+}
+
+proto::Anchor::OrphanReason ToProtoReason(OrphanReason reason) {
+  switch (reason) {
+    case OrphanReason::NONE:
+      return proto::Anchor::NONE;
+    case OrphanReason::TRIMMED_NO_SUCCESSOR:
+      return proto::Anchor::TRIMMED_NO_SUCCESSOR;
+    case OrphanReason::SESSION_REMOVED:
+      return proto::Anchor::SESSION_REMOVED;
+    case OrphanReason::SUBMAP_MISSING:
+      return proto::Anchor::SUBMAP_MISSING;
+  }
+  LOG(FATAL) << "unhandled orphan reason";
+  return proto::Anchor::NONE;
+}
+
+OrphanReason FromProtoReason(proto::Anchor::OrphanReason reason) {
+  switch (reason) {
+    case proto::Anchor::NONE:
+      return OrphanReason::NONE;
+    case proto::Anchor::TRIMMED_NO_SUCCESSOR:
+      return OrphanReason::TRIMMED_NO_SUCCESSOR;
+    case proto::Anchor::SESSION_REMOVED:
+      return OrphanReason::SESSION_REMOVED;
+    case proto::Anchor::SUBMAP_MISSING:
+      return OrphanReason::SUBMAP_MISSING;
+    default:
+      LOG(FATAL) << "unknown orphan reason " << static_cast<int>(reason);
+  }
+  return OrphanReason::NONE;
+}
+
 }  // namespace
 
 proto::Pose2d ToProto(const Eigen::Affine2d& pose) {
@@ -274,6 +332,36 @@ SessionData FromProto(const proto::Session& proto) {
   session.last_node_time = TimeFromProto(proto.last_node_time_nanos());
   session.local_to_global = FromProto(proto.local_to_global());
   return session;
+}
+
+proto::Anchor ToProto(const Anchor& anchor) {
+  proto::Anchor result;
+  result.set_id(anchor.id);
+  *result.mutable_submap_id() = ToProto(anchor.submap_id);
+  *result.mutable_submap_from_anchor() = ToProto(anchor.submap_from_anchor);
+  *result.mutable_node_id() = ToProto(anchor.node_id);
+  result.set_saved_at_nanos(TimeToProto(anchor.saved_at));
+  result.set_state(ToProtoState(anchor.state));
+  result.set_orphan_reason(ToProtoReason(anchor.orphan_reason));
+  if (anchor.scan.has_value()) {
+    *result.mutable_scan() = ToProto(*anchor.scan);
+  }
+  return result;
+}
+
+Anchor FromProto(const proto::Anchor& proto) {
+  Anchor anchor;
+  anchor.id = proto.id();
+  anchor.submap_id = FromProto(proto.submap_id());
+  anchor.submap_from_anchor = FromProto(proto.submap_from_anchor());
+  anchor.node_id = FromProto(proto.node_id());
+  anchor.saved_at = TimeFromProto(proto.saved_at_nanos());
+  anchor.state = FromProtoState(proto.state());
+  anchor.orphan_reason = FromProtoReason(proto.orphan_reason());
+  if (proto.has_scan()) {
+    anchor.scan = FromProto(proto.scan());
+  }
+  return anchor;
 }
 
 common::Time TimeFromProto(int64_t nanos) { return common::FromUnixNanos(nanos); }

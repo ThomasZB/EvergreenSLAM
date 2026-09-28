@@ -58,6 +58,10 @@ class WebDebugSink : public debug::DebugSink {
   // Non-const because enqueueing is a mutation; the read itself happens on a backend task.
   void PublishPoseGraph(lifelong::PoseGraph& pose_graph);
 
+  // After a map switch: drops the old map's graph, submap textures and trajectory; open pages
+  // reload, since they cache textures by the same {session, index} the new map reuses.
+  void Reset();
+
   void WaitForever();
 
   int port() const { return option_.port; }
@@ -89,6 +93,7 @@ class WebDebugSink : public debug::DebugSink {
   uint64_t graph_seq_ = 0;
   std::map<SubmapKey, std::shared_ptr<const std::vector<uint8_t>>> submap_blobs_;
   std::vector<double> trajectory_;
+  uint64_t epoch_ = 0;
   std::chrono::steady_clock::time_point last_map_copy_;
   std::atomic<bool> stopping_{false};
   std::atomic<bool> graph_request_pending_{false};

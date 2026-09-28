@@ -1,4 +1,4 @@
-# ROS-side parameters for laser_odometry_node. The SLAM configuration lives in
+# ROS-side parameters for evergreenslam_node. The SLAM configuration lives in
 # configs/evergreenslam.yaml; the `config` parameter pointing at it is set by the launch file,
 # because its path depends on the install layout.
 /**:

@@ -123,4 +123,7 @@ message Manifest {
   int32 version = 1;
   repeated ManifestEntry sessions = 2;
   int32 boot_count = 3;
+  int64 generation = 4;
+  // Empty when no anchors file has been committed.
+  string anchors_file_name = 5;
 }

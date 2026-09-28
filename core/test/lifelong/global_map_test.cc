@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "common/time.h"
@@ -204,6 +205,30 @@ TEST(GlobalMap, ResolutionDefaultsToTheSubmapsAndCanBeOverridden) {
   EXPECT_DOUBLE_EQ(coarse.resolution(), 4 * kResolution);
   EXPECT_LT(coarse.width(), AssembleGlobalMap(graph).width());
   EXPECT_GT(ProbabilityAt(coarse, kProbe), 0.8);
+}
+
+TEST(GlobalMap, SessionFilterAssemblesThatSessionAlone) {
+  PoseGraphData graph;
+  const SessionId first = graph.StartNewSession(TestTime(0));
+  const SessionId second = graph.StartNewSession(TestTime(1));
+  const Eigen::Affine2d pose = transform::FromXYTheta(0.0, 0.0, 0.0);
+  const Eigen::Affine2d far = transform::FromXYTheta(20.0, 0.0, 0.0);
+  AddSubmap(graph, first, MakeSubmap(graph.AllocateSubmapId(first), pose, {{kProbe, 60, 0}}), pose);
+  AddSubmap(graph, second, MakeSubmap(graph.AllocateSubmapId(second), pose, {{kProbe, 60, 0}}),
+            far);
+
+  const mapping::GridMapu8 all = AssembleGlobalMap(graph, 0.0, true, std::nullopt);
+  EXPECT_TRUE(mapping::IsKnownValue(all.GetValueAtPoint(kProbe)));
+  EXPECT_TRUE(mapping::IsKnownValue(all.GetValueAtPoint(far * kProbe)));
+
+  const mapping::GridMapu8 only_second = AssembleGlobalMap(graph, 0.0, true, second);
+  EXPECT_TRUE(mapping::IsKnownValue(only_second.GetValueAtPoint(far * kProbe)));
+  EXPECT_FALSE(mapping::IsKnownValue(only_second.GetValueAtPoint(kProbe)));
+  EXPECT_LT(only_second.width(), all.width()) << "bounds come from the session's submaps alone";
+
+  const mapping::GridMapu8 absent = AssembleGlobalMap(graph, 0.0, true, SessionId{7});
+  EXPECT_EQ(absent.width(), 0);
+  EXPECT_EQ(absent.height(), 0);
 }
 
 TEST(GlobalMap, EmptyGraphIsZeroSized) {

@@ -1,4 +1,4 @@
-"""Live laser odometry. ROS-side parameters come from config/config.yaml; the SLAM
+"""Live EvergreenSLAM node. ROS-side parameters come from config/config.yaml; the SLAM
 configuration path is a launch argument because it depends on the install layout."""
 
 from ament_index_python.packages import get_package_share_directory
@@ -19,8 +19,8 @@ def generate_launch_description():
             ),
             Node(
                 package="evergreenslam_ros",
-                executable="laser_odometry_node",
-                name="laser_odometry",
+                executable="evergreenslam_node",
+                name="evergreenslam",
                 output="screen",
                 parameters=[
                     PathJoinSubstitution([share, "config", "config.yaml"]),

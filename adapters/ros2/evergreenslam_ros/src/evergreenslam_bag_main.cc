@@ -1,5 +1,5 @@
 /**
- * @file bag_laser_odometry_main.cc
+ * @file evergreenslam_bag_main.cc
  * @author hang chen (chen@hang.plus)
  * @brief Replays a rosbag2 through the local trajectory builder and scores it against a reference
  *        trajectory taken from the bag itself.
@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -24,11 +25,13 @@
 #include <rosbag2_cpp/reader.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <string>
+#include <system_error>
 #include <tf2_msgs/msg/tf_message.hpp>
 #include <thread>
 #include <vector>
 
 #include "laser_scan_converter.h"
+#include "lifelong/map_manager/map_root.h"
 #include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_option.h"
 #include "mapping/grid_mapping/castrays_mapping.h"
@@ -39,6 +42,9 @@
 #include "utils/transform/transform.h"
 #ifdef EVERGREENSLAM_WITH_WEBUI
 #include "web_debug_sink.h"
+#endif
+#ifdef EVERGREENSLAM_WITH_AGENT
+#include "agent_host.h"
 #endif
 
 namespace {
@@ -63,9 +69,15 @@ struct Args {
   bool has_fixed_extrinsic = false;
   Eigen::Affine2d base_from_laser = Eigen::Affine2d::Identity();
   bool with_backend = true;
-  std::string map_dir;
+  // Empty: nothing persists.
+  std::string map_root;
+  // Empty: the root's `current`, else `default`.
+  std::string map;
   // Where the run starts in the loaded map's frame; without it a reboot seeds from last_pose.pb.
   std::optional<Eigen::Affine2d> initial_pose;
+  bool ignore_last_pose = false;
+  int agent_port = 0;
+  std::string agent_bind = "127.0.0.1";
 };
 
 Args ParseArgs(int argc, char** argv) {
@@ -106,8 +118,16 @@ Args ParseArgs(int argc, char** argv) {
       args.map_from_reference = true;
     } else if (key == "--no_backend") {
       args.with_backend = false;
-    } else if (key == "--map_dir") {
-      args.map_dir = value();
+    } else if (key == "--map_root") {
+      args.map_root = value();
+    } else if (key == "--map") {
+      args.map = value();
+    } else if (key == "--ignore_last_pose") {
+      args.ignore_last_pose = true;
+    } else if (key == "--agent_port") {
+      args.agent_port = std::stoi(value());
+    } else if (key == "--agent_bind") {
+      args.agent_bind = value();
     } else if (key == "--initial_pose") {
       const std::string text = value();
       double x = 0.0;
@@ -135,11 +155,17 @@ Args ParseArgs(int argc, char** argv) {
     }
   }
   if (args.bag.empty()) {
-    std::cerr << "usage: bag_laser_odometry --bag <dir> [--config <yaml>] [--scan_topic <t>]\n"
+    std::cerr << "usage: evergreenslam_bag --bag <dir> [--config <yaml>] [--scan_topic <t>]\n"
               << "       [--base_frame <f>] [--reference_frame <f>] [--odom_topic <t>]\n"
               << "       [--base_from_laser x,y,theta] [--out_prefix <p>] [--max_scans <n>]\n"
               << "       [--webui_port <n>] [--speed <x>] [--map_from_reference]\n"
-              << "       [--no_backend] [--map_dir <dir>] [--initial_pose x,y,theta]" << std::endl;
+              << "       [--no_backend] [--map_root <dir> [--map <name>]]\n"
+              << "       [--initial_pose x,y,theta] [--ignore_last_pose]\n"
+              << "       [--agent_port <n>] [--agent_bind <addr>]" << std::endl;
+    std::exit(2);
+  }
+  if (!args.map.empty() && args.map_root.empty()) {
+    std::cerr << "--map needs --map_root" << std::endl;
     std::exit(2);
   }
   return args;
@@ -295,15 +321,50 @@ int main(int argc, char** argv) {
   evergreenslam::mapping::LocalTrajectoryBuilder builder(option);
 
   std::unique_ptr<evergreenslam::lifelong::PoseGraph> backend;
+  std::string map_name;
   if (args.with_backend) {
     evergreenslam::lifelong::PoseGraphOption backend_option;
     if (!args.config.empty()) {
       backend_option = evergreenslam::lifelong::LoadPoseGraphOptionFromFile(args.config);
     }
-    backend = std::make_unique<evergreenslam::lifelong::PoseGraph>(backend_option, args.map_dir);
+    std::string map_dir;
+    if (!args.map_root.empty()) {
+      const evergreenslam::lifelong::MapRoot root(args.map_root);
+      map_name = root.ChooseAtBoot(args.map);
+      if (!evergreenslam::lifelong::MapRoot::IsValidName(map_name)) {
+        std::cerr << "map name must match [a-z0-9][a-z0-9_-]*: " << map_name << std::endl;
+        return 2;
+      }
+      map_dir = root.Resolve(map_name);
+      std::error_code error;
+      std::filesystem::create_directories(map_dir, error);
+      if (error) {
+        std::cerr << "cannot create map directory " << map_dir << ": " << error.message()
+                  << std::endl;
+        return 1;
+      }
+      std::cout << "map " << map_name << " at " << map_dir << std::endl;
+    }
+    backend = std::make_unique<evergreenslam::lifelong::PoseGraph>(backend_option, map_dir);
+  } else if (!args.map_root.empty()) {
+    std::cerr << "--map_root ignored: --no_backend persists nothing" << std::endl;
   }
   // Start needs the bag's clock, not ours.
   bool backend_started = false;
+
+#ifdef EVERGREENSLAM_WITH_AGENT
+  std::unique_ptr<evergreenslam::ros2::AgentHost> agent_host;
+  if (backend != nullptr) {
+    agent_host = evergreenslam::ros2::AgentHost::Create(
+        {args.agent_port, args.agent_bind, args.map_root, map_name}, *backend);
+  } else if (args.agent_port > 0) {
+    std::cerr << "agent service off: it needs the backend" << std::endl;
+  }
+#else
+  if (args.agent_port > 0) {
+    std::cerr << "agent service off: built without EVERGREENSLAM_WITH_AGENT" << std::endl;
+  }
+#endif
 
 #ifdef EVERGREENSLAM_WITH_WEBUI
   std::shared_ptr<evergreenslam::webui::WebDebugSink> web_debug_sink;
@@ -392,14 +453,28 @@ int main(int argc, char** argv) {
     }
 
     if (backend != nullptr && !backend_started) {
-      backend->Start(timed_scan.time, args.initial_pose);
+      backend->Start(timed_scan.time, args.initial_pose, !args.ignore_last_pose);
       backend_started = true;
+      // Only a map that booted becomes `current`: Start stops on a damaged directory.
+      if (!args.map_root.empty()) {
+        evergreenslam::lifelong::MapRoot(args.map_root).WriteCurrent(map_name);
+      }
+#ifdef EVERGREENSLAM_WITH_AGENT
+      if (agent_host != nullptr) {
+        agent_host->OnBackendStarted();
+      }
+#endif
     }
 
     const auto matching = builder.AddScan(timed_scan.time, timed_scan.point_cloud);
     ++num_scans;
     const Eigen::Affine2d estimate = builder.local_pose();
     last_estimate = estimate;
+#ifdef EVERGREENSLAM_WITH_AGENT
+    if (agent_host != nullptr) {
+      agent_host->Update(timed_scan.time, estimate, timed_scan.point_cloud);
+    }
+#endif
 
     if (matching != nullptr && matching->insertion_result != nullptr) {
       const auto& insertion = *matching->insertion_result;
@@ -482,6 +557,11 @@ int main(int argc, char** argv) {
   double backend_rms = -1.0;
   double backend_worst = 0.0;
   int backend_scored = 0;
+#ifdef EVERGREENSLAM_WITH_AGENT
+  if (agent_host != nullptr) {
+    agent_host->Stop();
+  }
+#endif
   if (backend != nullptr && backend_started) {
     backend->Finish();
     WritePgm(backend->AssembleGlobalMap(), args.out_prefix + "_global_map.pgm");

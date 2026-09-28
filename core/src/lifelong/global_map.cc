@@ -54,10 +54,19 @@ Bounds SnapshotWorldBounds(const mapping::GridMapu8& snapshot, const Eigen::Affi
 
 mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resolution,
                                      bool only_finished) {
+  return AssembleGlobalMap(graph, resolution, only_finished, std::nullopt);
+}
+
+mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resolution,
+                                     bool only_finished, std::optional<SessionId> only_session) {
+  const auto skip = [only_finished, only_session](const SubmapId& id, const SubmapRecord& record) {
+    return (only_finished && !record.submap->finished()) ||
+           (only_session.has_value() && SessionOf(id) != *only_session);
+  };
   Bounds bounds;
   double submap_resolution = 0.0;
   for (const auto& [id, record] : graph.submaps()) {
-    if (only_finished && !record.submap->finished()) {
+    if (skip(id, record)) {
       continue;
     }
     const mapping::GridMapu8& snapshot = record.submap->Snapshot();
@@ -88,7 +97,7 @@ mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resoluti
   // `>=` keeps the newest of equally certain candidates. Sampling output cells back into the
   // snapshot leaves no rotation holes, unlike pushing snapshot cells forward.
   for (const auto& [id, record] : graph.submaps()) {
-    if (only_finished && !record.submap->finished()) {
+    if (skip(id, record)) {
       continue;
     }
     const mapping::GridMapu8& snapshot = record.submap->Snapshot();

@@ -7,9 +7,9 @@ set(EVERGREENSLAM_WEBUI_WWW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/www"
 
 add_library(evergreenslam_webui STATIC src/web_debug_sink.cc src/pose_graph_view.cc)
 target_include_directories(evergreenslam_webui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-# SYSTEM so the vendored header's warnings are not ours to fix.
+# SYSTEM so the vendored header's warnings are not ours to fix. Shared with the agent service.
 target_include_directories(evergreenslam_webui SYSTEM PRIVATE
-                           "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+                           "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 target_compile_definitions(evergreenslam_webui PUBLIC
                            EVERGREENSLAM_WEBUI_WWW_DIR="${EVERGREENSLAM_WEBUI_WWW_DIR}")
 target_link_libraries(evergreenslam_webui PUBLIC evergreenslam Threads::Threads)

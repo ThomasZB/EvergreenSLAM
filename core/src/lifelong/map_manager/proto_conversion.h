@@ -18,6 +18,8 @@
 #include <vector>
 
 #include "common/time.h"
+#include "lifelong/anchors/anchor_store.h"
+#include "lifelong/map_manager/proto/anchors.pb.h"
 #include "lifelong/map_manager/proto/map.pb.h"
 #include "lifelong/pose_graph_data.h"
 #include "lifelong/sessions/session_data.h"
@@ -58,6 +60,9 @@ SubmapRecord FromProto(const proto::Submap& proto);
 
 proto::Session ToProto(const SessionData& session);
 SessionData FromProto(const proto::Session& proto);
+
+proto::Anchor ToProto(const Anchor& anchor);
+Anchor FromProto(const proto::Anchor& proto);
 
 common::Time TimeFromProto(int64_t nanos);
 int64_t TimeToProto(common::Time time);

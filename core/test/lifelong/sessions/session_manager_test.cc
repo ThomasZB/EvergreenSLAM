@@ -1004,6 +1004,35 @@ TEST(SessionManagerTest, FreezeFedSessionRunsTheSequenceWithoutAVerdict) {
   EXPECT_EQ(h.manager.num_sessions_frozen(), 1);
 }
 
+// The agent plans against one fed session and applies later: a freeze meant for a session that
+// has rotated away since must not land on its successor.
+TEST(SessionManagerTest, FreezeFedSessionForASessionNoLongerFedDoesNothing) {
+  SessionManagerOption option = TestOption();
+  option.auto_freeze = false;
+  Harness h(option);
+  const SessionId first = h.manager.Start(TestTime(0));
+  Feeder feeder(h.pose_graph, &h.manager, first);
+  feeder.FeedNodes(30);
+  h.pose_graph.WaitUntilQuiescent();
+
+  h.manager.FreezeFedSession(SessionId{first.session_index + 5});
+  h.pose_graph.WaitUntilQuiescent();
+  EXPECT_TRUE(h.observer->frozen.empty());
+  EXPECT_EQ(*h.manager.fed_session(), first);
+
+  h.manager.FreezeFedSession(first);
+  h.pose_graph.WaitUntilQuiescent();
+  ASSERT_EQ(h.observer->frozen.size(), 1u);
+  EXPECT_EQ(h.observer->frozen.front(), first);
+  const SessionId successor = *h.manager.fed_session();
+  ASSERT_NE(successor, first);
+
+  h.manager.FreezeFedSession(first);
+  h.pose_graph.WaitUntilQuiescent();
+  EXPECT_EQ(h.observer->frozen.size(), 1u) << "the stale request froze the successor";
+  EXPECT_EQ(*h.manager.fed_session(), successor);
+}
+
 // A floating session is not fed, so only a constraint landing on it can get it judged; in the
 // bootstrap it carries the merged component's datum and freezes in place.
 TEST(SessionManagerTest, AFloatingSessionIsFrozenInPlaceWhenAConstraintLandsOnIt) {

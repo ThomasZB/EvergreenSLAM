@@ -3,7 +3,7 @@
 <package format="3">
   <name>evergreenslam_ros</name>
   <version>0.1.0</version>
-  <description>ROS 2 adapter for EvergreenSLAM: LaserScan in, laser odometry and an occupancy grid out.</description>
+  <description>ROS 2 adapter for EvergreenSLAM: LaserScan in; odometry, tf, the lifelong map and the agent service out.</description>
   <maintainer email="chen@hang.plus">hang chen</maintainer>
   <license>Apache-2.0</license>
 
@@ -19,6 +19,12 @@
   <depend>rosbag2_cpp</depend>
   <depend>visualization_msgs</depend>
   <depend>evergreenslam_msgs</depend>
+  <!-- core/, built in place through add_subdirectory -->
+  <depend>eigen</depend>
+  <depend>libceres-dev</depend>
+  <depend>libgoogle-glog-dev</depend>
+  <depend>yaml-cpp</depend>
+  <depend>protobuf-dev</depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
