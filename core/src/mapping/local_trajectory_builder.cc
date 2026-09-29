@@ -99,7 +99,7 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
   Eigen::Affine2d end_pose = Eigen::Affine2d::Identity();
   if (!tracking_filter_.empty() && !point_cloud.empty()) {
     const auto pose_at = [this](common::Time t) {
-      const Eigen::Matrix<double, 9, 1> state = tracking_filter_.PredictTime(t).state;
+      const Eigen::Matrix<double, 9, 1> state = tracking_filter_.ExtrapolateLatest(t);
       return utils::transform::FromXYTheta(state(0), state(1), state(2));
     };
     start_pose = pose_at(time + point_cloud.points().front().offset);

@@ -71,6 +71,14 @@ GenericTrackingFilter::State GenericTrackingFilter::PredictTime(common::Time tim
   return state;
 }
 
+Eigen::Matrix<double, 9, 1> GenericTrackingFilter::ExtrapolateLatest(common::Time time) const {
+  if (state_history_.empty()) {
+    return current_state_.state;
+  }
+  const State& latest = state_history_.back();
+  return PredictState(latest.state, common::ToSeconds(time - latest.time));
+}
+
 void GenericTrackingFilter::Update(const Measurement& m, bool from_history) {
   if (!Predict(m.time)) {
     LOG(WARNING) << "measurement older than the whole filter history, ignored";

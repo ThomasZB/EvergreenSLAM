@@ -43,6 +43,8 @@ class GenericTrackingFilter {
   void Reset();
   void ResetZero();
   State PredictTime(common::Time time) const;
+  // Runs the model from the newest state, backwards too when `time` precedes it.
+  Eigen::Matrix<double, 9, 1> ExtrapolateLatest(common::Time time) const;
   void Update(const Measurement& m, bool from_history = false);
 
   bool empty() const { return state_history_.empty(); }

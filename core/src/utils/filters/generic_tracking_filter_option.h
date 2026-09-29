@@ -21,10 +21,10 @@ namespace evergreenslam::utils::filters {
 // Singer manoeuvre model: 1/alpha is how long an acceleration stays correlated, sigma is its
 // standard deviation. Both alphas must be strictly positive, the constructor CHECKs it.
 struct GenericTrackingFilterOption {
-  double trans_alpha = 1.0;  // 1/s, a robot spends ~1 s getting up to speed or stopping
-  double rot_alpha = 2.0;    // 1/s, turns start and stop faster than that
-  double trans_sigma = 5.0;  // m/s^2
-  double rot_sigma = 10.0;   // rad/s^2
+  double trans_alpha = 3.0;  // 1/s
+  double rot_alpha = 6.0;    // 1/s
+  double trans_sigma = 2.0;  // m/s^2
+  double rot_sigma = 4.0;    // rad/s^2
 
   double measurement_translation_sigma = 0.02;  // m
   double measurement_rotation_sigma = 0.01;     // rad

@@ -284,8 +284,7 @@ TEST(GenericTrackingFilterTest, BeatsConstantVelocityOnNoisyMeasurements) {
 
   const double filter_rms = std::sqrt(filter_error / num_predictions);
   const double constant_velocity_rms = std::sqrt(constant_velocity_error / num_predictions);
-  // No margin: the shipped Singer sigmas deliberately leave headroom for aggressive manoeuvres
-  // instead of smoothing hard, so on this benign track the filter wins only narrowly.
+  // No margin: the defaults favour manoeuvres over smoothing, so the win here is narrow.
   EXPECT_LT(filter_rms, constant_velocity_rms)
       << "filter rms " << filter_rms << " m, constant velocity gives " << constant_velocity_rms;
 }
@@ -342,6 +341,31 @@ TEST(GenericTrackingFilterTest, ReplaysAnOutOfOrderMeasurementInsideTheHistory) 
   const Eigen::Affine2d actual = PredictedPoseAt(delayed, 2.0);
   EXPECT_LT((actual.translation() - expected.translation()).norm(), 1e-6);
   EXPECT_LT(std::abs(transform::NormalizeAngle(GetYaw(actual) - GetYaw(expected))), 1e-6);
+}
+
+// A scan's first beam can land just before the previous update, where PredictTime misses it.
+TEST(GenericTrackingFilterTest, ExtrapolateLatestIsContinuousAcrossTheLatestUpdate) {
+  GenericTrackingFilter filter;
+  for (int i = 0; i < 20; ++i) {
+    filter.Update(TrackMeasurementAt(0.1 * i));
+  }
+  // Pulls the latest update off the track so its correction is large.
+  GenericTrackingFilter::Measurement jumped = TrackMeasurementAt(2.0);
+  jumped.pose = FromXYTheta(jumped.pose.translation().x() + 0.1, jumped.pose.translation().y(),
+                            GetYaw(jumped.pose) + 0.05);
+  filter.Update(jumped);
+
+  const common::Time latest = At(kTrackStart + 2.0);
+  const common::Time just_before = latest - common::FromSeconds(0.001);
+  const Eigen::Matrix<double, 9, 1> at_latest = filter.ExtrapolateLatest(latest);
+  const Eigen::Matrix<double, 9, 1> before = filter.ExtrapolateLatest(just_before);
+  // One millisecond at half a metre per second.
+  EXPECT_LT((before.head<2>() - at_latest.head<2>()).norm(), 0.002);
+  EXPECT_LT(std::abs(before(2) - at_latest(2)), 0.002);
+
+  const Eigen::Matrix<double, 9, 1> stale = filter.PredictTime(just_before).state;
+  EXPECT_GT((stale.head<2>() - at_latest.head<2>()).norm(), 0.02)
+      << "PredictTime is expected to miss the latest correction just before it";
 }
 
 TEST(GenericTrackingFilterTest, ResetTakesTheNextMeasurementAtFaceValue) {
