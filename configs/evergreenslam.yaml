@@ -8,7 +8,7 @@ local_trajectory_builder:
   pose_optimization:
     # Cost grows cubically with the window; widen the angular one for a spinning robot.
     linear_search_window: 0.2
-    angular_search_window: 0.2
+    angular_search_window: 0.4
 
   motion_filter:
     # These keep adjacent-keyframe error at the scale constraint_weight assumes; move together.

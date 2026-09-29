@@ -20,7 +20,7 @@ namespace evergreenslam::mapping {
 
 struct PoseOptimizationOption {
   double linear_search_window = 0.2;   // m
-  double angular_search_window = 0.2;  // rad
+  double angular_search_window = 0.4;  // rad
   double grid_match_weight = 100.0;    // weight of the grid term in the Ceres stage
   // Small but nonzero: the prior mostly serves to break ties on a young map's flat score
   // plateaus, where an unanchored match can slide a whole search step and poison the map.

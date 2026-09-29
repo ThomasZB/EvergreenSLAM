@@ -13,8 +13,8 @@ local_trajectory_builder:
 
   # Singer model: 1/alpha is how long an acceleration stays correlated, sigma its stddev.
   generic_tracking_filter:
-    trans_alpha: 3.0  # 1/s, drops a stale acceleration ~0.3 s after a manoeuvre
-    rot_alpha: 6.0    # 1/s
+    trans_alpha: 3.0  # 1/s
+    rot_alpha: 20.0   # 1/s
     trans_sigma: 2.0  # m/s^2, translational process noise
     rot_sigma: 4.0    # rad/s^2, rotational process noise
     # Below one cell: the matcher interpolates inside a cell.
@@ -24,7 +24,7 @@ local_trajectory_builder:
   pose_optimization:
     # Brute-force window; cost grows cubically with it.
     linear_search_window: 0.2   # m
-    angular_search_window: 0.2  # rad
+    angular_search_window: 0.4  # rad
     grid_match_weight: 100.0    # weight of the grid residual in the Ceres fine match
     # Pulls the fine match back toward the coarse result; 0 drops the prior.
     translation_weight: 0.01

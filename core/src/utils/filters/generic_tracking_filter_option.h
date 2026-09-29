@@ -22,7 +22,7 @@ namespace evergreenslam::utils::filters {
 // standard deviation. Both alphas must be strictly positive, the constructor CHECKs it.
 struct GenericTrackingFilterOption {
   double trans_alpha = 3.0;  // 1/s
-  double rot_alpha = 6.0;    // 1/s
+  double rot_alpha = 20.0;   // 1/s
   double trans_sigma = 2.0;  // m/s^2
   double rot_sigma = 4.0;    // rad/s^2
 
