@@ -21,8 +21,8 @@
 
 #include "lifelong/anchors/anchor_scenario.h"
 #include "service/agent_service.h"
-#include "service/httplib_include.h"
-#include "service/match_score_average.h"
+#include "service/graph/match_score_average.h"
+#include "service/http/httplib_include.h"
 
 namespace evergreenslam::agent::testing {
 

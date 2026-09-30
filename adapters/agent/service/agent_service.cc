@@ -18,10 +18,10 @@
 #include <thread>
 #include <utility>
 
-#include "service/endpoints.h"
-#include "service/http_reply.h"
-#include "service/httplib_include.h"
-#include "service/service_context.h"
+#include "service/http/endpoints.h"
+#include "service/http/http_reply.h"
+#include "service/http/httplib_include.h"
+#include "service/http/service_context.h"
 
 namespace evergreenslam::agent {
 namespace {
@@ -97,7 +97,7 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   RegisterRootEndpoint(server, impl_->context);
   RegisterPlaceEndpoints(server, impl_->context);
   RegisterSessionEndpoints(server, impl_->context);
-  RegisterMapEndpoints(server, impl_->context);
+  RegisterViewEndpoints(server, impl_->context);
   RegisterFsEndpoints(server, impl_->context);
   RegisterMapsEndpoints(server, impl_->context);
   RegisterZonesEndpoints(server, impl_->context);

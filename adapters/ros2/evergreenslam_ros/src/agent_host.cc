@@ -14,7 +14,7 @@
 #include <iostream>
 #include <utility>
 
-#include "service/place_store.h"
+#include "service/memory/place_store.h"
 
 namespace evergreenslam::ros2 {
 

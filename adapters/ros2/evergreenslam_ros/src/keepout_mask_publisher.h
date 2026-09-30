@@ -20,8 +20,8 @@
 #include <vector>
 
 #include "lifelong/pose_graph.h"
-#include "service/graph_reads.h"
-#include "service/zone_store.h"
+#include "service/graph/graph_reads.h"
+#include "service/memory/zone_store.h"
 
 namespace evergreenslam::ros2 {
 

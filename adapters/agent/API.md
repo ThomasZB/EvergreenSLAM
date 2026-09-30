@@ -129,7 +129,7 @@ void Stop();              // stops the server and joins its threads
   k+1 at pose k.
 - **Scan-match score**: the host sets `match_score` from each `AddScan` result (a scan the builder
   drops keeps the previous frame's score) and `match_score_avg` from `MatchScoreAverage`
-  (`service/match_score_average.h`), sampled per scan under its own mutex, not per request:
+  (`service/graph/match_score_average.h`), sampled per scan under its own mutex, not per request:
   `avg += (1 - exp(-dt / 2 s)) * (score - avg)`, seeded by the first scan.
 - Robot pose = `ComputeSessionToGlobal(fed)` (nullopt → `graph.session(fed).local_to_global`, as
   `pose_graph.cc` does) `* local_pose`, in the same task, never via `ActiveSessionToGlobal()`.
@@ -422,7 +422,7 @@ new row); `next_id` stays past the refused id, which is never issued.
   Anywhere: `FreezeFedSession(std::optional<SessionId> expected = std::nullopt)` → the new
   `SessionManager::FreezeFedSession(expected)`; `Start(..., bool seed_from_previous_boot = true)`.
 - `AnchorStore::Rebind`. `AssembleGlobalMap(..., std::optional<SessionId>)` already exists.
-- Zones (`service/zone_store.h`), for a host's own backend task, never a host thread waiting on
+- Zones (`service/memory/zone_store.h`), for a host's own backend task, never a host thread waiting on
   one: `std::optional<std::vector<ResolvedZone>> ResolveZones(const PoseGraph&, const ZoneStore&)`
   (scans, then resolves; nullopt when the scan was incomplete); `ResolveZonesOnTask(graph,
   scan.zones)` on a `ZoneStore::Scan()` taken earlier (check `scan.error` first) keeps the file

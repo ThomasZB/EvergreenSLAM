@@ -19,14 +19,14 @@
 #include <vector>
 
 #include "mapping/grid_mapping/probability_values.h"
-#include "service/fs_sandbox.h"
-#include "service/here_tracker.h"
-#include "service/json_writer.h"
-#include "service/match_score_average.h"
-#include "service/place_store.h"
-#include "service/plan_report.h"
-#include "service/request_error.h"
-#include "service/snapshot_exporter.h"
+#include "service/graph/here_tracker.h"
+#include "service/graph/match_score_average.h"
+#include "service/graph/plan_report.h"
+#include "service/graph/snapshot_exporter.h"
+#include "service/http/json_writer.h"
+#include "service/http/request_error.h"
+#include "service/memory/fs_sandbox.h"
+#include "service/memory/place_store.h"
 #include "utils/transform/transform.h"
 
 namespace evergreenslam::agent {

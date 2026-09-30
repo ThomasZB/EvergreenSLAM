@@ -16,7 +16,7 @@
 #include <string>
 
 #include "lifelong/pose_graph.h"
-#include "service/service_hooks.h"
+#include "service/http/service_hooks.h"
 
 namespace evergreenslam::agent {
 

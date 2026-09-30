@@ -25,8 +25,8 @@
 #include "sensor/point_cloud.h"
 #include "sensor/timed_point_cloud.h"
 #include "service/agent_service.h"
-#include "service/match_score_average.h"
-#include "service/zone_store.h"
+#include "service/graph/match_score_average.h"
+#include "service/memory/zone_store.h"
 
 namespace evergreenslam::ros2 {
 

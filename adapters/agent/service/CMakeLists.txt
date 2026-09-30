@@ -6,32 +6,32 @@ find_package(yaml-cpp REQUIRED)
 
 # memory/README.md is the contract the agent reads; compiled in so it cannot drift from the source.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../memory_README.md" EVERGREENSLAM_MEMORY_README)
-configure_file(memory_readme.cc.in "${CMAKE_CURRENT_BINARY_DIR}/memory_readme.cc" @ONLY)
+configure_file(memory/memory_readme.cc.in "${CMAKE_CURRENT_BINARY_DIR}/memory_readme.cc" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
              "${CMAKE_CURRENT_SOURCE_DIR}/../memory_README.md")
 
 add_library(evergreenslam_agent STATIC
             agent_service.cc
-            fs_endpoints.cc
-            fs_sandbox.cc
-            graph_reads.cc
-            gray_png.cc
-            here_tracker.cc
-            http_reply.cc
-            json_writer.cc
-            match_score_average.cc
-            map_endpoints.cc
-            maps_endpoints.cc
-            place_endpoints.cc
-            place_store.cc
-            plan_report.cc
-            service_context.cc
-            session_endpoints.cc
-            snapshot_exporter.cc
-            zone_store.cc
-            zones_endpoints.cc
+            endpoints/fs_endpoints.cc
+            endpoints/maps_endpoints.cc
+            endpoints/place_endpoints.cc
+            endpoints/session_endpoints.cc
+            endpoints/view_endpoints.cc
+            endpoints/zones_endpoints.cc
+            graph/graph_reads.cc
+            graph/gray_png.cc
+            graph/here_tracker.cc
+            graph/match_score_average.cc
+            graph/plan_report.cc
+            graph/snapshot_exporter.cc
+            http/http_reply.cc
+            http/json_writer.cc
+            http/service_context.cc
+            memory/fs_sandbox.cc
+            memory/place_store.cc
+            memory/zone_store.cc
             "${CMAKE_CURRENT_BINARY_DIR}/memory_readme.cc")
-# Includes read "service/agent_service.h", relative to adapters/agent.
+# Includes read "service/http/endpoints.h", relative to adapters/agent.
 target_include_directories(evergreenslam_agent PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # SYSTEM so the vendored headers' warnings are not ours to fix.
 target_include_directories(evergreenslam_agent SYSTEM PRIVATE
