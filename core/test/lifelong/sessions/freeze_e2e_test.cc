@@ -326,8 +326,8 @@ TEST(FreezeE2eTest, FirstSessionFreezesAtItsFirstSubmapAndTheWingSessionOnSigmaA
     EXPECT_EQ(std::prev(links.end())->second, 0) << "the tail in the wing is untied";
   }
   // Frozen halfway round on a 0.03 m sigma, the wing keeps the 0.58 m the yaw bias gave it:
-  // the gate reads the chain's noise, not its drift (ROADMAP open issue 1). The ceiling only
-  // catches a divergence; the bitwise check below is what proves the freeze.
+  // the gate reads the chain's noise, not its drift. The ceiling only catches a divergence; the
+  // bitwise check below is what proves the freeze.
   const double error_in_wing = MeanNodeError(graph, second, truth, second_start_step, InWing);
   EXPECT_LT(error_in_wing, 1.0) << "before the freeze " << error_before_freeze;
   // The pass through known area is discarded on the way in; the one junction submap that alone

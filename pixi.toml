@@ -33,7 +33,7 @@
 # SDKROOT yourself to override. After changing it, wipe build-pixi/: CMAKE_OSX_SYSROOT is cached.
 #
 # This does not replace the Docker image: the Linux gcc -O2 ctest and the TSan gate
-# (docker compose run --rm core-test / core-tsan) stay there, see docs/ROADMAP.md item 21.
+# (docker compose run --rm core-test / core-tsan) stay there.
 
 [workspace]
 name = "evergreenslam"

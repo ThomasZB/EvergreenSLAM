@@ -1,4 +1,4 @@
-docs/
+dev-docs/
 build/
 CLAUDE.md
 compile_commands.json

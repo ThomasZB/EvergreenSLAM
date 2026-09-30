@@ -1,9 +1,9 @@
-# AgentService HTTP contract (v0.1)
+# AgentService HTTP contract (v0.2)
 
 `adapters/agent/service/`. An in-process `httplib::Server` owned by the host (bag main, live node)
 beside, never inside, the webui. Binds host flag `--agent_bind` (default **127.0.0.1**), port 8643;
 compose passes `0.0.0.0` inside the container and maps `127.0.0.1:8643:8643` on the host side. No
-auth: loopback and one agent session per map (proposal §6). `egs` is the only intended client.
+auth: loopback and one agent session per map. `egs` is the only intended client.
 
 ## Conventions
 
@@ -442,7 +442,7 @@ new row); `next_id` stays past the refused id, which is never issued.
   service; `-p map:=` default empty = `current` or `default`; it wires `switch_map` and
   `drop_session`, the bag main neither), `--agent_port`
   (0 = off; live node default 8643), `--agent_bind` (default `127.0.0.1`), `--ignore_last_pose` (Start seeds from neither `last_pose.pb` nor the checkpoint
-  node, so the demo's `init-pose --place` correction is controlled). TSan gate covers the service.
+  node, so the demo's `init-pose --place` correction is controlled). The TSan run (`tools/run_tsan.sh`) covers the lifelong tests only, not the service.
 - A damaged map directory (unreadable or pre-v4 manifest, a missing or corrupt session file, or
   session/anchor files with no manifest) refuses to boot: `Start` stops naming the directory and
   the reason, and touches no file. Only a directory with neither boots as a new map. A directory

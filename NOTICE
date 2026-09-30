@@ -1,0 +1,16 @@
+EvergreenSLAM
+Copyright 2024-2026 Hang Chen
+
+Licensed under the Apache License, Version 2.0.
+
+This product includes software derived from Cartographer
+(https://github.com/cartographer-project/cartographer),
+Copyright 2016 The Cartographer Authors, licensed under the Apache License, Version 2.0.
+The correlative scan matchers and precomputation grids in core/src/utils/scan_matching,
+the probability-grid submaps in core/src/mapping/grid_mapping, the constraint builder in
+core/src/lifelong/constraints, the voxel and motion filters, and the rviz2 submap display in
+adapters/ros2/evergreenslam_rviz follow or are ported from Cartographer.
+
+Vendored third-party code, in third_party/:
+  cpp-httplib     Copyright (c) 2024 Yuji Hirose, MIT License
+  stb_image_write Sean Barrett, public domain

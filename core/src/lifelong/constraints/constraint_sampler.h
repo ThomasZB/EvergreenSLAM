@@ -1,7 +1,7 @@
 /**
  * @file constraint_sampler.h
  * @author hang chen (chen@hang.plus)
- * @brief Fixed-budget selection of loop closure candidates. No adaptive feedback (ROADMAP #25).
+ * @brief Fixed-budget selection of loop closure candidates. No adaptive feedback.
  * @version 0.1
  * @date 2026-08-09
  *
