@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <string>
@@ -34,6 +35,8 @@ std::string ToRefusal(lifelong::PoseGraph::SaveAnchorResult::Refusal refusal) {
       return "node_gone";
     case Refusal::NOT_PERSISTED:
       return "not_persisted";
+    case Refusal::OFFSET_NOT_FREE:
+      return "offset_not_free";
     case Refusal::NONE:
       break;
   }
@@ -41,6 +44,36 @@ std::string ToRefusal(lifelong::PoseGraph::SaveAnchorResult::Refusal refusal) {
 }
 
 constexpr int kClosestPlaces = 2;
+// A place saved from afar is one the robot could see; beyond this the scan is too thin to trust.
+constexpr double kMaxOffsetMeters = 3.0;
+
+struct Offset {
+  double dx = 0.0;
+  double dy = 0.0;
+  double dtheta = 0.0;
+};
+
+// `offset=dx,dy,dtheta`, robot frame (x forward, y left).
+std::optional<Offset> OffsetParam(const httplib::Request& request) {
+  const std::optional<std::string> text = OptionalParam(request, "offset");
+  if (!text.has_value()) {
+    return std::nullopt;
+  }
+  std::vector<double> values;
+  size_t begin = 0;
+  while (true) {
+    const size_t comma = text->find(',', begin);
+    values.push_back(ParseDouble("offset", text->substr(begin, comma - begin)));
+    if (comma == std::string::npos) {
+      break;
+    }
+    begin = comma + 1;
+  }
+  if (values.size() != 3) {
+    throw RequestError("bad_param", "'offset' is dx,dy,dtheta: " + *text);
+  }
+  return Offset{values[0], values[1], utils::transform::NormalizeAngle(values[2])};
+}
 
 lifelong::AnchorId ParseAnchorId(const std::string& text) {
   const int64_t id = ParseInt("anchor", text);
@@ -103,6 +136,7 @@ void HandleHere(ServiceContext& context, httplib::Response& response) {
   writer.OptionalField("keyframe_age_s", reading.robot.keyframe_age_s)
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base);
+  WriteScanMatch(writer, reading.robot.scan_match);
   writer.Key("current");
   if (current.has_value()) {
     const Candidate& place = candidates[*current];
@@ -131,6 +165,7 @@ void HandlePlaceSave(ServiceContext& context, const httplib::Request& request,
                      httplib::Response& response) {
   const std::string path = RequiredParam(request, "path");
   const bool keep_scan = BoolParam(request, "scan", true);
+  const std::optional<Offset> offset = OffsetParam(request);
   PlaceStore::CheckNodePath(path);
   const std::string node = context.sandbox.Resolve(path).relative;
   std::optional<lifelong::AnchorId> existing = context.places.ReadBinding(node);
@@ -153,14 +188,31 @@ void HandlePlaceSave(ServiceContext& context, const httplib::Request& request,
   lifelong::PoseGraph& pose_graph = context.pose_graph;
   Outcome outcome = RunOnBackend(pose_graph, [&] {
     Outcome result;
-    result.keyframe_age_s = ReadRobotOnTask(pose_graph, context.hooks).keyframe_age_s;
-    if (!pose_graph.last_ingested_node().has_value()) {
+    const RobotReading robot = ReadRobotOnTask(pose_graph, context.hooks);
+    result.keyframe_age_s = robot.keyframe_age_s;
+    const std::optional<lifelong::NodeId> node = pose_graph.last_ingested_node();
+    // A place bound now would land in the old map.
+    if (context.switch_pending.load()) {
+      result.refusal = "switching";
+    } else if (!node.has_value()) {
       result.refusal = "no_keyframe";
+    } else if (offset.has_value() && std::hypot(offset->dx, offset->dy) > kMaxOffsetMeters) {
+      result.refusal = "offset_too_far";
     } else {
+      Eigen::Affine2d node_from_anchor = Eigen::Affine2d::Identity();
+      if (offset.has_value()) {
+        // The offset is in the robot's frame, which runs ahead of the last keyframe.
+        const Eigen::Affine2d node_from_robot =
+            robot.pose.has_value()
+                ? Eigen::Affine2d(pose_graph.graph().node(*node).global_pose.inverse() *
+                                  *robot.pose)
+                : Eigen::Affine2d::Identity();
+        node_from_anchor =
+            node_from_robot * utils::transform::FromXYTheta(offset->dx, offset->dy, offset->dtheta);
+      }
       result.rebound = existing.has_value() && pose_graph.anchors().Get(*existing).has_value();
-      lifelong::PoseGraph::SaveAnchorResult saved =
-          result.rebound ? pose_graph.SaveAnchorOnTask(keep_scan, existing)
-                         : pose_graph.SaveAnchorOnTask(keep_scan);
+      lifelong::PoseGraph::SaveAnchorResult saved = pose_graph.SaveAnchorOnTask(
+          keep_scan, result.rebound ? existing : std::nullopt, node_from_anchor);
       result.anchor = std::move(saved.anchor);
       if (saved.refusal != lifelong::PoseGraph::SaveAnchorResult::Refusal::NONE) {
         result.refusal = ToRefusal(saved.refusal);
@@ -189,7 +241,13 @@ void HandlePlaceSave(ServiceContext& context, const httplib::Request& request,
   }
   writer.OptionalField("keyframe_age_s", outcome.keyframe_age_s)
       .Field("rebound_existing", outcome.rebound)
-      .EndObject();
+      .Key("offset");
+  if (offset.has_value()) {
+    writer.BeginArray().Double(offset->dx).Double(offset->dy).Double(offset->dtheta).EndArray();
+  } else {
+    writer.Null();
+  }
+  writer.EndObject();
   SendJson(response, writer);
 }
 
@@ -200,12 +258,14 @@ void HandleAnchor(ServiceContext& context, const httplib::Request& request,
   struct Reading {
     std::optional<lifelong::ResolvedAnchor> resolved;
     RobotReading robot;
+    BaseAlignment alignment;
     int num_solves = 0;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
     return Reading{pose_graph.anchors().Resolve(pose_graph.graph(), id),
                    with_robot ? ReadRobotOnTask(pose_graph, context.hooks) : RobotReading{},
+                   with_robot ? ReadBaseAlignmentOnTask(pose_graph) : BaseAlignment{},
                    NumSolves(pose_graph)};
   });
 
@@ -221,6 +281,8 @@ void HandleAnchor(ServiceContext& context, const httplib::Request& request,
   }
   if (with_robot) {
     WritePose(writer, "robot", reading.robot.pose);
+    writer.Field("has_frozen_base", reading.alignment.has_frozen_base)
+        .Field("aligned_to_base", reading.alignment.aligned_to_base);
   }
   writer.EndObject();
   SendJson(response, writer);

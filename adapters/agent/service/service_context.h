@@ -21,6 +21,7 @@
 #include "service/place_store.h"
 #include "service/service_hooks.h"
 #include "service/snapshot_exporter.h"
+#include "service/zone_store.h"
 
 namespace evergreenslam::agent {
 
@@ -36,6 +37,7 @@ struct ServiceContext {
   const AgentServiceHooks hooks;
   const PlaceStore places;
   const FsSandbox sandbox;
+  const ZoneStore zones;
   // Empty when the host named no map root.
   const std::string map_root;
   const std::string map_name;

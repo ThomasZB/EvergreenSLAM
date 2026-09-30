@@ -26,6 +26,7 @@ namespace evergreenslam::agent {
 namespace {
 
 constexpr int kMaxLongSidePx = 1024;
+constexpr int kMaxPixelsPerCell = 4;
 constexpr double kItemMarginM = 0.5;
 constexpr double kEmptyViewSizeM = 10.0;
 constexpr double kMarkerRadiusM = 0.15;
@@ -33,8 +34,12 @@ constexpr int kMinMarkerRadiusPx = 4;
 constexpr int kBadgeScale = 2;
 constexpr double kPi = 3.14159265358979323846;
 
-double RobotArrowLengthPx(double metres_per_pixel) {
-  return std::max(16.0, 0.6 / metres_per_pixel);
+double GlyphMetresPerPixel(const ViewFrame& frame) {
+  return frame.metres_per_pixel * frame.pixels_per_cell;
+}
+
+double RobotArrowLengthPx(const ViewFrame& frame) {
+  return std::max(16.0, 0.6 / GlyphMetresPerPixel(frame));
 }
 
 const Rgb kOccupied{0, 0, 0};
@@ -47,10 +52,12 @@ const Rgb kRobot{0, 160, 0};
 const Rgb kPlace{255, 140, 0};
 const Rgb kTarget{220, 0, 0};
 const Rgb kInk{0, 0, 0};
+const Rgb kZone{215, 160, 0};
+constexpr int kZoneHatchPeriodPx = 6;
 
 // Canonical order of the legend's `layers=`.
-const char* const kLayerOrder[] = {"map",    "robot",  "scan",    "trail",
-                                   "places", "target", "session", "submaps"};
+const char* const kLayerOrder[] = {"map",    "robot",   "scan",    "trail", "places",
+                                   "target", "session", "submaps", "zones"};
 
 enum class CellClass : uint8_t { kUnknown, kFree, kOccupied };
 
@@ -79,6 +86,7 @@ struct Plan {
   bool places = false;
   bool target = false;
   bool submaps = false;
+  bool zones = false;
   bool ego = false;
   std::vector<std::string> drawn;
   std::vector<std::string> dropped;
@@ -94,6 +102,7 @@ Plan MakePlan(const RenderInput& input) {
   plan.places = has("places");
   plan.target = has("target");
   plan.submaps = has("submaps");
+  plan.zones = has("zones");
   plan.ego = input.ego_radius_m.has_value() && *input.ego_radius_m > 0.0 && input.robot;
   for (const char* layer : kLayerOrder) {
     if (!has(layer)) {
@@ -147,6 +156,13 @@ ViewFrame MakeFrame(const RenderInput& input, const Plan& plan) {
         }
       }
     }
+    if (plan.zones) {
+      for (const auto& polygon : input.zones) {
+        for (const Eigen::Vector2d& p : polygon) {
+          bounds.Extend(p, 0.0);
+        }
+      }
+    }
     if (bounds.empty()) {
       const Eigen::Vector2d center =
           input.robot ? Eigen::Vector2d(input.robot->translation()) : Eigen::Vector2d::Zero();
@@ -155,12 +171,22 @@ ViewFrame MakeFrame(const RenderInput& input, const Plan& plan) {
   }
 
   const Eigen::Vector2d extent = bounds.max - bounds.min;
-  // An integer number of cells per pixel keeps pixels on cell boundaries when uncropped.
+  // Integer cells per pixel (or pixels per cell) keep pixels on cell boundaries when uncropped.
   const double long_side_cells = extent.maxCoeff() / resolution;
-  const int cells_per_pixel =
-      std::max(1, static_cast<int>(std::ceil(long_side_cells / kMaxLongSidePx - 1e-9)));
   ViewFrame frame;
-  frame.metres_per_pixel = resolution * cells_per_pixel;
+  if (long_side_cells <= 0.0) {
+    frame.pixels_per_cell = kMaxPixelsPerCell;
+    frame.metres_per_pixel = resolution / frame.pixels_per_cell;
+  } else if (long_side_cells <= kMaxLongSidePx) {
+    frame.pixels_per_cell =
+        std::clamp(static_cast<int>(std::floor(kMaxLongSidePx / long_side_cells + 1e-9)), 1,
+                   kMaxPixelsPerCell);
+    frame.metres_per_pixel = resolution / frame.pixels_per_cell;
+  } else {
+    const int cells_per_pixel =
+        std::max(1, static_cast<int>(std::ceil(long_side_cells / kMaxLongSidePx - 1e-9)));
+    frame.metres_per_pixel = resolution * cells_per_pixel;
+  }
   frame.width = std::clamp(static_cast<int>(std::ceil(extent.x() / frame.metres_per_pixel - 1e-9)),
                            1, kMaxLongSidePx);
   frame.height = std::clamp(static_cast<int>(std::ceil(extent.y() / frame.metres_per_pixel - 1e-9)),
@@ -213,29 +239,46 @@ std::vector<CellClass> PaintGrid(const mapping::GridMapu8& grid, const ViewFrame
 }
 
 void DrawRobot(const Eigen::Affine2d& robot, const ViewFrame& frame, Canvas& canvas) {
-  const double mpp = frame.metres_per_pixel;
   const Eigen::Array2i center = frame.ToPixel(robot.translation());
   const Eigen::Vector2d heading = robot.linear().col(0).normalized();
   // Pixel rows grow downwards, so the image-space heading flips y.
   const Eigen::Vector2d dir(heading.x(), -heading.y());
   const Eigen::Vector2d normal(-dir.y(), dir.x());
-  const double length = RobotArrowLengthPx(mpp);
+  const double length = RobotArrowLengthPx(frame);
   const Eigen::Vector2d c(center.x() + 0.5, center.y() + 0.5);
   canvas.FillTriangle(c + dir * length, c - dir * (0.35 * length) + normal * (0.4 * length),
                       c - dir * (0.35 * length) - normal * (0.4 * length), kRobot);
-  const int radius = std::max(3, static_cast<int>(std::lround(0.15 / mpp)));
+  const int radius = std::max(3, static_cast<int>(std::lround(0.15 / GlyphMetresPerPixel(frame))));
   canvas.FillDisc(center, radius + 1, kInk);
   canvas.FillDisc(center, radius, kRobot);
+}
+
+void DrawZones(const std::vector<std::vector<Eigen::Vector2d>>& zones, const ViewFrame& frame,
+               Canvas& canvas) {
+  const double mpp = frame.metres_per_pixel;
+  for (const auto& polygon : zones) {
+    std::vector<Eigen::Vector2d> corners;
+    for (const Eigen::Vector2d& p : polygon) {
+      corners.emplace_back((p.x() - frame.min_x) / mpp, (frame.max_y - p.y()) / mpp);
+    }
+    canvas.HatchPolygon(corners, kZoneHatchPeriodPx, kZone);
+    for (size_t i = 0; i < polygon.size(); ++i) {
+      canvas.Line(frame.ToPixel(polygon[i]), frame.ToPixel(polygon[(i + 1) % polygon.size()]),
+                  kZone, 2);
+    }
+  }
 }
 
 std::string BadgeText(const RenderMarker& marker) {
   return marker.number > 0 ? std::to_string(marker.number) : std::string("T");
 }
 
-// First candidate box around the dot that lies on free map pixels and clear of everything placed.
+// First candidate box around the dot that lies on free map pixels and clear of everything placed;
+// when crowded, other badges may be overlapped, then the frame edge crossed, but never the robot.
 PixelBox PlaceBadge(const Eigen::Array2i& dot, int dot_radius, int w, int h,
                     const std::vector<CellClass>& classes, bool require_free,
-                    const ViewFrame& frame, const std::vector<PixelBox>& blocked) {
+                    const ViewFrame& frame, const std::vector<PixelBox>& blocked,
+                    const std::optional<PixelBox>& robot_box) {
   const auto box_at = [&](double cx, double cy) {
     const int x0 = static_cast<int>(std::lround(cx - w / 2.0));
     const int y0 = static_cast<int>(std::lround(cy - h / 2.0));
@@ -244,6 +287,7 @@ PixelBox PlaceBadge(const Eigen::Array2i& dot, int dot_radius, int w, int h,
   const auto inside = [&](const PixelBox& b) {
     return b.x0 >= 0 && b.y0 >= 0 && b.x1 <= frame.width && b.y1 <= frame.height;
   };
+  const auto off_robot = [&](const PixelBox& b) { return !robot_box || !b.Overlaps(*robot_box); };
   const auto clear = [&](const PixelBox& b) {
     for (const PixelBox& other : blocked) {
       if (b.Overlaps(other)) {
@@ -263,7 +307,7 @@ PixelBox PlaceBadge(const Eigen::Array2i& dot, int dot_radius, int w, int h,
     return true;
   };
   constexpr int kDirections = 16;
-  for (const bool strict : {true, false}) {
+  for (const int pass : {0, 1, 2, 3}) {
     for (const int gap : {8, 16, 28, 44, 64}) {
       const double reach = dot_radius + gap + std::max(w, h) / 2.0;
       for (int i = 0; i < kDirections; ++i) {
@@ -271,7 +315,8 @@ PixelBox PlaceBadge(const Eigen::Array2i& dot, int dot_radius, int w, int h,
         const double angle = kPi / 4.0 - 2.0 * kPi * i / kDirections;
         const PixelBox b =
             box_at(dot.x() + reach * std::cos(angle), dot.y() - reach * std::sin(angle));
-        if (inside(b) && clear(b) && (!strict || !require_free || on_free(b))) {
+        const bool placed = pass >= 2 ? off_robot(b) : clear(b);
+        if ((pass == 3 || inside(b)) && placed && (pass != 0 || !require_free || on_free(b))) {
           return b;
         }
       }
@@ -281,10 +326,11 @@ PixelBox PlaceBadge(const Eigen::Array2i& dot, int dot_radius, int w, int h,
 }
 
 void DrawMarkers(const RenderInput& input, const Plan& plan, const ViewFrame& frame,
-                 const std::vector<CellClass>& classes, Canvas& canvas,
-                 std::vector<PixelBox>& blocked) {
-  const int radius = std::max(
-      kMinMarkerRadiusPx, static_cast<int>(std::lround(kMarkerRadiusM / frame.metres_per_pixel)));
+                 const std::vector<CellClass>& classes, const std::optional<PixelBox>& robot_box,
+                 Canvas& canvas, std::vector<PixelBox>& blocked) {
+  const int radius =
+      std::max(kMinMarkerRadiusPx,
+               static_cast<int>(std::lround(kMarkerRadiusM / GlyphMetresPerPixel(frame))));
   std::vector<size_t> visible;
   for (size_t i = 0; i < input.markers.size(); ++i) {
     const RenderMarker& marker = input.markers[i];
@@ -315,7 +361,7 @@ void DrawMarkers(const RenderInput& input, const Plan& plan, const ViewFrame& fr
     const std::string text = BadgeText(marker);
     const int w = TextWidth(text, kBadgeScale) + 6;
     const int h = TextHeight(kBadgeScale) + 6;
-    const PixelBox box = PlaceBadge(p, radius, w, h, classes, plan.grid, frame, blocked);
+    const PixelBox box = PlaceBadge(p, radius, w, h, classes, plan.grid, frame, blocked, robot_box);
     blocked.push_back(box);
     const Eigen::Array2i box_center((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2);
     canvas.Line(p, box_center, kInk);
@@ -347,6 +393,15 @@ std::string MakeLegend(const RenderInput& input, const Plan& plan, const ViewFra
   std::string legend = "layers=" + Join(plan.drawn);
   if (!plan.dropped.empty()) {
     legend += "; dropped=" + Join(plan.dropped);
+  }
+  if (plan.zones) {
+    legend += "; zones: " + std::to_string(input.zones.size()) + " keepout";
+    if (input.num_unresolved_zones > 0) {
+      legend += ", " + std::to_string(input.num_unresolved_zones) + " unresolvable";
+    }
+    if (input.zones_incomplete) {
+      legend += ", incomplete (memory/places not fully readable)";
+    }
   }
   std::vector<RenderMarker> listed;
   std::copy_if(input.markers.begin(), input.markers.end(), std::back_inserter(listed),
@@ -396,6 +451,9 @@ RenderedView RenderView(const RenderInput& input) {
       }
     }
   }
+  if (plan.zones) {
+    DrawZones(input.zones, frame, canvas);
+  }
   if (plan.trail) {
     for (size_t i = 1; i < input.trail.size(); ++i) {
       canvas.Line(frame.ToPixel(input.trail[i - 1]), frame.ToPixel(input.trail[i]), kTrail, 2);
@@ -411,13 +469,15 @@ RenderedView RenderView(const RenderInput& input) {
   }
 
   std::vector<PixelBox> blocked;
+  std::optional<PixelBox> robot_box;
   if (plan.robot) {
     DrawRobot(*input.robot, frame, canvas);
     const Eigen::Array2i p = frame.ToPixel(input.robot->translation());
-    const int reach = static_cast<int>(RobotArrowLengthPx(frame.metres_per_pixel)) + 1;
-    blocked.push_back({p.x() - reach, p.y() - reach, p.x() + reach + 1, p.y() + reach + 1});
+    const int reach = static_cast<int>(RobotArrowLengthPx(frame)) + 1;
+    robot_box = PixelBox{p.x() - reach, p.y() - reach, p.x() + reach + 1, p.y() + reach + 1};
+    blocked.push_back(*robot_box);
   }
-  DrawMarkers(input, plan, frame, classes, canvas, blocked);
+  DrawMarkers(input, plan, frame, classes, robot_box, canvas, blocked);
   DrawScaleBar(frame, canvas);
 
   view.legend = MakeLegend(input, plan, frame);

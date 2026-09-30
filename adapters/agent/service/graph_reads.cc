@@ -37,6 +37,7 @@ RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentS
   const Eigen::Affine2d session_to_global =
       graph.ComputeSessionToGlobal(*fed).value_or(graph.session(*fed).local_to_global);
   reading.pose = Eigen::Affine2d(session_to_global * stamped.local_pose);
+  reading.scan_match = ScanMatch{frame->match_score, frame->match_score_avg};
   const std::optional<common::Time> newest = NewestNodeTime(graph);
   if (newest.has_value()) {
     reading.keyframe_age_s = common::ToSeconds(stamped.time - *newest);
@@ -168,6 +169,15 @@ void WritePose(JsonWriter& writer, std::string_view key,
 
 void WriteSubmapId(JsonWriter& writer, std::string_view key, const lifelong::SubmapId& id) {
   writer.Key(key).BeginArray().Int(id.session_id).Int(id.submap_index).EndArray();
+}
+
+void WriteScanMatch(JsonWriter& writer, const std::optional<ScanMatch>& scan_match) {
+  writer.Key("scan_match");
+  if (!scan_match.has_value()) {
+    writer.Null();
+    return;
+  }
+  writer.BeginObject().Field("score", scan_match->score).Field("avg", scan_match->avg).EndObject();
 }
 
 }  // namespace evergreenslam::agent

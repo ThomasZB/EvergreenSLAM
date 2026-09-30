@@ -47,15 +47,20 @@ def meters(d):
     return "-" if d is None else "%.1fm" % d
 
 
-def clock(robot, p):
+def clock_hour(robot, p):
     """Bearing of p seen from the robot as a clock hour: 12 ahead, 3 right, 9 left."""
     if robot is None or p is None:
-        return "-"
+        return None
     if abs(p[0] - robot[0]) < 1e-9 and abs(p[1] - robot[1]) < 1e-9:
-        return "-"
+        return None
     rel = math.atan2(p[1] - robot[1], p[0] - robot[0]) - robot[2]
     hour = int(round(-rel / (math.pi / 6))) % 12
-    return "%do'clock" % (12 if hour == 0 else hour)
+    return 12 if hour == 0 else hour
+
+
+def clock(robot, p):
+    hour = clock_hour(robot, p)
+    return "-" if hour is None else "%do'clock" % hour
 
 
 def ids(items):
@@ -64,3 +69,10 @@ def ids(items):
 
 def submap(s):
     return "[%s,%s]" % (s[0], s[1]) if s else "-"
+
+
+def scan_match(m):
+    """Agreement of the scan with the local map only; a wrong global pose can still score high."""
+    if not m:
+        return "match -"
+    return "match %.2f (avg %.2f)" % (m["score"], m["avg"])

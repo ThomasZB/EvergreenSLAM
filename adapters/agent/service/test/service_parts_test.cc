@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "service/fs_sandbox.h"
 #include "service/here_tracker.h"
 #include "service/json_writer.h"
+#include "service/match_score_average.h"
 #include "service/place_store.h"
 #include "service/plan_report.h"
 #include "service/request_error.h"
@@ -136,6 +138,27 @@ TEST(HereTrackerTest, EntersAtTwoPointFiveLeavesAtThreePointSevenFive) {
   EXPECT_EQ(tracker.Update({{"places/b", 1.0}, {"places/a", 3.5}}), std::optional<size_t>(1));
   EXPECT_EQ(tracker.Update({{"places/b", 1.0}, {"places/a", 3.8}}), std::optional<size_t>(0));
   EXPECT_FALSE(tracker.Update({}).has_value());
+}
+
+TEST(MatchScoreAverageTest, SeedsWithTheFirstSampleAndForgetsOverSecondsNotScans) {
+  const common::Time start = common::FromUnixSeconds(1785000000.0);
+  MatchScoreAverage fast;
+  MatchScoreAverage slow;
+  EXPECT_DOUBLE_EQ(fast.Add(start, 0.8), 0.8);
+  EXPECT_DOUBLE_EQ(slow.Add(start, 0.8), 0.8);
+  // One time constant of zeros moves the average 1 - 1/e of the way, at 40 Hz or at 10 Hz.
+  double fast_average = 0.0;
+  for (int i = 1; i <= 80; ++i) {
+    fast_average = fast.Add(start + common::FromSeconds(0.025 * i), 0.0);
+  }
+  double slow_average = 0.0;
+  for (int i = 1; i <= 20; ++i) {
+    slow_average = slow.Add(start + common::FromSeconds(0.1 * i), 0.0);
+  }
+  EXPECT_NEAR(fast_average, 0.8 * std::exp(-1.0), 1e-9);
+  EXPECT_NEAR(slow_average, 0.8 * std::exp(-1.0), 1e-9);
+  // A stamp that goes backwards changes nothing rather than extrapolating.
+  EXPECT_DOUBLE_EQ(slow.Add(start, 1.0), slow_average);
 }
 
 TEST(SnapshotExporterTest, TrinaryPixels) {

@@ -1,6 +1,7 @@
 """An in-process stand-in for the AgentService speaking the JSON of adapters/agent/API.md."""
 
 import json
+import math
 import os
 import re
 import shutil
@@ -23,6 +24,11 @@ def fnv1a64(text):
     return "%016x" % h
 
 
+DROPS_FED_NOTE = (
+    "this is the session being mapped now: it is replaced by a fresh one; the robot's pose is lost"
+)
+
+
 class FakeState:
     def __init__(self, memory_dir, map_dir):
         self.memory_dir = memory_dir  # what /fs/* serves
@@ -39,6 +45,10 @@ class FakeState:
         self.switch_after_polls = 0
         self.switching = None  # name being switched to
         self.switch_polls = 0
+        # A fed-session rm drops it in process and answers at once.
+        self.can_drop = False
+        self.drop_refusal = None  # e.g. "session_changed": what the host's drop answers instead
+        self.boot_count = 3
         self.has_frozen_base = True
         self.aligned_to_base = True
         self.view_dropped = None  # e.g. "robot,scan": legend's dropped= item
@@ -47,6 +57,8 @@ class FakeState:
         self.anchors = {}
         self.next_id = 50
         self.keyframe = True
+        self.scan_match = {"score": 0.82, "avg": 0.8}  # None: no host frame yet
+        self.offset_free = True  # False: every --offset target is a wall
         self.fed = 2
         self.sessions = [
             {
@@ -237,13 +249,15 @@ class _Handler(BaseHTTPRequestHandler):
         self._begin_switch(name)
 
     def status(self, q, body):
+        st = self.st
         self.ok(
-            boot_count=3,
+            boot_count=st.boot_count,
             map=self.st.map_name if self.st.map_root else None,
             fed_session=self.st.fed,
             has_frozen_base=self.st.has_frozen_base,
             aligned_to_base=self.st.aligned_to_base,
             phase="LOCKED",
+            scan_match=self.st.scan_match,
             closures_delta=2,
             num_anchors=len(self.st.anchors),
             num_orphans=sum(1 for a in self.st.anchors.values() if a["state"] == "orphan"),
@@ -257,6 +271,7 @@ class _Handler(BaseHTTPRequestHandler):
             keyframe_age_s=1.5,
             has_frozen_base=self.st.has_frozen_base,
             aligned_to_base=self.st.aligned_to_base,
+            scan_match=self.st.scan_match,
             current={"path": "places/dock", "anchor": 1, "dist_m": 0.4},
             closest=[
                 {"path": "places/dock", "anchor": 1, "dist_m": 0.4, "state": "frozen"},
@@ -268,6 +283,11 @@ class _Handler(BaseHTTPRequestHandler):
         path = q["path"]
         if not self.st.keyframe:
             return self.refuse("no_keyframe")
+        offset = [float(v) for v in q["offset"].split(",")] if "offset" in q else None
+        if offset is not None and math.hypot(offset[0], offset[1]) > 3.0:
+            return self.refuse("offset_too_far", anchor=None, offset=offset)
+        if offset is not None and not self.st.offset_free:
+            return self.refuse("offset_not_free", anchor=None, offset=offset)
         pf = os.path.join(self.st.memory_dir, path, "place.yaml")
         existing = None
         if os.path.exists(pf):
@@ -287,6 +307,7 @@ class _Handler(BaseHTTPRequestHandler):
             state="pending",
             keyframe_age_s=0.5,
             rebound_existing=existing is not None and aid == existing,
+            offset=offset,
         )
 
     def anchor_one(self, aid, q):
@@ -296,6 +317,8 @@ class _Handler(BaseHTTPRequestHandler):
         fields = dict(a)
         if q.get("robot") == "1":
             fields["robot"] = self.st.robot
+            fields["has_frozen_base"] = self.st.has_frozen_base
+            fields["aligned_to_base"] = self.st.aligned_to_base
         self.ok(**fields)
 
     def anchors_all(self, q, body):
@@ -319,13 +342,19 @@ class _Handler(BaseHTTPRequestHandler):
         self.ok(seq=1, dir=os.path.join(self.st.root_map_dir, "snapshots", "000001"), files=files)
 
     def view(self, q, body):
-        layers = {"map": "map,places", "here": "map,robot,scan", "trail": "map,trail,robot"}
+        layers = {
+            "map": "map,places,zones",
+            "here": "map,robot,scan,zones",
+            "trail": "map,trail,robot",
+        }
         preset = q.get("preset")
+        if "ego" in q and self.st.robot is None:
+            return self.refuse("no_robot_pose")
         if preset == "route":
             target = q.get("target", "")
             if not os.path.exists(os.path.join(self.st.memory_dir, target, "place.yaml")):
                 return self.refuse("no_binding")
-            eq = "map,robot,target=%s,places" % target
+            eq = "map,robot,target=%s,places,zones" % target
         elif preset == "custom":
             eq = q.get("layers", "")
             if len(eq.split(",")) > 4:
@@ -352,6 +381,65 @@ class _Handler(BaseHTTPRequestHandler):
                 "X-EGS-Solve": str(self.st.solves),
             },
         )
+
+    def zones(self, q, body):
+        """The service's ZoneStore: walk up to the nearest place.yaml, then apply its pose."""
+        from egs import se2, yamlmini
+
+        out = []
+        places = os.path.join(self.st.memory_dir, "places")
+        for d, dirs, files in sorted(os.walk(places)):
+            dirs[:] = sorted(x for x in dirs if x != "skills")
+            if "zone.yaml" not in files:
+                continue
+            rel = os.path.relpath(d, self.st.memory_dir)
+            z = {"path": rel, "kind": "", "frame": None, "frame_path": None, "anchor": None}
+            z.update({"state": None, "polygon": [], "polygon_xy": None, "reason": None})
+            out.append(z)
+            try:
+                with open(os.path.join(d, "zone.yaml")) as f:
+                    data = yamlmini.loads(f.read(), nested_keys=("polygon",))
+                z["kind"], z["polygon"] = data["kind"], data["polygon"]
+                z["frame"] = data.get("frame")
+            except (KeyError, ValueError):
+                z["reason"] = "bad_zone_file"
+                continue
+            if any(
+                max(p[i] for p in z["polygon"]) - min(p[i] for p in z["polygon"]) > 100.0
+                for i in (0, 1)
+            ):
+                z["reason"] = "too_large"
+                continue
+            if os.path.exists(os.path.join(d, "place.yaml")):
+                z["reason"] = "holds_place"
+                continue
+            up = rel
+            while "/" in up and z["frame_path"] is None:
+                up = os.path.dirname(up)
+                pf = os.path.join(self.st.memory_dir, up, "place.yaml")
+                if os.path.exists(pf):
+                    with open(pf) as f:
+                        z["frame_path"], z["anchor"] = up, int(f.read().split(":")[1])
+            if z["frame_path"] is None:
+                z["reason"] = "no_place"
+                continue
+            a = self.st.anchors.get(z["anchor"])
+            if a is None:
+                z["state"], z["reason"] = "orphan", "unknown_anchor"
+                continue
+            z["state"] = a["state"]
+            if a["pose"] is None:
+                z["reason"] = "orphan"
+            elif z["kind"] != "keepout":
+                z["reason"] = "unknown_kind"
+            else:
+                a_pose = se2.from_json(a["pose"])
+                z["polygon_xy"] = [
+                    list(se2.compose(a_pose, (x, y, 0.0))[:2]) for x, y in z["polygon"]
+                ]
+                if z["frame"] is not None and z["frame"] != z["frame_path"]:
+                    z["reason"] = "frame_mismatch"
+        self.ok(zones=out)
 
     def init_pose(self, q, body):
         if "anchor" in q:
@@ -433,10 +521,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _rm_plan(self, sid):
         s = next((x for x in self.st.sessions if x["id"] == sid), None)
+        drops_fed = False
         if s is None:
             rej = "unknown_session"
         elif sid == self.st.fed:
-            rej = "fed_session"
+            if not self.st.can_drop:
+                rej = "not_supported"
+            elif self.st.switching is not None:
+                rej = "switching"
+            else:
+                rej, drops_fed = None, True
         elif s["role"] == "frozen":
             rej = "frozen_session"
         else:
@@ -456,6 +550,8 @@ class _Handler(BaseHTTPRequestHandler):
             "would_delete": deletes,
             "sessions_affected": [sid],
             "anchors_orphaned": orphaned,
+            "drops_fed": drops_fed,
+            "note": DROPS_FED_NOTE if drops_fed else None,
             "plan_token": self._token("rm", [sid], deletes, orphaned),
         }
 
@@ -465,12 +561,38 @@ class _Handler(BaseHTTPRequestHandler):
     def rm_apply(self, q, body):
         sid = int(q["id"])
         plan = self._rm_plan(sid)
+        if plan["rejection"] == "switching":
+            return self.refuse("switching")
         if plan["rejection"] or plan["plan_token"] != q.get("plan_token"):
             return self.refuse("plan_changed")
-        self.st.sessions = [s for s in self.st.sessions if s["id"] != sid]
+        st = self.st
+        if plan["drops_fed"] and st.drop_refusal is not None:
+            return self.refuse(st.drop_refusal)
+        next_id = max(x["id"] for x in st.sessions) + 1
+        st.sessions = [s for s in st.sessions if s["id"] != sid]
         for aid in plan["anchors_orphaned"]:
-            self.st.anchors[aid].update(state="orphan", orphan_reason="session_removed", pose=None)
-        self.ok(removed=sid, anchors_orphaned=plan["anchors_orphaned"])
+            st.anchors[aid].update(state="orphan", orphan_reason="session_removed", pose=None)
+        if plan["drops_fed"]:
+            st.fed = next_id
+            st.sessions.append(
+                {
+                    "id": st.fed,
+                    "role": "fed",
+                    "nodes": 0,
+                    "submaps": 0,
+                    "anchors": 0,
+                    "phase": "BOOTSTRAP",
+                    "anchored": False,
+                    "start_ns": time.time_ns(),
+                    "last_node_ns": time.time_ns(),
+                }
+            )
+        self.ok(
+            removed=sid,
+            fed_session=st.fed,
+            anchors_orphaned=plan["anchors_orphaned"],
+            pose_lost=plan["drops_fed"],
+        )
 
     # --- fs passthrough -------------------------------------------------------------------
 
@@ -555,7 +677,10 @@ class _Handler(BaseHTTPRequestHandler):
     def fs_mkdir(self, q, body):
         p = self._fs(q.get("path"))
         if p is not None:
-            os.makedirs(p, exist_ok=True)
+            try:
+                os.makedirs(p, exist_ok=True)
+            except OSError as e:
+                return self.refuse("fs_error", detail=str(e))
             self._fs_done()
 
     def fs_mv(self, q, body):
@@ -600,6 +725,7 @@ ROUTES = {
     "GET /anchors": _Handler.anchors_all,
     "POST /snapshot": _Handler.snapshot,
     "GET /view": _Handler.view,
+    "GET /zones": _Handler.zones,
     "POST /init-pose": _Handler.init_pose,
     "POST /relocalize": _Handler.relocalize,
     "POST /checkpoint": _Handler.checkpoint,

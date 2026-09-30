@@ -47,7 +47,10 @@ class YamlMiniTest(unittest.TestCase):
         for bad in (
             "pos:\n  x: 1\n",
             "aliases:\n- a\n",
-            "a: [1, [2]]\n",
+            "a: [1, [2, [3]]]\n",
+            "a: [[1, 2] 3]\n",
+            "a: [[1, 2]\n",
+            "a: [[1, {x: 1}]]\n",
             "a: 1\na: 2\n",
             "just text\n",
             "a: {x: 1}\n",
@@ -55,6 +58,18 @@ class YamlMiniTest(unittest.TestCase):
         ):
             with self.assertRaises(YamlSubsetError, msg=bad):
                 loads(bad)
+
+    def test_one_level_of_nested_lists(self):
+        text = "polygon: [[1.0, -1.0], [3.0, -1.0], [3, 1.5]]  # m\nframe: places/kitchen\n"
+        d = loads(text, nested_keys=("polygon",))
+        self.assertEqual(d["polygon"], [[1.0, -1.0], [3.0, -1.0], [3, 1.5]])
+        self.assertEqual(loads(dumps(d), nested_keys=("polygon",)), d)
+        self.assertEqual(dumps({"p": [[1.0, 2.0], []]}), "p: [[1.0, 2.0], []]\n")
+        for bad in ("polygon: [x [1, 2]]\n", "aliases: [[a]]\n"):
+            with self.assertRaises(YamlSubsetError, msg=bad):
+                loads(bad, nested_keys=("polygon",))
+        with self.assertRaises(YamlSubsetError):
+            loads(text)
 
     def test_round_trip(self):
         d = {

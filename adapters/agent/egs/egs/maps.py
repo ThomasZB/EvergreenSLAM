@@ -16,6 +16,7 @@ def cmd_ls(ctx, args):
     for m in j.get("maps") or []:
         ctx.print("%s %s" % ("*" if m.get("current") else " ", m.get("name")))
     ctx.print("root %s" % j.get("map_root"))
+    ctx.result(j)
     return EXIT_OK
 
 

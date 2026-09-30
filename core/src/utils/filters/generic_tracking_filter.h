@@ -48,6 +48,7 @@ class GenericTrackingFilter {
   void Update(const Measurement& m, bool from_history = false);
 
   bool empty() const { return state_history_.empty(); }
+  const State& current_state() const { return current_state_; }
 
  private:
   bool Predict(common::Time time);

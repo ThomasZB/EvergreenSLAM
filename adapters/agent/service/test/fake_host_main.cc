@@ -33,6 +33,9 @@ using lifelong::testing::LoopRoom;
 using lifelong::testing::SimulateScan;
 using lifelong::testing::TestTime;
 
+// No real frontend runs here; a healthy-looking constant for egs to print.
+constexpr double kFakeMatchScore = 0.8;
+
 struct Flags {
   int port = 0;
   std::string map_dir;
@@ -86,7 +89,8 @@ int Run(const Flags& flags) {
   for (int step = 0; step < num_steps; ++step) {
     frontend.Feed(step);
     backend.WaitUntilQuiescent();
-    host.Update(TestTime(step), odometry[step], SimulateScan(LoopRoom(), LoopGroundTruth(step)));
+    host.Update(TestTime(step), odometry[step], SimulateScan(LoopRoom(), LoopGroundTruth(step)),
+                kFakeMatchScore);
   }
 
   std::cout << "READY " << service.port() << std::endl;

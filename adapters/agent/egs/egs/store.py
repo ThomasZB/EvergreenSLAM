@@ -15,12 +15,13 @@ from .client import EXIT_REFUSED, EXIT_USAGE, EgsError, explain
 SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 PROCESS_OWNED_ROOT = ("index.tsv", "readme.md")
 NODE_FILES = ("place.yaml", "node.yaml")
+RESERVED_NAMES = ("skills", "attachments")
 
 
 def norm(path, memory_dir=None):
     """Normalises a user path to memory-relative form; raises on escapes."""
     if path is None or path.strip() == "" or "\0" in path:
-        raise EgsError(explain("path_escape", "empty path or NUL"), EXIT_USAGE)
+        raise EgsError(explain("path_escape", "empty path or NUL"), EXIT_USAGE, "path_escape")
     p = path.strip()
     if os.path.isabs(p) and memory_dir:
         real_mem = os.path.realpath(memory_dir)
@@ -28,10 +29,10 @@ def norm(path, memory_dir=None):
         if real_p == real_mem or real_p.startswith(real_mem + os.sep):
             p = os.path.relpath(real_p, real_mem)
     if os.path.isabs(p):
-        raise EgsError(explain("path_escape", path), EXIT_USAGE)
+        raise EgsError(explain("path_escape", path), EXIT_USAGE, "path_escape")
     p = posixpath.normpath(p.replace(os.sep, "/"))
     if p == ".." or p.startswith("../"):
-        raise EgsError(explain("path_escape", path), EXIT_USAGE)
+        raise EgsError(explain("path_escape", path), EXIT_USAGE, "path_escape")
     return p
 
 
@@ -43,9 +44,10 @@ def node_path(path, memory_dir=None):
             "paths are relative to memory/ and start with places/ (got %r; try places/%s)"
             % (path, p),
             EXIT_USAGE,
+            "bad_path",
         )
-    if "skills" in parts:
-        raise EgsError(explain("reserved_name", p), EXIT_USAGE)
+    if any(part in RESERVED_NAMES for part in parts):
+        raise EgsError(explain("reserved_name", p), EXIT_USAGE, "reserved_name")
     return p
 
 
@@ -66,11 +68,11 @@ def _holds_node_files(path):
 
 
 def _refuse(reason, detail):
-    raise EgsError(explain(reason, detail), EXIT_REFUSED)
+    raise EgsError(explain(reason, detail), EXIT_REFUSED, reason)
 
 
 def _bad(reason, detail):
-    raise EgsError(explain(reason, detail), EXIT_USAGE)
+    raise EgsError(explain(reason, detail), EXIT_USAGE, reason)
 
 
 class LocalStore:
@@ -91,13 +93,13 @@ class LocalStore:
             cur = os.path.join(cur, part)
             try:
                 if stat.S_ISLNK(os.lstat(cur).st_mode):
-                    raise EgsError(explain("symlink", rel), EXIT_USAGE)
+                    _bad("symlink", rel)
             except FileNotFoundError:
                 break
         real = os.path.realpath(self._abs(rel))
         real_root = os.path.realpath(self.root)
         if real != real_root and not real.startswith(real_root + os.sep):
-            raise EgsError(explain("path_escape", rel), EXIT_USAGE)
+            _bad("path_escape", rel)
         return self._abs(rel)
 
     def kind(self, rel):
@@ -174,7 +176,7 @@ class LocalStore:
         for part in rel.split("/"):
             cur = os.path.join(cur, part)
             if not os.path.isdir(cur) and not SLUG.match(part):
-                raise EgsError(explain("not_slug", part), EXIT_USAGE)
+                _bad("not_slug", part)
         try:
             os.makedirs(self._abs(rel), exist_ok=True)
         except OSError as e:
@@ -187,10 +189,13 @@ class LocalStore:
         if os.path.isfile(s) and (is_process_owned(src) or is_process_owned(dst)):
             _bad("owned_by_process", src)
         if os.path.isdir(s) and not SLUG.match(posixpath.basename(dst)):
-            raise EgsError(explain("not_slug", posixpath.basename(dst)), EXIT_USAGE)
-        # The scan skips skills/ subtrees: a place or thing moved there would silently vanish.
-        if "skills" in dst.split("/") and _holds_node_files(s):
-            _bad("reserved_name", "skills never holds place.yaml or node.yaml: %s -> %s" % (src, dst))
+            _bad("not_slug", posixpath.basename(dst))
+        # Scans skip skills/ and attachments/ subtrees: a place or thing moved there would vanish.
+        if any(c in RESERVED_NAMES for c in dst.split("/")) and _holds_node_files(s):
+            _bad(
+                "reserved_name",
+                "skills and attachments never hold place.yaml or node.yaml: %s -> %s" % (src, dst),
+            )
         if os.path.lexists(d):
             _refuse("exists", dst)
         try:
@@ -201,7 +206,7 @@ class LocalStore:
     def rm(self, rel, recursive=False):
         path = self._check(rel)
         if rel == ".":
-            raise EgsError(explain("path_escape", "refusing to remove memory/"), EXIT_USAGE)
+            _bad("path_escape", "refusing to remove memory/")
         if not os.path.lexists(path):
             _refuse("fs_error", "no such file or directory: " + rel)
         try:
@@ -229,8 +234,13 @@ class LocalStore:
                 last = i == len(entries) - 1
                 lines.append(prefix + ("└── " if last else "├── ") + name)
                 counts[0 if t == "dir" else 1] += 1
-                if t == "dir" and level < depth:
-                    walk(posixpath.join(r, name), prefix + ("    " if last else "│   "), level + 1)
+                if t != "dir":
+                    continue
+                child, child_prefix = posixpath.join(r, name), prefix + ("    " if last else "│   ")
+                if level < depth:
+                    walk(child, child_prefix, level + 1)
+                elif self.listdir(child):
+                    lines.append(child_prefix + "└── …")
 
         walk(rel, "", 1)
         lines.append("")
@@ -265,7 +275,7 @@ class RemoteStore:
             j = resp.json()
             code = EXIT_USAGE if resp.status == 400 else EXIT_REFUSED
             if resp.status == 200 or resp.status == 400:
-                raise EgsError(explain(j.get("reason"), j.get("detail")), code)
+                raise EgsError(explain(j.get("reason"), j.get("detail")), code, j.get("reason"))
         self.client.check(resp)
         raise EgsError("unexpected response from /fs", EXIT_USAGE)
 

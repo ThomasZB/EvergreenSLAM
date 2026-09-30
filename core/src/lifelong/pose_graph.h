@@ -43,6 +43,19 @@ namespace evergreenslam::lifelong {
 
 class PoseGraph : public TrimmingHandle, public ConstraintHandle, public SessionHandle {
  public:
+  struct DropFedSessionResult {
+    enum class Refusal { NONE, NOT_FED, FREEZING };
+    // Set exactly when refusal == NONE.
+    std::optional<SessionId> fed_now;
+    Refusal refusal = Refusal::NONE;
+  };
+  struct SaveAnchorResult {
+    enum class Refusal { NONE, NO_KEYFRAME, NODE_GONE, NOT_PERSISTED, OFFSET_NOT_FREE };
+    // Empty exactly when refused: an anchor that did not reach disk may be reissued after a kill.
+    std::optional<Anchor> anchor;
+    Refusal refusal = Refusal::NONE;
+  };
+
   explicit PoseGraph(const PoseGraphOption& option = PoseGraphOption(),
                      const std::string& map_directory = "");
   ~PoseGraph();
@@ -52,16 +65,12 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void AddInsertionResult(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
   void Finish();
 
-  // Both return at once: the search is an ordinary backend loop-closure job, the pose only its
-  // prior. A hint sent before the first keyframe waits for it; a newer hint replaces it.
   void SetInitialPose(const Eigen::Affine2d& global_pose);
   void RelocalizeGlobally();
 
   void WaitUntilQuiescent();
 
-  // Runs on the backend task and skips unfinished submaps, still written by the frontend thread.
   mapping::GridMapu8 AssembleGlobalMap();
-  // Non-blocking variant: enqueues the assembly as a task and delivers the result via callback.
   void AssembleGlobalMapAsync(std::function<void(mapping::GridMapu8)> callback);
 
   std::optional<Eigen::Affine2d> ActiveSessionToGlobal() const;
@@ -80,9 +89,6 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
   void Optimize();
   void OptimizeOnTask();
-  // Solves when the node cadence is due and returns whether it did, which is also whether trim
-  // and checkpoint are due. Closures never solve here, or a loop-rich stretch would solve and
-  // trim on every keyframe. Backend task only.
   bool SolveAtBatchEnd();
 
   void FreezeSession(SessionId id) override;
@@ -91,16 +97,18 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   // The freeze sequence on demand, verdict or not; returns at once.
   void FreezeFedSession(std::optional<SessionId> expected = std::nullopt);
 
+  // Removes the fed session and opens a fresh one at identity.
+  DropFedSessionResult DropFedSession(SessionId id);
+  DropFedSessionResult DropFedSessionOnTask(SessionId id);
+
   // Backend task only, like every anchor read: the hooks rebind anchors on the queue.
   const AnchorStore& anchors() const { return anchor_store_; }
   std::optional<NodeId> last_ingested_node() const;
-  struct SaveAnchorResult {
-    enum class Refusal { NONE, NO_KEYFRAME, NODE_GONE, NOT_PERSISTED };
-    // Empty exactly when refused: an anchor that did not reach disk may be reissued after a kill.
-    std::optional<Anchor> anchor;
-    Refusal refusal = Refusal::NONE;
-  };
-  SaveAnchorResult SaveAnchorOnTask(bool keep_scan, std::optional<AnchorId> rebind = std::nullopt);
+
+  // A non-zero offset must land on known free space in the submap the anchor binds to.
+  SaveAnchorResult SaveAnchorOnTask(
+      bool keep_scan, std::optional<AnchorId> rebind = std::nullopt,
+      const Eigen::Affine2d& node_from_anchor = Eigen::Affine2d::Identity());
   // Whether the checkpoint landed; true without a map directory.
   bool CheckpointOnTask();
   SessionId boot_first_session() const { return boot_first_session_; }
@@ -125,6 +133,9 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
  private:
   class SessionAlignmentObserver;
+  struct PendingRelocalization {
+    std::optional<Eigen::Affine2d> prior;
+  };
 
   void HandleInsertionResult(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
   void HandleConstraint(const Constraint& constraint);
@@ -161,12 +172,9 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   std::set<int> retired_local_indices_;
   NodeId last_ingested_node_;
   int last_ingested_node_index_ = -1;
-  // Caller-thread state, keyed by local_index.
+  // Caller-thread state, keyed by local_index; the drop task clears it while the caller waits.
   std::map<int, std::shared_ptr<const mapping::Submap>> watched_submaps_;
   // Backend-task state.
-  struct PendingRelocalization {
-    std::optional<Eigen::Affine2d> prior;
-  };
   std::optional<PendingRelocalization> pending_relocalization_;
   // The only solve trigger; freeze and first-anchoring solves neither reset nor shift it.
   int nodes_since_cadence_ = 0;

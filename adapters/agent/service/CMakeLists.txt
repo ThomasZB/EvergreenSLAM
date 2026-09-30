@@ -19,6 +19,7 @@ add_library(evergreenslam_agent STATIC
             here_tracker.cc
             http_reply.cc
             json_writer.cc
+            match_score_average.cc
             map_endpoints.cc
             maps_endpoints.cc
             place_endpoints.cc
@@ -27,6 +28,8 @@ add_library(evergreenslam_agent STATIC
             service_context.cc
             session_endpoints.cc
             snapshot_exporter.cc
+            zone_store.cc
+            zones_endpoints.cc
             "${CMAKE_CURRENT_BINARY_DIR}/memory_readme.cc")
 # Includes read "service/agent_service.h", relative to adapters/agent.
 target_include_directories(evergreenslam_agent PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")

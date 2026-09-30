@@ -37,7 +37,8 @@ const char* ToString(OrphanReason reason);
 struct Anchor {
   AnchorId id = 0;
   SubmapId submap_id;
-  // T_rel = graph.submap(s).global_pose.inverse() * graph.node(n).global_pose, optimized poses.
+  // T_rel = graph.submap(s).global_pose.inverse() * graph.node(n).global_pose * node_from_anchor,
+  // optimized poses; node_from_anchor is the save's offset, identity without one.
   Eigen::Affine2d submap_from_anchor = Eigen::Affine2d::Identity();
   // Evidence only, never used to resolve: nodes are trimmed while their submap survives.
   NodeId node_id;
@@ -45,7 +46,7 @@ struct Anchor {
   common::Time saved_at;
   AnchorState state = AnchorState::BOUND;
   OrphanReason orphan_reason = OrphanReason::NONE;
-  // The keyframe's cloud in the anchor frame (= the node frame); raw material for a later align.
+  // The keyframe's cloud in the anchor frame; raw material for a later align.
   std::optional<sensor::PointCloud> scan;
 };
 
@@ -73,9 +74,14 @@ class AnchorStore {
  public:
   AnchorStore() = default;
 
-  std::optional<Anchor> Save(const PoseGraphData& graph, const NodeId& node, bool keep_scan);
-  std::optional<Anchor> Rebind(const PoseGraphData& graph, AnchorId id, const NodeId& node,
-                               bool keep_scan);
+  // The anchor sits at node pose * node_from_anchor, bound to BindingSubmap(graph, node).
+  std::optional<Anchor> Save(const PoseGraphData& graph, const NodeId& node, bool keep_scan,
+                             const Eigen::Affine2d& node_from_anchor = Eigen::Affine2d::Identity());
+  std::optional<Anchor> Rebind(
+      const PoseGraphData& graph, AnchorId id, const NodeId& node, bool keep_scan,
+      const Eigen::Affine2d& node_from_anchor = Eigen::Affine2d::Identity());
+  // The oldest submap holding `node`; empty when the node is gone or belongs to no submap.
+  static std::optional<SubmapId> BindingSubmap(const PoseGraphData& graph, const NodeId& node);
 
   // Rollback of a Save or Rebind that never reached disk. Both bump revision(); next_id stays a
   // high-water mark, so an erased id is never issued again.

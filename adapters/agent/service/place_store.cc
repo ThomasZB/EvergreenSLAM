@@ -70,7 +70,7 @@ PlaceScan PlaceStore::Scan() const {
       continue;
     }
     if (entry.is_directory(status_error)) {
-      if (entry.path().filename() == "skills") {
+      if (FsSandbox::IsReservedName(entry.path().filename().string())) {
         it.disable_recursion_pending();
       }
       continue;
@@ -164,8 +164,8 @@ void PlaceStore::CheckNodePath(const std::string& node_path) {
     if (component == "..") {
       throw RequestError("path_escape", "'..' in path: " + node_path);
     }
-    if (component == "skills") {
-      throw RequestError("reserved_name", "skills is never a place: " + node_path);
+    if (FsSandbox::IsReservedName(component)) {
+      throw RequestError("reserved_name", component + " is never a place: " + node_path);
     }
     if (!FsSandbox::IsSlug(component)) {
       throw RequestError("not_slug", "directory names match [a-z0-9][a-z0-9_-]*: " + node_path);

@@ -1,13 +1,16 @@
 /**
  * @file session_endpoints.cc
  * @author hang chen (chen@hang.plus)
- * @brief /status, /sessions with plan -> apply for freeze and rm, /relocalize and /checkpoint.
+ * @brief /status, /sessions with plan -> apply for freeze and rm (the fed session through the
+ * host's drop hook), /relocalize and /checkpoint.
  * @version 0.1
  * @date 2026-09-24
  *
  * @copyright Copyright (c) 2026
  *
  */
+
+#include <glog/logging.h>
 
 #include <optional>
 #include <string>
@@ -53,8 +56,12 @@ PlanReport PlanFreezeOnTask(PoseGraph& pose_graph, bool force, lifelong::FreezeV
   return report;
 }
 
-// Backend task, read-only.
-PlanReport PlanRemoveOnTask(const PoseGraph& pose_graph, SessionId id) {
+constexpr char kDropsFedNote[] =
+    "this is the session being mapped now: it is replaced by a fresh one; the robot's pose is lost";
+
+// Backend task, read-only. The fed session goes through the host, which owns the frontend.
+PlanReport PlanRemoveOnTask(const PoseGraph& pose_graph, SessionId id,
+                            const ServiceContext& context) {
   PlanReport report;
   report.op = "rm";
   report.sessions_affected = {id};
@@ -70,10 +77,17 @@ PlanReport PlanRemoveOnTask(const PoseGraph& pose_graph, SessionId id) {
     return report;
   }
   if (pose_graph.session_manager().fed_session() == id) {
-    report.rejection = "fed_session";
-    return report;
-  }
-  if (graph.session(id).frozen()) {
+    if (context.hooks.drop_session == nullptr) {
+      report.rejection = "not_supported";
+      return report;
+    }
+    if (context.switch_pending.load()) {
+      report.rejection = "switching";
+      return report;
+    }
+    report.drops_fed = true;
+    report.note = kDropsFedNote;
+  } else if (graph.session(id).frozen()) {
     report.rejection = "frozen_session";
     return report;
   }
@@ -122,11 +136,13 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
     int num_anchors = 0;
     int num_orphans = 0;
     int num_solves = 0;
+    std::optional<ScanMatch> scan_match;
   };
   PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
     Reading result;
     const lifelong::PoseGraphData& graph = pose_graph.graph();
+    result.scan_match = ReadRobotOnTask(pose_graph, context.hooks).scan_match;
     const SessionId fed = *pose_graph.session_manager().fed_session();
     result.boot_count = pose_graph.map_manager()->boot_count();
     result.fed = fed.session_index;
@@ -151,8 +167,9 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
                                                      : std::optional<std::string>(context.map_name))
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base)
-      .Field("phase", reading.phase)
-      .Field("closures_delta", closures_delta)
+      .Field("phase", reading.phase);
+  WriteScanMatch(writer, reading.scan_match);
+  writer.Field("closures_delta", closures_delta)
       .Field("num_anchors", reading.num_anchors)
       .Field("num_orphans", reading.num_orphans)
       .Field("num_place_files", scan.num_place_files)
@@ -240,8 +257,14 @@ void HandleFreezePlan(ServiceContext& context, const httplib::Request& request,
   const bool force = BoolParam(request, "force", false);
   PoseGraph& pose_graph = context.pose_graph;
   lifelong::FreezeVerdict verdict;
-  const PlanReport report =
-      RunOnBackend(pose_graph, [&] { return PlanFreezeOnTask(pose_graph, force, verdict); });
+  const PlanReport report = RunOnBackend(pose_graph, [&] {
+    PlanReport result = PlanFreezeOnTask(pose_graph, force, verdict);
+    // A switch would answer the old map.
+    if (context.switch_pending.load()) {
+      result.rejection = "switching";
+    }
+    return result;
+  });
   SendPlan(response, report, verdict);
 }
 
@@ -261,7 +284,9 @@ void HandleFreezeApply(ServiceContext& context, const httplib::Request& request,
     Outcome result;
     result.fed = report.sessions_affected.front();
     result.num_solves = report.at_num_solves;
-    if (report.rejection.has_value() || report.Token() != token) {
+    if (context.switch_pending.load()) {
+      result.refusal = "switching";
+    } else if (report.rejection.has_value() || report.Token() != token) {
       result.refusal = "plan_changed";
       return result;
     }
@@ -286,43 +311,66 @@ void HandleRemovePlan(ServiceContext& context, const httplib::Request& request,
   const SessionId id = SessionParam(request);
   PoseGraph& pose_graph = context.pose_graph;
   const PlanReport report =
-      RunOnBackend(pose_graph, [&] { return PlanRemoveOnTask(pose_graph, id); });
+      RunOnBackend(pose_graph, [&] { return PlanRemoveOnTask(pose_graph, id, context); });
   SendPlan(response, report, std::nullopt);
 }
 
 void HandleRemoveApply(ServiceContext& context, const httplib::Request& request,
                        httplib::Response& response) {
+  using Refusal = PoseGraph::DropFedSessionResult::Refusal;
   const SessionId id = SessionParam(request);
   const std::string token = RequiredParam(request, "plan_token");
   PoseGraph& pose_graph = context.pose_graph;
   struct Outcome {
     std::optional<std::string> refusal;
     PlanReport report;
+    SessionId fed;
     int num_solves = 0;
   };
-  const Outcome outcome = RunOnBackend(pose_graph, [&] {
+  Outcome outcome = RunOnBackend(pose_graph, [&] {
     Outcome result;
-    result.report = PlanRemoveOnTask(pose_graph, id);
-    if (result.report.rejection.has_value() || result.report.Token() != token) {
+    result.report = PlanRemoveOnTask(pose_graph, id, context);
+    if (result.report.rejection == "switching") {
+      result.refusal = "switching";
+    } else if (result.report.rejection.has_value() || result.report.Token() != token) {
       result.refusal = "plan_changed";
-    } else {
+    } else if (!result.report.drops_fed) {
       pose_graph.RemoveSession(id);
       pose_graph.RepublishActiveSessionToGlobal();
     }
+    result.fed = *pose_graph.session_manager().fed_session();
     result.num_solves = NumSolves(pose_graph);
     return result;
   });
+  const bool drops_fed = !outcome.refusal.has_value() && outcome.report.drops_fed;
+  // On the worker thread, never inside a task: the host blocks its frontend and waits on the graph.
+  if (drops_fed) {
+    const PoseGraph::DropFedSessionResult dropped =
+        context.hooks.drop_session(SessionDropRequest{id});
+    if (dropped.refusal == Refusal::NOT_FED) {
+      outcome.refusal = "session_changed";
+    } else if (dropped.refusal == Refusal::FREEZING) {
+      outcome.refusal = "freezing";
+    } else {
+      CHECK(dropped.fed_now.has_value()) << "a drop hook returned success without the new fed id";
+      outcome.fed = *dropped.fed_now;
+    }
+    outcome.num_solves = RunOnBackend(pose_graph, [&] { return NumSolves(pose_graph); });
+  }
 
   JsonWriter writer = BeginReceipt(outcome.refusal);
   writer.Field("at_num_solves", outcome.num_solves);
   if (outcome.refusal.has_value()) {
     writer.NullField("removed").Key("anchors_orphaned").BeginArray().EndArray();
   } else {
-    writer.Field("removed", id.session_index).Key("anchors_orphaned").BeginArray();
+    writer.Field("removed", id.session_index)
+        .Field("fed_session", outcome.fed.session_index)
+        .Key("anchors_orphaned")
+        .BeginArray();
     for (const lifelong::AnchorId anchor : outcome.report.anchors_orphaned) {
       writer.Int(static_cast<int64_t>(anchor));
     }
-    writer.EndArray();
+    writer.EndArray().Field("pose_lost", drops_fed);
   }
   writer.EndObject();
   SendJson(response, writer);

@@ -18,8 +18,8 @@ auth: loopback and one agent session per map (proposal §6). `egs` is the only i
 - **Poses** are `{"x", "y", "theta"}` in the global frame (metres, radians CCW from +x). A submap id
   is `[session, index]`. Times are int64 Unix ns (`*_ns`); ages are seconds on the sensor clock.
 - **Node paths** are relative to `memory/` and start with `places/`, exactly what `find places …`
-  prints from `memory/`. **Directory** components match `[a-z0-9][a-z0-9_-]*` and `skills` is
-  never a node; file names are free except `/` and NUL.
+  prints from `memory/`. **Directory** components match `[a-z0-9][a-z0-9_-]*`; `skills` and
+  `attachments` are never nodes (`reserved_name`); file names are free except `/` and NUL.
 - **Anchor state** as agents see it (every `state` field, `places.json`, `index.tsv`), from the
   stored `AnchorState` and `ResolvedAnchor::frozen`: `pending` (BOUND, not frozen), `frozen`
   (BOUND or REBOUND, frozen), `rebound` (REBOUND, not frozen), `orphan`.
@@ -28,6 +28,8 @@ auth: loopback and one agent session per map (proposal §6). `egs` is the only i
 
 - Exactly one `PoseGraph::Enqueue` + promise/future per request; everything the answer needs is read
   in that task. The service waits without a timeout; `egs` gives up after 30 s ("outcome unknown").
+  One exception: `rm/apply` of the fed session runs its plan task, then the host's drop (one more
+  task, waited on from the worker thread), then a read-only task for `at_num_solves`.
 - Inside a task: only the free `lifelong::AssembleGlobalMap(graph, 0.0, /*only_finished=*/true[,
   session])`, never the blocking member (it would wait on its own queue); unfinished submaps are
   being written by the frontend thread.
@@ -47,10 +49,14 @@ auth: loopback and one agent session per map (proposal §6). `egs` is the only i
 | 503 | task endpoint before `OnBackendStarted()` (an atomic), or after `Stop()` began | same, `reason: "not_started"` |
 
 Refusal codes: `unknown_anchor`, `unresolvable` (orphan anchor), `no_keyframe`, `node_gone`,
-`not_persisted` (the commit did not reach disk; nothing was saved),
-`fs_error`, `no_binding`, `no_robot_pose`, `unknown_session`, `freezing`, `fed_session`, `frozen_session`,
+`not_persisted` (the commit did not reach disk; nothing was saved), `offset_too_far`,
+`offset_not_free`,
+`fs_error`, `no_binding`, `no_robot_pose`, `unknown_session`, `freezing`, `frozen_session`,
 `plan_changed`, `exists`, `not_empty`, `unknown_map`, `not_supported` (the host has no map root or
-cannot switch maps), `switching` (a map switch this service accepted has not landed yet), plus freeze rejections verbatim as `ToString(FreezeRejection)`
+cannot switch maps or drop the fed session), `switching` (a map switch this service accepted has
+not landed yet; freeze plan/apply, a fed-session rm and `place/save` refuse it too),
+`session_changed` (a fed-session drop found another session fed: a freeze rotated it between plan
+and apply), plus freeze rejections verbatim as `ToString(FreezeRejection)`
 returns them (`not anchored`, `no finished submap`, …; no mapping, `egs` matches these). 400:
 `bad_param`, `path_escape`, `symlink`, `not_slug`, `reserved_name`, `owned_by_process`,
 `too_many_layers`, `unknown_layer`, `too_large`.
@@ -65,11 +71,16 @@ struct StampedPose {
 struct HostFrame {
   StampedPose pose;          // builder_->local_pose()
   sensor::PointCloud scan;   // robot frame at that pose
+  double match_score = 0.0;      // MatchingResult::match_score of that scan
+  double match_score_avg = 0.0;  // MatchScoreAverage over the host's scans
 };
 struct MapSwitchRequest { std::string name; bool create = false; };
+struct SessionDropRequest { lifelong::SessionId id; };             // always the fed session
 struct AgentServiceHooks {
   std::function<std::optional<HostFrame>()> current_frame;         // pose and scan under one lock
   std::function<bool(const MapSwitchRequest&)> switch_map;         // empty: cannot switch
+  // empty: cannot drop the fed one
+  std::function<PoseGraph::DropFedSessionResult(const SessionDropRequest&)> drop_session;
 };
 struct AgentServiceOption {
   std::string bind = "127.0.0.1";
@@ -87,7 +98,7 @@ void Stop();              // stops the server and joins its threads
   creates `memory/places/`, installs `memory/README.md` (`memory_README.md` compiled in; rewritten
   each start) and listens; task endpoints answer 503 until the host calls `OnBackendStarted()`
   after `PoseGraph::Start`. The host calls `Stop()` **before** `PoseGraph::Finish()`. The host may
-  rebuild the service after `switch_map`: the port closes and reopens on the new map.
+  rebuild the service after `switch_map`: the port closes and reopens.
 - **One worker**: `new_task_queue = [] { return new httplib::ThreadPool(1); }`, so service-side
   state (`here` hysteresis, `closures_delta` baseline, sequence numbers) is single-threaded.
 - **Two hook kinds.** `switch_map` runs on the worker thread, never inside a task: it records the
@@ -95,24 +106,45 @@ void Stop();              // stops the server and joins its threads
   its own thread, stops this service, finishes the graph, and boots the named map with a new
   frontend, `PoseGraph`, graph publisher and service, and clears the webui's graph, submap
   textures and trajectory (open pages reload). The laser extrinsic and tf state carry over.
-- **`current_frame`** runs **inside the task** and takes only the host's own mutex. Both ways: hooks never
-  enqueue or wait on the `PoseGraph`, and the host never holds its pose/scan mutex across any
+  `drop_session` is the other kind: it runs on the worker thread outside any task and answers
+  synchronously. The host blocks its frontend (no scan reaches the builder or the graph), calls
+  `PoseGraph::DropFedSession(id)`, and on success replaces the `LocalTrajectoryBuilder` with a
+  fresh one (and clears the webui) before unblocking; it returns the `DropFedSessionResult`. The
+  process, the port and this service stay. `DropFedSession` runs one backend task: refusals
+  `NOT_FED` (another session is fed) and `FREEZING` (a freeze sequence is queued) change nothing;
+  otherwise a fresh fed session is minted (id = dropped + 1, identity alignment, no submaps, not
+  anchored; committed first, so a kill before the second commit keeps the dropped session on
+  disk), then `RemoveSession(dropped)` (graph, Problem, anchors → `ORPHAN(SESSION_REMOVED)`, one
+  commit), the constraint builder's caches are swept and the ingest bookkeeping restarts at node
+  index 0. The robot's pose is unknown until `init-pose` or `relocalize`: `ActiveSessionToGlobal()`
+  is empty until the new frontend's first keyframe, and identity after it. `last_pose.pb` still
+  names a node of the dropped session until that keyframe overwrites it; a boot ignores a last pose
+  whose session is gone. After a drop the next boot seeds from the newest floating session with
+  nodes, exactly as any boot does.
+- **`current_frame`** runs **inside the task** and takes only the host's own mutex. Both ways:
+  `current_frame` and `switch_map` never enqueue or wait on the `PoseGraph` (`drop_session` waits,
+  from the worker thread outside any task), and the host never holds its pose/scan mutex across any
   `PoseGraph` call (it updates by copy under the lock). Empty hook or nullopt → the fields are `null`.
   Pose and scan come from one call: two calls could straddle a scan-thread update and draw scan
   k+1 at pose k.
+- **Scan-match score**: the host sets `match_score` from each `AddScan` result (a scan the builder
+  drops keeps the previous frame's score) and `match_score_avg` from `MatchScoreAverage`
+  (`service/match_score_average.h`), sampled per scan under its own mutex, not per request:
+  `avg += (1 - exp(-dt / 2 s)) * (score - avg)`, seeded by the first scan.
 - Robot pose = `ComputeSessionToGlobal(fed)` (nullopt → `graph.session(fed).local_to_global`, as
   `pose_graph.cc` does) `* local_pose`, in the same task, never via `ActiveSessionToGlobal()`.
 
 ## Endpoints
 
-`here`, `status`, `where`, `snapshot`, `view`, `session ls` read; everything else mutates.
+`here`, `status`, `where`, `snapshot`, `view`, `zones`, `session ls` read; everything else
+mutates.
 
 **GET /root** — no task. `→ {ok, map_dir, memory_dir, map_root, map}` (absolute paths);
 `map_root` and `map` are `null` when the host named no map root.
 
 **GET /status** — task. `→ {ok, at_num_solves, boot_count, fed_session, map (name|null), has_frozen_base,
-aligned_to_base, phase, closures_delta, num_anchors, num_orphans, num_place_files,
-duplicate_anchor_paths: [path]}`. `has_frozen_base` = any `graph.sessions()` entry frozen;
+aligned_to_base, phase, scan_match, closures_delta, num_anchors, num_orphans, num_place_files,
+duplicate_anchor_paths: [path]}`. `scan_match` as in `/here`. `has_frozen_base` = any `graph.sessions()` entry frozen;
 `aligned_to_base` = `HasFrozenLink(graph, fed)`; `phase` from `expansion().find(fed)`, absent →
 `BOOTSTRAP`; `closures_delta` = `constraint_builder().num_constraints_added()` since the previous
 `/status`. Two `place.yaml` naming one anchor (a `cp -r`) are listed and ignored by `here`.
@@ -120,33 +152,62 @@ duplicate_anchor_paths: [path]}`. `has_frozen_base` = any `graph.sessions()` ent
 **GET /here** — task. The service scans `memory/places/**/place.yaml` (skipping `skills/` and
 symlinks), then one task reads `current_frame` and `ResolveAll`.
 `→ {ok, at_num_solves, robot: pose|null, keyframe_age_s|null, has_frozen_base, aligned_to_base,
-current: {path, anchor, dist_m}|null, closest: [{path, anchor, dist_m, state}]}` — `closest` is the
+scan_match: {score, avg}|null, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
+dist_m, state}]}` — `closest` is the
 top 2 non-orphan referenced anchors by straight-line distance. `current` = nearest within 2.5 m;
 once current, a place stays current until 3.75 m. `keyframe_age_s` = robot stamp − newest node time.
 `has_frozen_base` / `aligned_to_base` as in `/status`, read in the same task: with a frozen base but
 no link to it, the robot pose is in the fed session's own frame and `current` / `closest` compare it
-with frozen anchors in another frame (`egs here` says so on its first line).
+with frozen anchors in another frame (`egs here` says so on its first line). `scan_match` comes from
+the same `current_frame` call as `robot` (`null` with it): `score` is the frontend's match score of
+the newest scan, the mean occupancy probability of its points in the active local submap (0..1),
+and `avg` its ~2 s average. It measures agreement with the **local** map only, so it can stay high
+while the global pose is wrong; `aligned_to_base` remains the global signal. Measured on the
+`museum_b2` replay (333 `egs here` reads): `score` 0.58–0.79 (5th–95th percentile, median 0.72);
+`avg` starts low for a few seconds, since the first scans have no map to match (score 0).
 
-**POST /place/save** — task, mutating. `{path, scan: true}`. Path rules first (400), then the
+**POST /place/save** — task, mutating. `{path, scan: true, offset?}`. `offset=dx,dy,dtheta`
+(m, rad; robot frame, x forward, y left, as `egs observe --offset`) binds the place to that pose
+instead of the robot's (the host's current pose, composed onto the last keyframe; dtheta wrapped to
+(-π, π], echoed wrapped); malformed → 400 `bad_param`. Path rules first (400), then the
 service reads any existing `<path>/place.yaml`. Task: `last_ingested_node()` empty → `no_keyframe`;
+`hypot(dx, dy) > 3` → `offset_too_far` (the service's policy; a well-formed request, so 200);
 an id from that file that `anchors().Get` knows is **rebound in place** (`SaveAnchorOnTask(scan,
 id)`: `place.yaml` untouched, children's `offset_from` stays valid), else `SaveAnchorOnTask(scan)`
 mints one. A path whose id another `place.yaml` also names (a `cp -r`, listed by `/status`) always
 mints: rebinding would move the other place too, and a fresh id ends the duplicate while the
-other path keeps its id. `SaveAnchorResult::Refusal` maps to `no_keyframe`, `node_gone` or
-`not_persisted` (the commit failed: the table is rolled back, so a rebound place keeps its old
+other path keeps its id. `SaveAnchorResult::Refusal` maps to `no_keyframe`, `node_gone`,
+`offset_not_free` (the target cell is not known free space, probability < 0.5, in the submap the
+anchor binds to; unknown counts as not free) or `not_persisted` (the commit failed: the table is rolled back, so a rebound place keeps its old
 binding, and no id is returned and no `place.yaml` written). For a new id the service thread then does
 `mkdir -p <path>` and writes `place.yaml` = `anchor: <id>\n` atomically; failure → `fs_error`, `anchor` still returned (a
 kill there too leaves an unreferenced anchor, never a dangling file). `→ {ok, reason,
-at_num_solves, anchor, submap_id, state, keyframe_age_s, rebound_existing: bool}`.
+at_num_solves, anchor, submap_id, state, keyframe_age_s, rebound_existing: bool, offset: [dx, dy,
+dtheta]|null}`.
 
 **GET /anchors/{id}[?robot=1]** — task; `egs where` (walk-up, `offset_from`, `precision`,
 `approach` are the CLI's job). `anchors().Resolve(graph, id)` `→ {ok, reason (unknown_anchor),
 at_num_solves, anchor, state, orphan_reason|null, pose|null, submap_id, saved_at_ns, robot?:
-pose|null}`; `robot=1` adds the robot pose from the same solve (`egs observe --offset`).
+pose|null, has_frozen_base?, aligned_to_base?}`; `robot=1` adds the robot pose and the two
+alignment flags (as in `/status`) from the same solve (`egs observe --offset`, `egs zone add`).
 
 **GET /anchors[?robot=1]** — task. `→ {ok, at_num_solves, robot?, anchors: [{anchor, state,
 orphan_reason, pose|null}]}`. **find** and **observe** are CLI only, on these two endpoints.
+
+**GET /zones** — task (read). The service scans `memory/places/**/zone.yaml` (skipping `skills/`
+and symlinks) and walks each up from its parent to the nearest `place.yaml` (a `place.yaml` in the
+zone's own directory is `holds_place`); one task resolves those anchors and applies each
+`global_pose` to every vertex. A walk that cannot read part of the tree (EACCES, a directory moved
+mid-walk) refuses `fs_error` with a `detail` instead of returning a shorter list.
+`→ {ok, at_num_solves, zones: [{path, kind, frame|null, frame_path|null, anchor|null,
+state|null, polygon, polygon_xy|null, reason|null}]}`, sorted by path. `frame` is the file's,
+`frame_path` the walk-up's; `polygon` is the anchor frame, `polygon_xy` the map frame. `reason`:
+`frame_mismatch` (the two differ; `polygon_xy` still resolves through `frame_path`), else why
+`polygon_xy` is null: `orphan`, `unknown_anchor` (`state: orphan`), `unknown_kind` (only
+`keepout` is used), `no_place`, `holds_place` (the directory also has `place.yaml`),
+`unreadable_place`, `bad_zone_file` (not `kind` + `polygon` of ≥ 3 `[x, y]`), `too_large` (over
+100 m wide or tall in the anchor frame; `egs zone add` refuses the same). `egs zone add|rm`
+write through the tree (or `/fs`), not through the service.
 
 **POST /snapshot** — task, then writes. One task copies out the assembled map, every node's `{time,
 global_pose, session}`, sessions, `ResolveAll`, robot pose, `boot_count`; the service thread writes
@@ -165,23 +226,27 @@ global_pose, session}`, sessions, `ResolveAll`, robot pose, `boot_count`; the se
 
 **GET /view** — task (read). Params: `preset` = `map|here|route|trail|session|custom`;
 `target=<path>` (route; must hold its own `place.yaml`); `session=<id>` (session; default fed);
-`layers=a,b,…` (custom, at most 4); `ego=<r>` (optional crop radius in m, `egs --ego` sends 7.5).
+`layers=a,b,…` (custom, at most 4); `ego=<r>` (optional crop radius in m; `egs --ego` and `egs view here` send 7.5, `--full` none).
 
 | preset | layers |
 |---|---|
-| `map` | map, places |
-| `here` | map, robot, scan |
-| `route` | map, robot, target, places (no path line: routing is the navigator's) |
+| `map` | map, places, zones |
+| `here` | map, robot, scan, zones |
+| `route` | map, robot, target, places, zones (no path line: routing is the navigator's) |
 | `trail` | map, trail, robot |
 | `session` | session=<id>, trail (that session's nodes) |
 
 Layers: `map` (trinary grid), `robot`, `scan` (the `current_frame` scan at that frame's robot pose), `trail` (nodes of
 sessions from `PoseGraph::boot_first_session()` on), `places` (numbered badges with leader lines),
-`target=<path>` (one highlighted `T` badge; not numbered again under `places`), `session=<id>` (`AssembleGlobalMap(graph, 0.0, true, id)`), `submaps` (outlines).
+`target=<path>` (one highlighted `T` badge; not numbered again under `places`), `session=<id>` (`AssembleGlobalMap(graph, 0.0, true, id)`), `submaps` (outlines),
+`zones` (hatched keep-out polygons as `/zones` resolves them, no label; the legend adds `zones: 2
+keepout[, 1 unresolvable][, incomplete (...)]`, the last when the zone walk was partial).
 One task reads everything drawn; the service thread renders (5×7 bitmap font, `stb_image_write`):
-north-up, grid 1/2/5 m labelled every 5 m, scale bar, long side ≤ 1024 px, also saved as
+north-up, grid 1/2/5 m labelled every 5 m, scale bar, long side ≤ 1024 px (a smaller view is
+upscaled to `clamp(floor(1024 / cells), 1, 4)` px per cell; glyphs, text and grid keep their pixel
+sizes; a badge never covers the robot glyph), also saved as
 `<map_dir>/views/NNNNNN_<preset>.png`. `→ image/png` with headers `X-EGS-Layers` (the equivalent
-`custom --layers`), `X-EGS-Legend` (`1 places/dock 3.2m; 2 places/kitchen 5.1m`), `X-EGS-View`
+`custom --layers`; a preset's list may exceed custom's 4, e.g. `route`), `X-EGS-Legend` (`1 places/dock 3.2m; 2 places/kitchen 5.1m`), `X-EGS-View`
 (relative to `map_dir`, e.g. `views/000005_map.png`),
 `X-EGS-Solve`. JSON refusals: `no_binding`, `unresolvable` (target), `no_robot_pose` (`ego` only;
 otherwise robot and scan layers drop, noted in the legend), 400 `too_many_layers`, `unknown_layer`.
@@ -231,13 +296,21 @@ frozen_session, pending: true}`; `egs` polls `GET /sessions` (≤ 10 s) until it
 
 **POST /sessions/rm/plan** `{id}` — task, read-only. Rejections: `unknown_session`, `freezing`
 (a freeze sequence is queued; its tasks assume every session they name outlives them: retry),
-`fed_session`, `frozen_session` (only floating sessions go). `would_delete` = the session's submaps,
-`sessions_affected = [id]`, `anchors_orphaned` = live anchors bound there.
+`frozen_session`, and for the fed session `not_supported` (no `drop_session` hook) or `switching`.
+`would_delete` = the session's submaps, `sessions_affected = [id]`, `anchors_orphaned` = live
+anchors bound there. `drops_fed` is true exactly for the fed session, with `note: "this is the
+session being mapped now: it is replaced by a fresh one; the robot's pose is lost"`.
 
 **POST /sessions/rm/apply** `{id, plan_token}` — task, mutating. Re-plan, then `RemoveSession(id)`
 (graph, Problem, `OnSessionRemoved`, then one `MapManager` commit of the files and anchors), then
 `RepublishActiveSessionToGlobal()`.
-`→ {ok, reason, at_num_solves, removed, anchors_orphaned}`.
+`→ {ok, reason, at_num_solves, removed, fed_session, anchors_orphaned, pose_lost: false}`. For the
+fed session (`drops_fed`) the task changes nothing; after it, on the worker thread,
+`drop_session({id})`: `NOT_FED` → `session_changed`, `FREEZING` → `freezing`, else `{ok,
+at_num_solves, removed, fed_session: <the new one>, anchors_orphaned: <the plan's>, pose_lost:
+true}`, `at_num_solves` read after the drop. Synchronous: nothing is pending and nothing is refused
+as `switching` afterwards. A refusal answers `{ok: false, reason, at_num_solves, removed: null,
+anchors_orphaned: []}`.
 
 ### Maps (no task)
 
@@ -275,9 +348,9 @@ For agents without the directory. Paths relative to `memory/`. Dumb on purpose: 
 - Rejected (400): absolute or empty paths, `..`, NUL, any existing symlink component (`lstat`
   each), a result outside `memory/` after `realpath`; `not_slug` on every component of a `mkdir`
   path and on the new name of a directory `mv`. `reserved_name`: an `mv` whose `to` has a
-  `skills` component while `from` is, or holds anywhere below it, a `place.yaml` or `node.yaml`
-  (the scan skips `skills/` subtrees, so the place would vanish). `mkdir .../skills/<name>` and
-  moving skill directories stay legal.
+  `skills` or `attachments` component while `from` is, or holds anywhere below it, a `place.yaml`
+  or `node.yaml` (the scans skip those subtrees, so the place would vanish). `mkdir
+  .../skills/<name>` and moving skill directories stay legal.
 - Process-owned (400 `owned_by_process`): any `place.yaml`, `memory/index.tsv`, `memory/README.md`
   cannot be written, appended, moved or removed as files. Moving or `rm -r` of a directory that
   contains them is allowed: that is how a place is renamed or deleted.
@@ -285,7 +358,7 @@ For agents without the directory. Paths relative to `memory/`. Dumb on purpose: 
 | call | params | effect / response |
 |---|---|---|
 | `GET /fs/ls` | `path` | `{ok, entries: [{name, type: dir|file, size}]}`, sorted |
-| `GET /fs/tree` | `path, depth=2` (≤ 6) | `text/plain`, like `tree -L depth` |
+| `GET /fs/tree` | `path, depth=3` (≤ 6) | `text/plain`, like `tree -L depth`; a non-empty directory cut off by the depth gets one `└── …` child line (not counted) |
 | `GET /fs/cat` | `path` | raw bytes; missing → 404 `not_found`; not a file → `fs_error`; > 1 MiB → `too_large` |
 | `POST /fs/write` | `path`, body | temp + rename (`WriteFileAtomically`); parent must exist |
 | `POST /fs/append` | `path`, body | `open(O_WRONLY\|O_APPEND\|O_CREAT)`, one `write()` |
@@ -327,7 +400,10 @@ persists both.
 runs, on a fresh directory with an empty table; a damaged directory never gets this far. The
 anchors file is never rewritten with a lower `next_id` than the one read.
 
-**SaveAnchorOnTask(keep_scan, rebind)** = `Save` (or `Rebind`) on `last_ingested_node_` (valid
+**SaveAnchorOnTask(keep_scan, rebind, node_from_anchor)** = `Save` (or `Rebind`) on
+`last_ingested_node_`, at `node pose * node_from_anchor` (default identity; a non-zero translation
+must land on known free space in `AnchorStore::BindingSubmap(node)`, read via `SnapshotCopy`, else
+`OFFSET_NOT_FREE` before the table is touched; the stored scan is in the anchor frame) (valid
 right after a rotation too; `NO_KEYFRAME` when `last_ingested_node_index_ < 0`, since the graph's
 newest node may be a previous boot's) → `CheckpointFedSession()`, whose commit carries the new
 table: a returned anchor survives a kill. A failed commit returns `NOT_PERSISTED` and no anchor,
@@ -338,11 +414,19 @@ new row); `next_id` stays past the refused id, which is never issued.
 
 - `PoseGraph`, task-only: `const AnchorStore& anchors() const`; `std::optional<NodeId>
   last_ingested_node() const` (empty when `last_ingested_node_index_ < 0`); `SaveAnchorResult
-  SaveAnchorOnTask(bool keep_scan, std::optional<AnchorId> rebind = std::nullopt)`; public
+  SaveAnchorOnTask(bool keep_scan, std::optional<AnchorId> rebind = std::nullopt, const
+  Eigen::Affine2d& node_from_anchor = Identity())`; public
   `bool CheckpointOnTask()`; `SessionId boot_first_session() const` (the fed session right after Start).
+  Any thread but the backend task: `DropFedSessionResult DropFedSession(SessionId id)` (blocks;
+  `DropFedSessionOnTask` is the task-side body).
   Anywhere: `FreezeFedSession(std::optional<SessionId> expected = std::nullopt)` → the new
   `SessionManager::FreezeFedSession(expected)`; `Start(..., bool seed_from_previous_boot = true)`.
 - `AnchorStore::Rebind`. `AssembleGlobalMap(..., std::optional<SessionId>)` already exists.
+- Zones (`service/zone_store.h`), for a host's own backend task, never a host thread waiting on
+  one: `std::optional<std::vector<ResolvedZone>> ResolveZones(const PoseGraph&, const ZoneStore&)`
+  (scans, then resolves; nullopt when the scan was incomplete); `ResolveZonesOnTask(graph,
+  scan.zones)` on a `ZoneStore::Scan()` taken earlier (check `scan.error` first) keeps the file
+  reads off the graph thread. `AgentHost::zones()` gives the ROS node its `const ZoneStore&`.
 - `MapManager::ReadAnchors` and the commit, `lifelong/map_manager/proto/anchors.proto`; the protoc
   rule in `core/CMakeLists.txt` (single file today) becomes a loop over both protos.
 
@@ -355,13 +439,30 @@ new row); `next_id` stays past the refused id, which is never issued.
 - Host flags on the bag main and the live node: `map_root` / `map` replace `map_dir` (bag:
   `--map_root DIR --map NAME`, default the root's `current` or `default`, no runtime switch; live
   node: `-p map_root:=` default `~/.evergreenslam/maps`, empty = no persistence and no agent
-  service; `-p map:=` default empty = `current` or `default`; it wires `switch_map`), `--agent_port`
+  service; `-p map:=` default empty = `current` or `default`; it wires `switch_map` and
+  `drop_session`, the bag main neither), `--agent_port`
   (0 = off; live node default 8643), `--agent_bind` (default `127.0.0.1`), `--ignore_last_pose` (Start seeds from neither `last_pose.pb` nor the checkpoint
   node, so the demo's `init-pose --place` correction is controlled). TSan gate covers the service.
 - A damaged map directory (unreadable or pre-v4 manifest, a missing or corrupt session file, or
   session/anchor files with no manifest) refuses to boot: `Start` stops naming the directory and
   the reason, and touches no file. Only a directory with neither boots as a new map. A directory
   the boot's manifest cannot be written to stops too ("map directory is not writable").
+
+## Keep-out mask (ROS live node)
+
+`adapters/ros2/evergreenslam_ros/src/keepout_mask_publisher.{h,cc}`, with
+`EVERGREENSLAM_WITH_AGENT` and an agent host. On the graph timer (`map_publish_period`) the
+executor thread scans the zone files and enqueues one task: skipped (nav2 keeps the last mask)
+while `has_frozen_base && !aligned_to_base` or when the scan was incomplete; otherwise the keepout
+zones with a `polygon_xy` become a
+`nav_msgs/OccupancyGrid` on `keepout_mask_topic` (`keepout_filter_mask`), `map_frame`, QoS
+transient_local + reliable, 0.05 m over the polygons' bounding boxes + 0.5 m, cell centre inside
+→ `100`, else `0`; the resolution doubles while the grid exceeds 4e6 cells, and past 0.8 m the
+last mask stays (logged). No zone → a 1x1 grid of `0` (clears a previous mask); unchanged masks
+are not republished. The publisher sends that clearing grid when it is created, so a map switch
+drops the previous map's zones at once; nothing else is published until the new
+map's zones resolve (and, with a frozen base, until it is aligned). nav2's `costmap_filter_info_server` is the user's (package README, "nav2 keepout").
+The bag replay has no ROS node and publishes no mask.
 
 ## Tests
 

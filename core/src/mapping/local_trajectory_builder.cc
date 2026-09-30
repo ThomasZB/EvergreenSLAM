@@ -83,6 +83,10 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
   result->time = time;
   result->local_pose = local_pose_;
   result->match_score = match_score;
+  const Eigen::Matrix<double, 9, 1>& state = tracking_filter_.current_state().state;
+  const Eigen::Rotation2Dd local_from_body(state(2));
+  result->velocity << local_from_body * state.segment<2>(3), state(5);
+  result->acceleration << local_from_body * state.segment<2>(6), state(8);
   if (motion_filter_.IsSimilar(time, local_pose_)) {
     return result;
   }

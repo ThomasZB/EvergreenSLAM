@@ -43,6 +43,8 @@ class FsSandbox {
   // Throws RequestError not_slug for a component at or after `first` that is not a slug.
   static void CheckDirectoryNames(const SandboxPath& path, size_t first);
   static bool IsSlug(std::string_view name);
+  // `skills` and `attachments`: scans skip them, so a node there would silently vanish.
+  static bool IsReservedName(std::string_view name);
   // Any place.yaml, and memory/index.tsv and memory/README.md.
   static bool IsProcessOwned(const SandboxPath& path);
 

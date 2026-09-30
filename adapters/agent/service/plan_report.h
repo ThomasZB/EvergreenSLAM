@@ -29,6 +29,9 @@ struct PlanReport {
   std::vector<lifelong::SessionId> sessions_affected;
   std::vector<lifelong::AnchorId> anchors_orphaned;
   int at_num_solves = 0;
+  // Applying replaces the fed session with a fresh one.
+  bool drops_fed = false;
+  std::optional<std::string> note;
 
   // Hex FNV-1a 64 of op|sessions|submaps|anchors, each sorted: which ids the operation touches.
   std::string Token() const;

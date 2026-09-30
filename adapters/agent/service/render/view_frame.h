@@ -24,6 +24,8 @@ struct ViewFrame {
   double metres_per_pixel = 0.05;
   int width = 0;
   int height = 0;
+  // Pixels per map cell when a small map is upscaled; glyphs are sized as at one pixel per cell.
+  int pixels_per_cell = 1;
 
   // Clamped far outside the image, so callers never overflow.
   Eigen::Array2i ToPixel(const Eigen::Vector2d& xy) const;

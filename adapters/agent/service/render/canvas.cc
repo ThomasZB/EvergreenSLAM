@@ -150,6 +150,48 @@ void Canvas::FillTriangle(const Eigen::Vector2d& a, const Eigen::Vector2d& b,
   }
 }
 
+void Canvas::HatchPolygon(const std::vector<Eigen::Vector2d>& corners, int period, Rgb color) {
+  if (corners.size() < 3 || period < 1) {
+    return;
+  }
+  double min_y = corners.front().y();
+  double max_y = min_y;
+  for (const Eigen::Vector2d& p : corners) {
+    if (!p.allFinite()) {
+      return;
+    }
+    min_y = std::min(min_y, p.y());
+    max_y = std::max(max_y, p.y());
+  }
+  // Clamp as doubles: a far-off corner would overflow the int casts.
+  const int y0 = static_cast<int>(std::floor(std::clamp(min_y, 0.0, static_cast<double>(height_))));
+  const int y1 = static_cast<int>(std::ceil(std::clamp(max_y, 0.0, static_cast<double>(height_))));
+  std::vector<double> crossings;
+  for (int y = y0; y < y1; ++y) {
+    const double yc = y + 0.5;
+    crossings.clear();
+    for (size_t i = 0; i < corners.size(); ++i) {
+      const Eigen::Vector2d& a = corners[i];
+      const Eigen::Vector2d& b = corners[(i + 1) % corners.size()];
+      if ((a.y() <= yc) != (b.y() <= yc)) {
+        crossings.push_back(a.x() + (yc - a.y()) / (b.y() - a.y()) * (b.x() - a.x()));
+      }
+    }
+    std::sort(crossings.begin(), crossings.end());
+    for (size_t i = 0; i + 1 < crossings.size(); i += 2) {
+      const int x0 = static_cast<int>(
+          std::ceil(std::clamp(crossings[i] - 0.5, 0.0, static_cast<double>(width_))));
+      const int x1 = static_cast<int>(
+          std::ceil(std::clamp(crossings[i + 1] - 0.5, 0.0, static_cast<double>(width_))));
+      for (int x = x0; x < x1; ++x) {
+        if ((x + y) % period < 2) {
+          Set(x, y, color);
+        }
+      }
+    }
+  }
+}
+
 void Canvas::Text(const Eigen::Array2i& top_left, const std::string& text, int scale, Rgb color) {
   int pen_x = top_left.x();
   for (const char c : text) {

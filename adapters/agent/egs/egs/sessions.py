@@ -1,8 +1,10 @@
-"""Management layer: egs session ls|freeze|new|rm. Destructive operations are plan -> apply."""
+"""Management layer: egs session ls|freeze|new|rm. Destructive operations are plan -> apply.
+
+rm of the fed session drops it in process: a fresh session is fed and the robot's pose is lost."""
 
 import time
 
-from . import fmt
+from . import fmt, jsonout
 from .client import EXIT_OK, EXIT_REFUSED, EgsError, explain
 
 PLAN_ONLY = "plan only: add --yes to apply"
@@ -29,6 +31,15 @@ def cmd_ls(ctx, args):
                 fmt.age_ns(s.get("last_node_ns")),
             )
         )
+    listed = [
+        dict(
+            s,
+            started_age_s=jsonout.age_s(s.get("start_ns")),
+            last_node_age_s=jsonout.age_s(s.get("last_node_ns")),
+        )
+        for s in j.get("sessions") or []
+    ]
+    ctx.result(dict(j, sessions=listed))
     return EXIT_OK
 
 
@@ -123,20 +134,41 @@ def cmd_new(ctx, args):
 
 def cmd_rm(ctx, args):
     plan = ctx.client.post("/sessions/rm/plan", {"id": args.id})
-    _print_plan(ctx, "remove floating session %s" % args.id, plan)
+    drops_fed = bool(plan.get("drops_fed"))
+    if drops_fed:
+        _print_plan(ctx, "drop fed session %s and feed a fresh one" % args.id, plan)
+        ctx.print(
+            "  this is the session being mapped now: it is replaced by a fresh one",
+            "  the robot's pose is lost: "
+            "run egs init-pose --place <p> or egs relocalize afterwards",
+        )
+    else:
+        _print_plan(ctx, "remove session %s" % args.id, plan)
     if not _plan_ok(ctx, plan):
+        ctx.result(dict(plan, ok=False, applied=False))
         return EXIT_REFUSED
     if not args.yes:
         ctx.print(PLAN_ONLY)
+        ctx.result(dict(plan, applied=False))
         return EXIT_OK
     j = ctx.client.post("/sessions/rm/apply", {"id": args.id, "plan_token": plan.get("plan_token")})
     if not j.get("ok"):
         return ctx.refused(j, "not applied")
     orphaned = j.get("anchors_orphaned") or []
-    ctx.print(
-        "removed session %s; anchors orphaned: %s  @solve %s"
-        % (j.get("removed", args.id), fmt.ids(orphaned), j.get("at_num_solves"))
-    )
+    if j.get("pose_lost"):
+        ctx.print(
+            "session %s dropped; fed session now %s  @solve %s"
+            % (j.get("removed", args.id), j.get("fed_session"), j.get("at_num_solves")),
+            "anchors orphaned: %s" % fmt.ids(orphaned),
+        )
+    else:
+        ctx.print(
+            "removed session %s; anchors orphaned: %s  @solve %s"
+            % (j.get("removed", args.id), fmt.ids(orphaned), j.get("at_num_solves"))
+        )
     if orphaned:
         ctx.print("their places resolve to nothing now: stand there and `egs place save` again")
+    if j.get("pose_lost"):
+        ctx.print("the robot's pose is lost: run egs init-pose --place <p> or egs relocalize")
+    ctx.result(dict(j, applied=True))
     return EXIT_OK

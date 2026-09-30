@@ -14,6 +14,7 @@ already links, so `core` needs no change; Humble's 0.7 exports only the bare tar
 | `evergreenslam_node` | live node: `/scan` in; `/odom`, tf, the lifelong map and the agent service out |
 | `laser_scan_converter` | `sensor_msgs/LaserScan` to `sensor::PointCloud` |
 | `pose_graph_publisher` | the lifelong graph as rviz topics: submap list and textures, trajectory and constraint markers, global map |
+| `keepout_mask_publisher` | the agent's keep-out zones as a nav2 KeepoutFilter mask (built with the agent service) |
 
 ## Build
 
@@ -162,7 +163,8 @@ Parameters: `config`, `scan_topic` (`scan`), `odom_frame` (`odom`), `base_frame`
 `publish_tf` (`true`), `map_publish_period` (`1.0` s), `webui_port` (`0` = off), `lifelong`
 (`true`), `map_root` (`~/.evergreenslam/maps`; `""` = no persistence and no agent service), `map`
 (`""` = the root's `current`, else `default`), `map_frame` (`map`), `agent_port` (`8643`, `0` =
-off), `agent_bind` (`127.0.0.1`), `ignore_last_pose` (`false`).
+off), `agent_bind` (`127.0.0.1`), `ignore_last_pose` (`false`), `keepout_mask_topic`
+(`keepout_filter_mask`).
 
 ### Maps
 
@@ -186,6 +188,13 @@ textures and trajectory, and an open page reloads itself. An opened map seeds it
 `last_pose.pb`: if the robot moved while another map was open, correct it with `egs init-pose
 --place <p>` or `egs relocalize`. The odom frame restarts at identity with the new map (the frontend
 is rebuilt); the laser extrinsic and tf state carry over.
+
+The agent can also drop the session being mapped (`egs session rm <fed id> --yes`, for a stretch
+ruined by a fall). The node does it in process and answers at once: it holds the scan callback,
+removes the session from the pose graph and the map directory (its anchors become orphans), feeds
+a fresh session and replaces the frontend. The agent port stays up and nothing reboots. The odom
+frame restarts at identity and the robot's pose is lost until `egs init-pose --place <p>` or `egs
+relocalize`; the webui drops its graph and trajectory as for a map switch.
 
 With the backend on (the default), `/map` carries the assembled global map in `map_frame` and
 tf gains `map -> odom` with the optimizer's correction, so RViz composes the corrected robot
@@ -221,3 +230,45 @@ A texture's `cells` are one byte per cell, `0..100` occupancy in percent and `25
 row-major with x fastest. Cell `(0, 0)` is the corner at `slice_pose`, which is the grid corner
 expressed in the submap frame; a world point is `entry.pose * (slice_pose * (x * resolution,
 y * resolution))`. No `local_pose` is involved anywhere.
+
+### nav2 keepout
+
+With the agent service on, the same timer publishes the agent's keep-out zones (`egs zone add`,
+`memory/places/**/zone.yaml`) as a `nav_msgs/OccupancyGrid` mask on `keepout_mask_topic`
+(`keepout_filter_mask`), in `map_frame`, `QoS(1).transient_local().reliable()`. Each zone is
+stored in the anchor frame of its nearest place and re-resolved every cycle, so the mask follows
+the map through every re-optimization. The grid is 0.05 m and covers only the zones' bounding
+boxes plus 0.5 m: cells inside a zone are `100` (lethal to nav2's KeepoutFilter), all others `0`.
+With no zone left it publishes a 1x1 grid of `0` once, which clears the previous mask. While a
+frozen base exists and the fed session is not yet aligned to it, nothing is published (the
+positions are in the wrong frame). The mask is republished only when it changes. Zones spread
+wider than 4e6 cells coarsen the grid (0.1 m, 0.2 m, ... up to 0.8 m). A new map (startup or
+`egs map open`) first publishes the clearing grid, so nav2 never keeps the previous map's zones;
+the new map's mask follows once its zones resolve and, with a frozen base, once it is aligned.
+
+The package adds no nav2 dependency: run nav2's own `costmap_filter_info_server` beside it and add
+the KeepoutFilter plugin to the costmaps, as in the
+[nav2 keepout tutorial](https://docs.nav2.org/tutorials/docs/navigation2_with_keepout_filter.html),
+pointing the filter info at our topic instead of a `map_server` mask:
+
+```yaml
+costmap_filter_info_server:
+  ros__parameters:
+    type: 0                              # keepout
+    filter_info_topic: costmap_filter_info
+    mask_topic: keepout_filter_mask
+    base: 0.0
+    multiplier: 1.0
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: true
+        filter_info_topic: costmap_filter_info
+```
+
+Add the same `keepout_filter` block to `local_costmap` for the controller. Check the mask with
+`ros2 topic echo --once --qos-durability transient_local --qos-reliability reliable
+/keepout_filter_mask | head`.

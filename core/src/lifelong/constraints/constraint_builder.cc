@@ -102,7 +102,7 @@ void ConstraintBuilder::SearchForNodeOnTask(const NodeId& node_id, int budget) {
   // grow for the lifetime of the process.
   if (++searches_since_sweep_ >= 256) {
     searches_since_sweep_ = 0;
-    SweepStaleState();
+    SweepStaleStateOnTask();
   }
   if (!sampler_.ShouldSampleRound()) {
     return;
@@ -223,7 +223,7 @@ std::vector<LoopCandidate> ConstraintBuilder::CandidatesAround(
   return candidates;
 }
 
-void ConstraintBuilder::SweepStaleState() {
+void ConstraintBuilder::SweepStaleStateOnTask() {
   const PoseGraphData& graph = handle_.graph();
   drift_.Sweep(graph);
   for (auto it = precomputation_cache_.begin(); it != precomputation_cache_.end();) {

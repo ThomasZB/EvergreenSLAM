@@ -36,9 +36,10 @@ struct RenderMarker {
   bool highlight = false;
 };
 
-// Layers: map, robot, scan, trail, places, target, session, submaps. `map` or `session` draws
-// `grid`; `places` draws the markers without highlight, `target` the highlighted ones; `scan`
-// needs `robot`. Unknown names are ignored (the service validates them).
+// Layers: map, robot, scan, trail, places, target, session, submaps, zones. `map` or `session`
+// draws `grid`; `places` draws the markers without highlight, `target` the highlighted ones;
+// `scan` needs `robot`; `zones` hatches the keep-out polygons. Unknown names are ignored (the
+// service validates them).
 struct RenderInput {
   mapping::GridMapu8 grid{{}, 0, 0, 0.05, 0.0, 0.0, mapping::kUnknownValue};
   std::optional<Eigen::Affine2d> robot;
@@ -46,6 +47,10 @@ struct RenderInput {
   std::vector<Eigen::Vector2d> trail;
   std::vector<RenderMarker> markers;
   std::vector<std::array<Eigen::Vector2d, 4>> submap_outlines;
+  // Map-frame keep-out polygons; the legend also counts the zones that did not resolve.
+  std::vector<std::vector<Eigen::Vector2d>> zones;
+  int num_unresolved_zones = 0;
+  bool zones_incomplete = false;
   std::set<std::string> layers;
   std::optional<double> ego_radius_m;
 };

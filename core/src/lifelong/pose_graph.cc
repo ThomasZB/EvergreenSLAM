@@ -22,6 +22,7 @@
 #include "lifelong/constraints/match_worker_pool.h"
 #include "lifelong/global_map.h"
 #include "lifelong/sessions/frozen_links.h"
+#include "mapping/grid_mapping/probability_values.h"
 
 namespace evergreenslam::lifelong {
 namespace {
@@ -31,6 +32,17 @@ PoseGraphOption ResolveMatchWorkers(PoseGraphOption option) {
     option.constraint_builder.num_match_workers = MatchWorkerPool::DefaultNumWorkers();
   }
   return option;
+}
+
+bool IsKnownFree(const PoseGraphData& graph, const SubmapId& submap_id,
+                 const Eigen::Vector2d& point_in_submap) {
+  const std::shared_ptr<const mapping::Submap>& submap = graph.submap(submap_id).submap;
+  if (submap == nullptr) {
+    return false;
+  }
+  // Read from a snapshot to avoid racing with frontend updates.
+  const uint8_t value = submap->SnapshotCopy().GetValueAtPoint(point_in_submap);
+  return mapping::IsKnownValue(value) && mapping::ValueToProbability(value) < 0.5;
 }
 
 }  // namespace
@@ -285,17 +297,26 @@ std::optional<NodeId> PoseGraph::last_ingested_node() const {
 }
 
 PoseGraph::SaveAnchorResult PoseGraph::SaveAnchorOnTask(bool keep_scan,
-                                                        std::optional<AnchorId> rebind) {
+                                                        std::optional<AnchorId> rebind,
+                                                        const Eigen::Affine2d& node_from_anchor) {
   using Refusal = SaveAnchorResult::Refusal;
   const std::optional<NodeId> node = last_ingested_node();
   if (!node.has_value()) {
     return SaveAnchorResult{std::nullopt, Refusal::NO_KEYFRAME};
   }
+  const std::optional<SubmapId> binding = AnchorStore::BindingSubmap(data_, *node);
+  if (binding.has_value() && !node_from_anchor.translation().isZero(0.0)) {
+    const Eigen::Vector2d target = data_.submap(*binding).global_pose.inverse() *
+                                   data_.node(*node).global_pose * node_from_anchor.translation();
+    if (!IsKnownFree(data_, *binding, target)) {
+      return SaveAnchorResult{std::nullopt, Refusal::OFFSET_NOT_FREE};
+    }
+  }
   const std::optional<Anchor> previous =
       rebind.has_value() ? anchor_store_.Get(*rebind) : std::nullopt;
-  std::optional<Anchor> anchor = rebind.has_value()
-                                     ? anchor_store_.Rebind(data_, *rebind, *node, keep_scan)
-                                     : anchor_store_.Save(data_, *node, keep_scan);
+  std::optional<Anchor> anchor =
+      rebind.has_value() ? anchor_store_.Rebind(data_, *rebind, *node, keep_scan, node_from_anchor)
+                         : anchor_store_.Save(data_, *node, keep_scan, node_from_anchor);
   if (!anchor.has_value()) {
     return SaveAnchorResult{std::nullopt, Refusal::NODE_GONE};
   }
@@ -455,6 +476,42 @@ void PoseGraph::TrimSubmapsOnTask(const std::vector<SubmapId>& ids) {
 void PoseGraph::FreezeFedSession(std::optional<SessionId> expected) {
   CHECK(started_) << "boot through Start first";
   session_manager_.FreezeFedSession(expected);
+}
+
+PoseGraph::DropFedSessionResult PoseGraph::DropFedSession(SessionId id) {
+  CHECK(started_) << "boot through Start first";
+  std::promise<DropFedSessionResult> promise;
+  std::future<DropFedSessionResult> future = promise.get_future();
+  task_queue_.Enqueue([this, id, &promise] { promise.set_value(DropFedSessionOnTask(id)); });
+  return future.get();
+}
+
+PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
+  using Refusal = DropFedSessionResult::Refusal;
+  if (session_manager_.fed_session() != id) {
+    return DropFedSessionResult{std::nullopt, Refusal::NOT_FED};
+  }
+  if (session_manager_.freezing()) {
+    return DropFedSessionResult{std::nullopt, Refusal::FREEZING};
+  }
+  const common::Time time = data_.session(id).last_node_time;
+  // The successor first, so a fed session exists throughout and a kill between the two commits
+  // leaves the old session on disk.
+  const SessionId next = session_manager_.ReplaceFedSessionOnTask(time);
+  RemoveSession(id);
+  constraint_builder_.SweepStaleStateOnTask();
+
+  submap_translation_.clear();
+  retired_local_indices_.clear();
+  watched_submaps_.clear();
+  last_ingested_node_index_ = -1;
+  nodes_since_cadence_ = 0;
+  pending_relocalization_.reset();
+  last_checkpoint_time_ = time;
+  RepublishActiveSessionToGlobal();
+  LOG(INFO) << "fed session " << id.session_index << " dropped; session " << next.session_index
+            << " is fed now";
+  return DropFedSessionResult{next, Refusal::NONE};
 }
 
 std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from, SessionId to) {

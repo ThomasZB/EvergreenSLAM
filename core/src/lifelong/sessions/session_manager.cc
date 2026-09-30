@@ -151,6 +151,22 @@ SessionId SessionManager::Start(common::Time time, const Eigen::Affine2d& local_
   return id;
 }
 
+SessionId SessionManager::ReplaceFedSessionOnTask(common::Time time) {
+  CHECK(fed_session_.has_value()) << "Start opens the fed session first";
+  CHECK(!freezing_) << "a queued freeze sequence assumes the fed session outlives it";
+  const SessionId old = *fed_session_;
+  const SessionId next = handle_.StartNewSession(time, Eigen::Affine2d::Identity());
+  fed_session_ = next;
+  expansion_.erase(old);
+  if (option_.auto_freeze) {
+    expansion_[next].dirty = AnySessionFrozen(handle_.graph());
+  }
+  for (const std::shared_ptr<SessionObserver>& observer : observers_) {
+    observer->OnSessionStarted(handle_.graph(), next);
+  }
+  return next;
+}
+
 void SessionManager::AddObserver(std::shared_ptr<SessionObserver> observer) {
   CHECK(observer != nullptr);
   observers_.push_back(std::move(observer));

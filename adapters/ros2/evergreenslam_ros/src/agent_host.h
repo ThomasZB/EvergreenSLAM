@@ -25,6 +25,8 @@
 #include "sensor/point_cloud.h"
 #include "sensor/timed_point_cloud.h"
 #include "service/agent_service.h"
+#include "service/match_score_average.h"
+#include "service/zone_store.h"
 
 namespace evergreenslam::ros2 {
 
@@ -37,40 +39,52 @@ struct AgentHostOption {
 };
 
 using MapSwitchHook = std::function<bool(const agent::MapSwitchRequest&)>;
+using SessionDropHook =
+    std::function<lifelong::PoseGraph::DropFedSessionResult(const agent::SessionDropRequest&)>;
 
 // Contract: adapters/agent/API.md "Host injection". The scan loop calls Update; the service's
 // hooks read copies under mutex_, which is never held across a PoseGraph call.
 class AgentHost {
  public:
   // nullptr when the port is 0 or `pose_graph` persists nothing (no map_manager()). An empty
-  // `switch_map` means the host cannot switch maps.
+  // `switch_map` means the host cannot switch maps, an empty `drop_session` that it cannot drop
+  // the fed session.
   static std::unique_ptr<AgentHost> Create(const AgentHostOption& option,
                                            lifelong::PoseGraph& pose_graph,
-                                           MapSwitchHook switch_map = {});
+                                           MapSwitchHook switch_map = {},
+                                           SessionDropHook drop_session = {});
 
   AgentHost(const AgentHostOption& option, lifelong::PoseGraph& pose_graph,
-            MapSwitchHook switch_map);
+            MapSwitchHook switch_map, SessionDropHook drop_session);
   ~AgentHost();
 
   AgentHost(const AgentHost&) = delete;
   AgentHost& operator=(const AgentHost&) = delete;
 
   // `scan` is in the robot frame at `local_pose`, the builder's pose after that scan.
+  // `match_score` is empty when the builder dropped the scan: the previous score stands.
   void Update(common::Time time, const Eigen::Affine2d& local_pose,
-              const sensor::TimedPointCloud& scan);
+              const sensor::TimedPointCloud& scan, std::optional<double> match_score);
   // Right after PoseGraph::Start.
   void OnBackendStarted();
+  // After a landed drop, before the new frontend's first Update: the old frame's pose is in the
+  // discarded frontend's local frame.
+  void OnFedSessionDropped();
   // Before PoseGraph::Finish, or before the PoseGraph is destroyed. Idempotent.
   void Stop();
 
   // -1 when binding failed.
   int port() const { return service_->port(); }
+  // memory/'s zone.yaml files, for a mask publisher's backend tasks.
+  const agent::ZoneStore& zones() const { return zones_; }
 
  private:
-  agent::AgentServiceHooks Hooks(MapSwitchHook switch_map);
+  agent::AgentServiceHooks Hooks(MapSwitchHook switch_map, SessionDropHook drop_session);
 
   std::mutex mutex_;
   std::optional<agent::HostFrame> frame_;
+  agent::MatchScoreAverage match_score_average_;
+  const agent::ZoneStore zones_;
   // Last: its worker calls the hooks above until Stop() joins it.
   std::unique_ptr<agent::AgentService> service_;
 };

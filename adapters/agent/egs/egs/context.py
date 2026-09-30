@@ -1,5 +1,6 @@
-"""Per-invocation state: configuration, the HTTP client, lazy memory/ access."""
+"""Per-invocation state: configuration, the HTTP client, lazy memory/ access, output mode."""
 
+import json
 import os
 import sys
 
@@ -27,10 +28,20 @@ class Ctx:
         self._root = None
         self._memory_dir = None
         self._store = None
+        self.json = False
+        self.emitted = False
 
     def print(self, *lines):
+        """Text output; dropped under --json, where `result` prints the one object instead."""
+        if self.json:
+            return
         for line in lines:
             self.out.write(line + "\n")
+
+    def result(self, obj):
+        if self.json and not self.emitted:
+            self.emitted = True
+            self.out.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
     def warn(self, line):
         self.err.write(line + "\n")
@@ -39,7 +50,7 @@ class Ctx:
         if self._root is None:
             j = self.client.get("/root")
             if not j.get("ok"):
-                raise EgsError(explain(j.get("reason")), EXIT_REFUSED)
+                raise EgsError(explain(j.get("reason")), EXIT_REFUSED, j.get("reason"))
             self._root = j
         return self._root
 
@@ -67,6 +78,7 @@ class Ctx:
                 "refused: %s is inside memory/, which holds no map-frame XY; "
                 "give -o a directory outside it (e.g. under /tmp)" % path,
                 EXIT_USAGE,
+                "inside_memory",
             )
 
     def local_ok(self):
@@ -85,4 +97,11 @@ class Ctx:
 
     def refused(self, j, what="refused"):
         self.print("%s: %s" % (what, explain(j.get("reason"), j.get("detail"))))
+        self.result(dict(j, ok=False, reason=j.get("reason"), detail=j.get("detail")))
+        return EXIT_REFUSED
+
+    def refuse(self, reason, text, **fields):
+        """A refusal egs decides itself; `text` is the line after "refused: "."""
+        self.print("refused: " + text)
+        self.result(dict({"ok": False, "reason": reason, "detail": text}, **fields))
         return EXIT_REFUSED

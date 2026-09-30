@@ -99,6 +99,7 @@ class SessionManager {
   // Once per boot: rotation opens every later fed session.
   SessionId Start(common::Time time,
                   const Eigen::Affine2d& local_to_global = Eigen::Affine2d::Identity());
+  SessionId ReplaceFedSessionOnTask(common::Time time);
 
   void AddObserver(std::shared_ptr<SessionObserver> observer);
 

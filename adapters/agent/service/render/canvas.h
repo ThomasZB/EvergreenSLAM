@@ -61,6 +61,9 @@ class Canvas {
   // Corners in continuous pixel coordinates; fills the pixels whose centres lie inside.
   void FillTriangle(const Eigen::Vector2d& a, const Eigen::Vector2d& b, const Eigen::Vector2d& c,
                     Rgb color);
+  // Diagonal hatch lines `period` pixels apart over the pixels whose centres lie inside the
+  // polygon (even-odd rule); corners in continuous pixel coordinates.
+  void HatchPolygon(const std::vector<Eigen::Vector2d>& corners, int period, Rgb color);
   // `top_left` is the first glyph's top-left pixel.
   void Text(const Eigen::Array2i& top_left, const std::string& text, int scale, Rgb color);
 

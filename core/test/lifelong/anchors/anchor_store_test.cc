@@ -126,6 +126,44 @@ TEST(AnchorStoreTest, SaveBindsTheOldestContainingSubmapAndResolvesToTheNodePose
   EXPECT_FALSE(store.Resolve(f.graph, 99).has_value());
 }
 
+TEST(AnchorStoreTest, AnOffsetAnchorResolvesToTheNodePoseTimesTheOffsetAndFollowsASolve) {
+  Fixture f;
+  AnchorStore store;
+  const Eigen::Affine2d offset = transform::FromXYTheta(1.013, -0.487, 0.311);
+  const std::optional<Anchor> anchor = store.Save(f.graph, f.n, /*keep_scan=*/true, offset);
+  ASSERT_TRUE(anchor.has_value());
+  EXPECT_EQ(anchor->submap_id, f.a);
+  ExpectPoseNear(f.n_pose * offset, *store.Resolve(f.graph, anchor->id)->global_pose);
+
+  // The scan is kept in the anchor frame: back in the node frame it is the keyframe's cloud.
+  ASSERT_TRUE(anchor->scan.has_value());
+  const sensor::PointCloud& node_cloud = f.graph.node(f.n).constant_data.point_cloud;
+  ASSERT_EQ(anchor->scan->size(), node_cloud.size());
+  for (size_t i = 0; i < node_cloud.size(); ++i) {
+    EXPECT_LT(((offset * (*anchor->scan)[i].point) - node_cloud[i].point).norm(), 1e-12);
+  }
+
+  // A re-solve moves the submap and the node together; the anchor keeps its offset from both.
+  const Eigen::Affine2d correction = transform::FromXYTheta(-0.731, 2.113, -0.417);
+  f.graph.SetSubmapGlobalPose(f.a, correction * f.graph.submap(f.a).global_pose);
+  f.graph.SetNodeGlobalPose(f.n, correction * f.n_pose);
+  ExpectPoseNear(correction * f.n_pose * offset, *store.Resolve(f.graph, anchor->id)->global_pose,
+                 1e-9);
+}
+
+TEST(AnchorStoreTest, RebindWithAnOffsetKeepsTheId) {
+  Fixture f;
+  AnchorStore store;
+  const AnchorId id = store.Save(f.graph, f.n, /*keep_scan=*/false)->id;
+  const Eigen::Affine2d offset = transform::FromXYTheta(-0.613, 1.207, -1.1);
+  const std::optional<Anchor> rebound = store.Rebind(f.graph, id, f.m, /*keep_scan=*/false, offset);
+  ASSERT_TRUE(rebound.has_value());
+  EXPECT_EQ(rebound->id, id);
+  EXPECT_EQ(rebound->submap_id, f.c);
+  ExpectPoseNear(f.m_pose * offset, *store.Resolve(f.graph, id)->global_pose);
+  EXPECT_EQ(store.Table().next_id, 2u);
+}
+
 TEST(AnchorStoreTest, SaveOfAMissingOrUnboundNodeIssuesNoId) {
   Fixture f;
   AnchorStore store;

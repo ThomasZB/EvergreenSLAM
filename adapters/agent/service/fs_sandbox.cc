@@ -109,6 +109,10 @@ void FsSandbox::CheckDirectoryNames(const SandboxPath& path, size_t first) {
   }
 }
 
+bool FsSandbox::IsReservedName(std::string_view name) {
+  return name == "skills" || name == "attachments";
+}
+
 bool FsSandbox::IsSlug(std::string_view name) {
   if (name.empty()) {
     return false;

@@ -100,6 +100,7 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   RegisterMapEndpoints(server, impl_->context);
   RegisterFsEndpoints(server, impl_->context);
   RegisterMapsEndpoints(server, impl_->context);
+  RegisterZonesEndpoints(server, impl_->context);
 
   impl_->port =
       port == 0 ? server.bind_to_any_port(bind) : (server.bind_to_port(bind, port) ? port : -1);

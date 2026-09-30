@@ -114,8 +114,9 @@ RealTimeCorrelativeScanMatcher::GenerateAndScoreCandidates(
   std::vector<CandidateResult> candidates(static_cast<size_t>(size_linear) * size_linear *
                                           size_angular);
 
-  // Perfectly nested, which collapse(3) requires.
-  const int num_threads = 4;
+  // Perfectly nested, which collapse(3) requires. Capped by OMP_NUM_THREADS so the TSan gate can
+  // pin the frontend to one thread.
+  const int num_threads = std::min(4, omp_get_max_threads());
 #pragma omp parallel for collapse(3) num_threads(num_threads)
   for (int x_index = 0; x_index < size_linear; x_index++) {
     for (int y_index = 0; y_index < size_linear; y_index++) {

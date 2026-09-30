@@ -33,9 +33,18 @@ class CommandTest(EgsTestCase):
                 "current places/dock 0.4m",
                 "closest places/dock 0.4m frozen; places/kitchen 5.0m frozen",
                 "robot 0.00,0.00,0.00  keyframe 1s  @solve 100",
+                "match 0.82 (avg 0.80)",
             ],
         )
         self.assertEqual(self.requests("GET", "/root"), [])
+
+    def test_here_and_status_without_a_host_frame(self):
+        self.state.scan_match = None
+        code, out, _ = self.egs("here")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[-1], "match -")
+        code, out, _ = self.egs("status")
+        self.assertIn("match -", out.splitlines())
 
     def test_here_flags_unaligned_positions(self):
         self.state.aligned_to_base = False
@@ -58,6 +67,7 @@ class CommandTest(EgsTestCase):
         self.assertEqual(code, 0)
         self.assertIn("frozen base yes  aligned to base yes", out)
         self.assertIn("closures +2", out)
+        self.assertIn("match 0.82 (avg 0.80)", out.splitlines())
         self.assertIn("index.tsv stale: 1 rows, 5 place.yaml files", out)
 
     def test_place_save_new_and_rebind(self):
@@ -75,11 +85,27 @@ class CommandTest(EgsTestCase):
         self.assertEqual(code, 1)
         self.assertIn("refused: no_keyframe", out)
 
+    def test_place_save_with_offset(self):
+        code, out, _ = self.egs("place", "save", "places/shelf", "--offset", "1", "0", "0")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.rstrip().endswith("offset 1.00,0.00,0.00"), out)
+        self.assertEqual(self.requests("POST", "/place/save")[0][2]["offset"], "1.0,0.0,0.0")
+        code, out, _ = self.egs("place", "save", "places/far", "--offset", "3", "1", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("refused: offset_too_far", out)
+        self.state.offset_free = False
+        code, out, _ = self.egs("place", "save", "places/wall", "--offset", "1", "0", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("refused: offset_not_free", out)
+        self.assertFalse(os.path.exists(os.path.join(self.mem, "places/wall")))
+        code, _, _ = self.egs("place", "save", "places/x", "--offset", "1", "0")
+        self.assertEqual(code, 2)
+
     def test_view_preset_prints_layers_legend_path(self):
         code, out, _ = self.egs("view", "route", "places/kitchen", "--ego")
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
-        self.assertEqual(lines[0], "layers=map,robot,target=places/kitchen,places  @solve 100")
+        self.assertEqual(lines[0], "layers=map,robot,target=places/kitchen,places,zones  @solve 100")
         self.assertEqual(lines[1:3], ["1 places/dock 0.4m", "2 places/kitchen 5.0m"])
         self.assertTrue(lines[3].endswith("views/000007_route.png"))
         self.assertTrue(os.path.isfile(lines[3]))

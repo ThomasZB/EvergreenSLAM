@@ -17,6 +17,9 @@ EXIT_TRANSPORT = 3
 
 HINTS = {
     "no_keyframe": "no keyframe ingested yet this boot: let the robot move, then retry",
+    "offset_too_far": "--offset reaches farther than 3 m: drive closer, then save",
+    "offset_not_free": "the --offset target is not known free space (a wall, or unseen): "
+    "check with `egs view here`",
     "node_gone": "the keyframe was trimmed meanwhile: retry",
     "not_persisted": "the map directory could not be written (full or read-only?): nothing changed, retry",
     "unknown_anchor": "place.yaml names an anchor the process does not know (a cp -r?)",
@@ -37,22 +40,28 @@ HINTS = {
     "path_escape": "path leaves memory/ (absolute, '..' or outside after realpath)",
     "symlink": "symbolic links are refused",
     "not_slug": "directory names are [a-z0-9][a-z0-9_-]*; other names go into node.yaml aliases",
-    "reserved_name": "reserved name (skills is never a node)",
+    "reserved_name": "reserved name (skills and attachments are never nodes)",
     "owned_by_process": "place.yaml, index.tsv and README.md belong to the SLAM process",
     "too_many_layers": "at most 4 layers: split into two views",
     "unknown_layer": "unknown layer",
     "too_large": "file over 1 MiB",
     "not_found": "no such file",
     "unknown_map": "no such map: see `egs map ls`",
-    "not_supported": "this host cannot switch maps: restart it with map_root/map",
+    "not_supported": "this host cannot switch maps or drop the fed session: "
+    "restart it with map_root/map",
     "switching": "a map switch is in progress: wait for it, then `egs map ls`",
+    "session_changed": "the fed session changed between plan and apply (a freeze landed): "
+    "run egs session ls and plan again",
 }
 
 
 class EgsError(Exception):
-    def __init__(self, message, code=EXIT_USAGE):
+    """reason: the machine code --json reports; None falls back to the exit code's class."""
+
+    def __init__(self, message, code=EXIT_USAGE, reason=None):
         super().__init__(message)
         self.code = code
+        self.reason = reason
 
 
 def explain(reason, detail=None):
@@ -124,8 +133,11 @@ class Client:
                     "outcome unknown: the connection dropped (%s); check with `egs status` "
                     "before retrying" % e,
                     EXIT_TRANSPORT,
+                    "outcome_unknown",
                 )
-            raise EgsError("connection to %s dropped (%s)" % (self.base_url, e), EXIT_TRANSPORT)
+            raise EgsError(
+                "connection to %s dropped (%s)" % (self.base_url, e), EXIT_TRANSPORT, "unreachable"
+            )
         except urllib.error.URLError as e:
             if isinstance(e.reason, (socket.timeout, TimeoutError)):
                 raise self._timeout(mutating)
@@ -133,6 +145,7 @@ class Client:
                 "cannot reach the SLAM process at %s (%s); is it running with --agent_port? "
                 "set EGS_URL otherwise" % (self.base_url, e.reason),
                 EXIT_TRANSPORT,
+                "unreachable",
             )
 
     def _timeout(self, mutating):
@@ -142,8 +155,9 @@ class Client:
                 "Check with `egs status` / `egs here` / `egs session ls` before retrying"
                 % self.timeout,
                 EXIT_TRANSPORT,
+                "outcome_unknown",
             )
-        return EgsError("no answer within %gs" % self.timeout, EXIT_TRANSPORT)
+        return EgsError("no answer within %gs" % self.timeout, EXIT_TRANSPORT, "timeout")
 
     def call(self, method, path, params=None, mutating=False):
         """JSON endpoints. 200 returns the receipt (maybe ok=false); anything else raises."""
@@ -157,7 +171,9 @@ class Client:
             j = resp.json()
             code = EXIT_TRANSPORT if resp.status == 503 else EXIT_USAGE
             raise EgsError(
-                "HTTP %d %s" % (resp.status, explain(j.get("reason"), j.get("detail"))), code
+                "HTTP %d %s" % (resp.status, explain(j.get("reason"), j.get("detail"))),
+                code,
+                j.get("reason"),
             )
         raise EgsError("HTTP %d from the service" % resp.status, EXIT_TRANSPORT)
 

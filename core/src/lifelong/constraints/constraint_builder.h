@@ -57,6 +57,7 @@ class ConstraintBuilder {
 
   // Results already enqueued still need a queue drain; WaitUntilQuiescent alternates the two.
   void WaitForMatches() const;
+  void SweepStaleStateOnTask();
 
   int num_matches_attempted() const { return num_matches_attempted_.load(); }
   int num_constraints_added() const { return num_constraints_added_.load(); }
@@ -99,7 +100,6 @@ class ConstraintBuilder {
                                               const std::optional<Eigen::Affine2d>& prior) const;
   std::optional<LoopCandidate> CandidateFor(const NodeId& node_id, const SubmapId& submap_id,
                                             const SubmapRecord& record) const;
-  void SweepStaleState();
   bool IsEligiblePair(const NodeId& node_id, const SubmapId& submap_id,
                       const SubmapRecord& record) const;
   void RunRound(std::vector<LoopCandidate> candidates, int budget,

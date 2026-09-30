@@ -25,6 +25,7 @@
 #include "service/endpoints.h"
 #include "service/graph_reads.h"
 #include "service/http_reply.h"
+#include "service/zone_store.h"
 
 #if __has_include("service/render/renderer.h")
 #include "service/render/renderer.h"
@@ -92,12 +93,12 @@ void HandleSnapshot(ServiceContext& context, httplib::Response& response) {
 #ifdef EVERGREENSLAM_AGENT_WITH_RENDERER
 
 constexpr size_t kMaxCustomLayers = 4;
-const std::set<std::string> kLayers = {"map",    "robot",  "scan",    "trail",
-                                       "places", "target", "session", "submaps"};
+const std::set<std::string> kLayers = {"map",    "robot",   "scan",    "trail", "places",
+                                       "target", "session", "submaps", "zones"};
 const std::map<std::string, std::vector<std::string>> kPresets = {
-    {"map", {"map", "places"}},
-    {"here", {"map", "robot", "scan"}},
-    {"route", {"map", "robot", "target", "places"}},
+    {"map", {"map", "places", "zones"}},
+    {"here", {"map", "robot", "scan", "zones"}},
+    {"route", {"map", "robot", "target", "places", "zones"}},
     {"trail", {"map", "trail", "robot"}},
     {"session", {"session", "trail"}},
 };
@@ -206,6 +207,7 @@ void HandleView(ServiceContext& context, const httplib::Request& request,
     }
   }
   const std::vector<PlaceFile> places = context.places.Scan().Unique();
+  const ZoneScan zone_scan = has("zones") ? context.zones.Scan() : ZoneScan{};
 
   struct Reading {
     RenderInput input;
@@ -264,6 +266,14 @@ void HandleView(ServiceContext& context, const httplib::Request& request,
                                          record.global_pose * Eigen::Vector2d(x1, y0),
                                          record.global_pose * Eigen::Vector2d(x1, y1),
                                          record.global_pose * Eigen::Vector2d(x0, y1)});
+      }
+    }
+    input.zones_incomplete = zone_scan.error.has_value();
+    for (const ResolvedZone& zone : ResolveZonesOnTask(pose_graph, zone_scan.zones)) {
+      if (zone.IsActiveKeepout()) {
+        input.zones.push_back(*zone.polygon_xy);
+      } else if (!zone.polygon_xy.has_value() && zone.reason != "unknown_kind") {
+        ++input.num_unresolved_zones;
       }
     }
     result.resolved = pose_graph.anchors().ResolveAll(graph);

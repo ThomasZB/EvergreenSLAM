@@ -2,6 +2,8 @@
 PoseGraph through simulated laps and serves it. Skipped unless EGS_FAKE_HOST names the binary."""
 
 import io
+import json
+import math
 import os
 import re
 import select
@@ -109,7 +111,19 @@ class IntegrationTest(unittest.TestCase):
         shelf = self.ok("where", "places/dock/shelf")
         self.assertIn("precision inherited", shelf)
         self.assertIn("resolved_via places/dock", shelf)
-        self.assertIn("current places/dock", self.ok("here"))
+        here = self.ok("here")
+        self.assertIn("current places/dock", here)
+        self.assertIn("match 0.80 (avg 0.80)", here.splitlines())
+        ahead = self.ok("place", "save", "places/doorway", "--offset", "1", "0", "0")
+        self.assertIn("offset 1.00,0.00,0.00", ahead)
+        # Both saved from the same keyframe, so they sit exactly the offset apart.
+        def xy(path):
+            text = self.ok("where", path)
+            return [float(v) for v in re.search(r"xy (\S+)", text).group(1).split(",")]
+
+        self.assertAlmostEqual(
+            math.dist(xy("places/dock"), xy("places/doorway")), 1.0, delta=0.02
+        )
 
         observed = self.ok("observe", "places/dock/shelf/cup", "--offset", "0.5", "0", "0")
         self.assertIn("written to places/dock/shelf/cup/node.yaml", observed)
@@ -117,7 +131,23 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("offset_from: %s" % anchor, f.read())
         cup = self.ok("where", "places/dock/shelf/cup")
         self.assertIn("precision offset", cup)
+        cup = json.loads(self.ok("where", "places/dock/shelf/cup", "--json"))
+        self.assertEqual((cup["precision"], cup["place"]), ("offset", "places/dock"))
+        self.assertEqual(len(json.loads(self.ok("--json", "here"))["robot"]), 3)
+        photo = os.path.join(self.tmp, "cup.PNG")
+        with open(photo, "wb") as f:
+            f.write(PNG_SIGNATURE + bytes(range(256)))
+        seen = json.loads(self.ok("observe", "places/dock/shelf/cup", "--attach", photo, "--json"))
+        self.assertEqual(seen["attachment"], "attachments/%d.png" % seen["id"])
+        with open(os.path.join(memory, "places/dock/shelf/cup", seen["attachment"]), "rb") as f:
+            self.assertEqual(f.read(), PNG_SIGNATURE + bytes(range(256)))
         self.assertTrue(self.ok("find", "cup").startswith("places/dock/shelf/cup [cup]"))
+
+        added = self.ok("zone", "add", "places/dock/ramp", "--rect", "0.5", "-0.5", "1.5", "0.5")
+        self.assertIn("in the frame of places/dock (anchor %s)" % anchor, added)
+        self.assertIn(
+            "places/dock/ramp keepout  places/dock (anchor %s)" % anchor, self.ok("zone", "ls")
+        )
 
         snapshot = self.ok("snapshot")
         m = re.search(r"^snapshot \d+  (\S+)$", snapshot, re.M)
@@ -136,6 +166,9 @@ class IntegrationTest(unittest.TestCase):
         with open(png, "rb") as f:
             self.assertEqual(f.read(len(PNG_SIGNATURE)), PNG_SIGNATURE)
         self.assertRegex(self.ok("view", "map"), r"(?m)^1 places/dock \d")
+        self.assertIn("zones: 1 keepout", lines)
+        self.assertIn("removed places/dock/ramp/zone.yaml", self.ok("zone", "rm", "places/dock/ramp"))
+        self.assertEqual(self.ok("zone", "ls").splitlines()[0], "no zones")
 
         self._fs()
 
@@ -144,7 +177,8 @@ class IntegrationTest(unittest.TestCase):
         self.assertRegex(ls, r"(?m)^%s fed " % fed)
         code, out, _ = self.egs("session", "rm", fed)
         self.assertEqual(code, 1, out)
-        self.assertIn("fed_session", out)
+        # fake_host wires no drop_session hook: it cannot drop the fed session.
+        self.assertIn("rejected: not_supported", out)
         code, out, _ = self.egs("session", "freeze")
         rejected = "rejected" in out
         self.assertEqual(code, 1 if rejected else 0, out)

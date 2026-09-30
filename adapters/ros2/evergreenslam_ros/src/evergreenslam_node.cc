@@ -9,6 +9,7 @@
  *
  */
 
+#include <glog/logging.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
@@ -41,6 +42,7 @@
 #endif
 #ifdef EVERGREENSLAM_WITH_AGENT
 #include "agent_host.h"
+#include "keepout_mask_publisher.h"
 #endif
 
 namespace evergreenslam::ros2 {
@@ -92,6 +94,8 @@ class EvergreenSlamNode : public rclcpp::Node {
     const int agent_port = declare_parameter<int>("agent_port", 8643);
     const std::string agent_bind = declare_parameter<std::string>("agent_bind", "127.0.0.1");
 #ifdef EVERGREENSLAM_WITH_AGENT
+    keepout_mask_topic_ =
+        declare_parameter<std::string>("keepout_mask_topic", "keepout_filter_mask");
     agent_option_ = {agent_port, agent_bind, map_root_, ""};
     if (!lifelong_ && agent_port > 0) {
       RCLCPP_WARN(get_logger(), "agent service off: it needs the backend (lifelong)");
@@ -140,6 +144,11 @@ class EvergreenSlamNode : public rclcpp::Node {
           return;
         }
         pose_graph_publisher_->Publish();
+#ifdef EVERGREENSLAM_WITH_AGENT
+        if (keepout_mask_publisher_ != nullptr) {
+          keepout_mask_publisher_->Publish();
+        }
+#endif
 #ifdef EVERGREENSLAM_WITH_WEBUI
         // Must run on the executor thread, not a backend task; it enqueues its own.
         if (web_debug_sink_ != nullptr) {
@@ -175,15 +184,20 @@ class EvergreenSlamNode : public rclcpp::Node {
     return home + path.substr(1);
   }
 
+  std::unique_ptr<mapping::LocalTrajectoryBuilder> MakeBuilder() const {
+    auto builder = std::make_unique<mapping::LocalTrajectoryBuilder>(option_);
+#ifdef EVERGREENSLAM_WITH_WEBUI
+    if (web_debug_sink_ != nullptr) {
+      builder->SetDebugSink(web_debug_sink_);
+    }
+#endif
+    return builder;
+  }
+
   // The per-map objects. One executor thread runs this, the scan callback and both timers, so
   // none of them can see a half-built pipeline.
   void BuildPipeline() {
-    builder_ = std::make_unique<mapping::LocalTrajectoryBuilder>(option_);
-#ifdef EVERGREENSLAM_WITH_WEBUI
-    if (web_debug_sink_ != nullptr) {
-      builder_->SetDebugSink(web_debug_sink_);
-    }
-#endif
+    builder_ = MakeBuilder();
     if (!lifelong_) {
       return;
     }
@@ -211,17 +225,27 @@ class EvergreenSlamNode : public rclcpp::Node {
         std::make_unique<PoseGraphPublisher>(*this, *backend_, map_frame_, std::move(hook));
 #ifdef EVERGREENSLAM_WITH_AGENT
     agent_option_.map_name = map_name_;
-    agent_host_ =
-        AgentHost::Create(agent_option_, *backend_, [this](const agent::MapSwitchRequest& request) {
+    agent_host_ = AgentHost::Create(
+        agent_option_, *backend_,
+        [this](const agent::MapSwitchRequest& request) {
           std::lock_guard<std::mutex> lock(switch_mutex_);
           pending_switch_ = request;
           return true;
-        });
+        },
+        [this](const agent::SessionDropRequest& request) { return DropFedSession(request); });
+    if (agent_host_ != nullptr) {
+      keepout_mask_publisher_ = std::make_unique<KeepoutMaskPublisher>(
+          *this, *backend_, agent_host_->zones(), map_frame_, keepout_mask_topic_);
+    }
 #endif
   }
 
+  // Runs after agent_host_->Stop() joined the worker that calls DropFedSession, on the executor
+  // thread that runs HandleScan, so builder_ needs no frontend_mutex_ here.
   void Teardown() {
 #ifdef EVERGREENSLAM_WITH_AGENT
+    // The mask publisher's tasks read the host's ZoneStore: drain them before the host goes.
+    keepout_mask_publisher_.reset();
     if (agent_host_ != nullptr) {
       agent_host_->Stop();
       agent_host_.reset();
@@ -266,6 +290,31 @@ class EvergreenSlamNode : public rclcpp::Node {
       }
     }
   }
+
+  // The service's worker thread, which calls it only after a plan, so the backend has started.
+  // frontend_mutex_ keeps every keyframe of the old builder ahead of the drop.
+  lifelong::PoseGraph::DropFedSessionResult DropFedSession(
+      const agent::SessionDropRequest& request) {
+    std::lock_guard<std::mutex> lock(frontend_mutex_);
+    CHECK(backend_ != nullptr && backend_started_);
+    const lifelong::PoseGraph::DropFedSessionResult result = backend_->DropFedSession(request.id);
+    if (result.refusal == lifelong::PoseGraph::DropFedSessionResult::Refusal::NONE) {
+      CHECK(result.fed_now.has_value());
+      builder_ = MakeBuilder();
+      // Under frontend_mutex_, so no Update from the new builder precedes the reset.
+      if (agent_host_ != nullptr) {
+        agent_host_->OnFedSessionDropped();
+      }
+#ifdef EVERGREENSLAM_WITH_WEBUI
+      if (web_debug_sink_ != nullptr) {
+        web_debug_sink_->Reset();
+      }
+#endif
+      RCLCPP_INFO(get_logger(), "dropped fed session %d; session %d is fed now, pose lost",
+                  request.id.session_index, result.fed_now->session_index);
+    }
+    return result;
+  }
 #endif
 
   void HandleScan(const sensor_msgs::msg::LaserScan& scan) {
@@ -278,6 +327,7 @@ class EvergreenSlamNode : public rclcpp::Node {
       return;
     }
 
+    std::lock_guard<std::mutex> lock(frontend_mutex_);
     if (backend_ != nullptr && !backend_started_) {
       // Boot on the sensor clock, not ours.
       backend_->Start(timed_scan.time, std::nullopt, !ignore_last_pose_);
@@ -299,10 +349,13 @@ class EvergreenSlamNode : public rclcpp::Node {
     }
 #ifdef EVERGREENSLAM_WITH_AGENT
     if (agent_host_ != nullptr) {
-      agent_host_->Update(timed_scan.time, builder_->local_pose(), timed_scan.point_cloud);
+      agent_host_->Update(
+          timed_scan.time, builder_->local_pose(), timed_scan.point_cloud,
+          matching != nullptr ? std::optional<double>(matching->match_score) : std::nullopt);
     }
 #endif
-    Publish(ToRosTime(timed_scan.time), builder_->local_pose());
+    Publish(ToRosTime(timed_scan.time), builder_->local_pose(),
+            matching != nullptr ? matching->velocity : Eigen::Vector3d(Eigen::Vector3d::Zero()));
   }
 
   void HandleInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped& message) {
@@ -338,7 +391,9 @@ class EvergreenSlamNode : public rclcpp::Node {
     }
   }
 
-  void Publish(const builtin_interfaces::msg::Time& stamp, const Eigen::Affine2d& pose) {
+  // `velocity` is [vx, vy, omega] in local axes; the twist goes out in the child frame.
+  void Publish(const builtin_interfaces::msg::Time& stamp, const Eigen::Affine2d& pose,
+               const Eigen::Vector3d& velocity) {
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = stamp;
     odom.header.frame_id = odom_frame_;
@@ -346,6 +401,10 @@ class EvergreenSlamNode : public rclcpp::Node {
     odom.pose.pose.position.x = pose.translation().x();
     odom.pose.pose.position.y = pose.translation().y();
     odom.pose.pose.orientation = YawToQuaternion(utils::transform::GetYaw(pose));
+    const Eigen::Vector2d body_velocity = pose.linear().transpose() * velocity.head<2>();
+    odom.twist.twist.linear.x = body_velocity.x();
+    odom.twist.twist.linear.y = body_velocity.y();
+    odom.twist.twist.angular.z = velocity.z();
     odom_publisher_->publish(odom);
 
     if (publish_tf_) {
@@ -387,6 +446,7 @@ class EvergreenSlamNode : public rclcpp::Node {
     PublishMap(stamp);
   }
 
+  // Under HandleScan's frontend_mutex_, its only caller.
   void PublishMap(const builtin_interfaces::msg::Time& stamp) {
     // Not matching_submap(): that one stops growing halfway through its life.
     const auto& submaps = builder_->active_map().submaps();
@@ -439,6 +499,8 @@ class EvergreenSlamNode : public rclcpp::Node {
   std::string map_root_;
   std::string map_name_;
 
+  // The agent's drop replaces builder_ from the service's worker thread.
+  std::mutex frontend_mutex_;
   std::unique_ptr<mapping::LocalTrajectoryBuilder> builder_;
   std::unique_ptr<lifelong::PoseGraph> backend_;
   bool backend_started_ = false;
@@ -467,6 +529,8 @@ class EvergreenSlamNode : public rclcpp::Node {
 #ifdef EVERGREENSLAM_WITH_AGENT
   AgentHostOption agent_option_;
   std::unique_ptr<AgentHost> agent_host_;
+  std::string keepout_mask_topic_;
+  std::unique_ptr<KeepoutMaskPublisher> keepout_mask_publisher_;
   rclcpp::TimerBase::SharedPtr switch_timer_;
   std::mutex switch_mutex_;
   std::optional<agent::MapSwitchRequest> pending_switch_;

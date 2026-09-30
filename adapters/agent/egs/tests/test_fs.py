@@ -106,7 +106,12 @@ class LocalFsTest(EgsTestCase):
         self.assertIn("owned_by_process", err)
 
     def test_local_places_never_move_under_skills(self):
-        for dst in ("places/dock/skills", "places/dock/skills/kitchen", "places/skills/kitchen"):
+        for dst in (
+            "places/dock/skills",
+            "places/dock/skills/kitchen",
+            "places/skills/kitchen",
+            "places/dock/attachments/kitchen",
+        ):
             code, _, err = self.egs("fs", "mv", "places/kitchen", dst)
             self.assertEqual(code, 2, (dst, err))
             self.assertIn("reserved_name", err)

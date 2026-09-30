@@ -23,6 +23,7 @@
 
 #include "common/file.h"
 #include "service/endpoints.h"
+#include "service/fs_sandbox.h"
 #include "service/http_reply.h"
 
 namespace evergreenslam::agent {
@@ -32,6 +33,7 @@ namespace fs = std::filesystem;
 
 constexpr uintmax_t kMaxCatBytes = 1 << 20;
 constexpr int kMaxTreeDepth = 6;
+constexpr int kDefaultTreeDepth = 3;
 
 struct Entry {
   std::string name;
@@ -111,9 +113,12 @@ void AppendTree(const fs::path& directory, const std::string& prefix, int depth,
     out += prefix + (last ? "└── " : "├── ") + entries[i].name + "\n";
     if (entries[i].directory) {
       ++num_directories;
+      const std::string child_prefix = prefix + (last ? "    " : "│   ");
       if (depth < max_depth) {
-        AppendTree(directory / entries[i].name, prefix + (last ? "    " : "│   "), depth + 1,
-                   max_depth, out, num_directories, num_files);
+        AppendTree(directory / entries[i].name, child_prefix, depth + 1, max_depth, out,
+                   num_directories, num_files);
+      } else if (!ListDirectory(directory / entries[i].name).empty()) {
+        out += child_prefix + "└── …\n";
       }
     } else {
       ++num_files;
@@ -145,7 +150,8 @@ void HandleTree(const ServiceContext& context, const httplib::Request& request,
                 httplib::Response& response) {
   const SandboxPath path = context.sandbox.Resolve(RequiredParam(request, "path"));
   const std::optional<std::string> depth_param = OptionalParam(request, "depth");
-  const int64_t depth = depth_param.has_value() ? ParseInt("depth", *depth_param) : 2;
+  const int64_t depth =
+      depth_param.has_value() ? ParseInt("depth", *depth_param) : kDefaultTreeDepth;
   if (depth < 1 || depth > kMaxTreeDepth) {
     throw RequestError("bad_param", "depth is 1 to 6");
   }
@@ -260,11 +266,14 @@ void HandleMove(const ServiceContext& context, const httplib::Request& request,
   if (directory) {
     FsSandbox::CheckDirectoryNames(to, to.components.size() - 1);
   }
-  // Scan skips skills/ subtrees: a place or thing moved there would silently vanish.
-  if (std::find(to.components.begin(), to.components.end(), "skills") != to.components.end() &&
+  // Scans skip skills/ and attachments/ subtrees: a place or thing moved there would vanish.
+  if (std::any_of(to.components.begin(), to.components.end(),
+                  [](const std::string& c) { return FsSandbox::IsReservedName(c); }) &&
       HoldsNodeFiles(from.absolute)) {
-    throw RequestError("reserved_name", "skills never holds place.yaml or node.yaml: " +
-                                            from.relative + " -> " + to.relative);
+    throw RequestError("reserved_name",
+                       "skills and attachments never hold place.yaml or "
+                       "node.yaml: " +
+                           from.relative + " -> " + to.relative);
   }
   if (to.exists()) {
     SendRefusal(response, "exists", to.relative + " exists");

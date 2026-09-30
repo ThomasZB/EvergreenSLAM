@@ -202,6 +202,65 @@ TEST(LocalTrajectoryBuilderTest, BuildsAMapWithWallsAndFreeSpace) {
   EXPECT_NEAR(ValueToProbability(snapshot.GetValueAtPoint(outside)), kUnknownProbability, 1e-6);
 }
 
+// Accelerates from rest to 0.5 m/s along `heading`, then holds the speed; the last scan's result.
+std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> RunStraight(double heading) {
+  constexpr int kNumScans = 60;
+  constexpr int kNumBeams = 360;
+  constexpr double kSpeed = 0.5;
+
+  LocalTrajectoryBuilder builder{LocalTrajectoryBuilderOption()};
+  std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> result;
+  for (int i = 0; i < kNumScans; ++i) {
+    const double t = 0.1 * i;
+    const double distance = t < 1.0 ? 0.5 * kSpeed * t * t : kSpeed * (t - 0.5);
+    const Eigen::Affine2d world_pose = transform::FromXYTheta(
+        2.0 + distance * std::cos(heading), 2.0 + distance * std::sin(heading), heading);
+    result = builder.AddScan(ScanTime(i), SimulateScan(world_pose, kNumBeams));
+    if (result == nullptr) {
+      ADD_FAILURE() << "scan " << i << " dropped";
+      return nullptr;
+    }
+  }
+  return result;
+}
+
+// Off the room's axes: heading 0 is DISABLED_StraightRunAlongTheRoomAxis, an open frontend issue.
+TEST(LocalTrajectoryBuilderTest, ReportsTheFilterVelocityOnAStraightRun) {
+  const auto result = RunStraight(0.3);
+  ASSERT_NE(result, nullptr);
+  EXPECT_NEAR(result->velocity.x(), 0.5, 0.1);
+  EXPECT_NEAR(result->velocity.y(), 0.0, 0.05);
+  EXPECT_NEAR(result->velocity.z(), 0.0, 0.05);
+  EXPECT_NEAR(result->acceleration.x(), 0.0, 0.5);
+}
+
+// Repro, not yet understood: observed staying at the origin (score ~0.35) when the run is parallel
+// to a wall. Enable once the predictor/matcher from rest is investigated.
+TEST(LocalTrajectoryBuilderTest, DISABLED_StraightRunAlongTheRoomAxis) {
+  const auto result = RunStraight(0.0);
+  ASSERT_NE(result, nullptr);
+  EXPECT_NEAR(result->local_pose.translation().x(), 0.5 * (5.9 - 0.5), 0.1);
+  EXPECT_NEAR(result->velocity.x(), 0.5, 0.1);
+}
+
+// The filter keeps velocity in the body frame. Here the heading climbs to 0.6 rad while the
+// direction of travel stays at atan2(1.5, 4), so only local axes give that direction.
+TEST(LocalTrajectoryBuilderTest, ReportsVelocityInLocalAxes) {
+  constexpr int kNumScans = 200;
+  constexpr int kNumBeams = 360;
+
+  LocalTrajectoryBuilder builder{LocalTrajectoryBuilderOption()};
+  std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> result;
+  for (int i = 0; i < kNumScans; ++i) {
+    result = builder.AddScan(ScanTime(i), SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams));
+    ASSERT_NE(result, nullptr);
+  }
+  const double seconds = 0.1 * (kNumScans - 1);
+  EXPECT_NEAR(result->velocity.head<2>().norm(), std::hypot(4.0, 1.5) / seconds, 0.05);
+  EXPECT_NEAR(std::atan2(result->velocity.y(), result->velocity.x()), std::atan2(1.5, 4.0), 0.1);
+  EXPECT_NEAR(result->velocity.z(), 0.6 / seconds, 0.02);
+}
+
 class RecordingSink : public debug::DebugSink {
  public:
   void PublishScanMatch(common::Time, const std::unordered_map<std::string, Eigen::Affine2d>& poses,

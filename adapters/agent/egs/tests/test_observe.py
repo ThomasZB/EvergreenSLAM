@@ -95,6 +95,24 @@ class ObserveTest(EgsTestCase):
         self.assertIn("flat subset", out)
         self.assertIn("pos:\n  x: 1", self.read("places/kitchen/table/node.yaml"))
 
+    def test_offset_refused_until_aligned_to_the_base(self):
+        self.state.aligned_to_base = False
+        before = self.read("places/kitchen/fridge/milk/node.yaml")
+        for extra in ((), ("--force",)):
+            code, out, _ = self.egs(
+                "observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0", *extra
+            )
+            self.assertEqual(code, 1, out)
+            self.assertIn("not aligned to the base map", out)
+        self.assertEqual(self.read("places/kitchen/fridge/milk/node.yaml"), before)
+        code, out, _ = self.egs(
+            "observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0", "--json"
+        )
+        self.assertEqual(json.loads(out)["reason"], "not_aligned")
+        self.state.has_frozen_base = False
+        code, _, _ = self.egs("observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0")
+        self.assertEqual(code, 0)
+
     def test_offset_far_from_the_place_needs_force(self):
         # Anchor 3 (the fridge) is at (6, -2); the robot is 100 m away.
         self.state.robot = pose(106.0, -2.0, 0.0)

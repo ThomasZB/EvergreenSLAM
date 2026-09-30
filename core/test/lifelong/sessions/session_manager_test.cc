@@ -386,6 +386,63 @@ TEST(SessionManagerTest, BootstrapFreezesTheFirstSessionAtItsFirstFinishedSubmap
       1e-12);
 }
 
+SessionId ReplaceOnTask(Harness& h, common::Time time) {
+  std::promise<SessionId> promise;
+  std::future<SessionId> future = promise.get_future();
+  h.pose_graph.Enqueue(
+      [&h, &promise, time] { promise.set_value(h.manager.ReplaceFedSessionOnTask(time)); });
+  return future.get();
+}
+
+// A drop, not a rotation: the old session keeps its submaps unfrozen for the caller to remove.
+TEST(SessionManagerTest, ReplaceFedSessionOpensTheNextIdAndFreezesNothing) {
+  Harness h;
+  const SessionId first = h.manager.Start(TestTime(0));
+  Feeder feeder(h.pose_graph, &h.manager, first);
+  const SessionId second = Bootstrap(h, feeder);
+  feeder.FeedNodes(25);
+  h.pose_graph.WaitUntilQuiescent();
+  const std::vector<SubmapId> second_submaps = h.pose_graph.graph().session(second).submap_ids;
+  ASSERT_FALSE(second_submaps.empty());
+  ASSERT_EQ(h.manager.expansion().count(second), 1u);
+
+  const SessionId next = ReplaceOnTask(h, TestTime(100));
+  EXPECT_EQ(next.session_index, second.session_index + 1);
+  EXPECT_EQ(*h.manager.fed_session(), next);
+  ASSERT_EQ(h.observer->started.size(), 3u);
+  EXPECT_EQ(h.observer->started.back(), next);
+  EXPECT_EQ(h.observer->submaps_when_notified.back(), 0);
+  EXPECT_EQ(h.observer->frozen.size(), 1u);
+  EXPECT_EQ(h.manager.num_sessions_frozen(), 1);
+
+  const PoseGraphData& graph = h.pose_graph.graph();
+  EXPECT_FALSE(graph.session(second).frozen());
+  EXPECT_EQ(graph.session(second).submap_ids, second_submaps);
+  EXPECT_TRUE(graph.session(next).submap_ids.empty());
+  EXPECT_TRUE(graph.session(next).local_to_global.matrix().isIdentity(0.0));
+  EXPECT_EQ(common::ToUnixNanos(graph.session(next).start_time),
+            common::ToUnixNanos(TestTime(100)));
+  EXPECT_EQ(h.manager.expansion().count(second), 0u);
+  ASSERT_EQ(h.manager.expansion().count(next), 1u);
+  EXPECT_TRUE(h.state(next).dirty) << "a frozen layer exists, so the account is rebuilt";
+  EXPECT_EQ(h.state(next).phase, Phase::BOOTSTRAP);
+}
+
+TEST(SessionManagerTest, ReplaceFedSessionWithoutAFrozenLayerLeavesTheAccountClean) {
+  Harness h;
+  const SessionId first = h.manager.Start(TestTime(0));
+  Feeder feeder(h.pose_graph, &h.manager, first);
+  feeder.FeedNodes(5);
+  h.pose_graph.WaitUntilQuiescent();
+
+  const SessionId next = ReplaceOnTask(h, TestTime(10));
+  EXPECT_EQ(next.session_index, first.session_index + 1);
+  EXPECT_FALSE(h.pose_graph.graph().session(first).frozen());
+  EXPECT_EQ(h.manager.expansion().count(first), 0u);
+  ASSERT_EQ(h.manager.expansion().count(next), 1u);
+  EXPECT_FALSE(h.state(next).dirty);
+}
+
 TEST(SessionManagerTest, ASessionWithoutGrowthStaysLocalizingHoweverManySubmapsFinish) {
   Harness h;
   const SessionId first = h.manager.Start(TestTime(0));

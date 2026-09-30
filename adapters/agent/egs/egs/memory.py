@@ -13,6 +13,7 @@ from .client import EXIT_USAGE, EgsError
 from .yamlmini import YamlSubsetError, loads
 
 RANK_NAME, RANK_ALIAS, RANK_KIND, RANK_WORD, RANK_FUZZY = range(5)
+ATTACHMENTS = "attachments"
 FUZZY_CUTOFF = 0.75
 
 
@@ -20,7 +21,7 @@ class UnreadablePlace(EgsError):
     """A place.yaml that does not parse to an anchor id; `place` is its directory."""
 
     def __init__(self, place, message):
-        super().__init__(message, EXIT_USAGE)
+        super().__init__(message, EXIT_USAGE, "unreadable_place")
         self.place = place
 
 
@@ -104,11 +105,11 @@ class Memory:
         return [
             posixpath.join(rel, n)
             for n, t in sorted(self._names(rel).items())
-            if t == "dir" and n != "skills"
+            if t == "dir" and n not in ("skills", ATTACHMENTS)
         ]
 
     def nodes(self, rel="places"):
-        """Every node directory below rel: no skills/ subtrees, no symlinks."""
+        """Every node directory below rel: no skills/ or attachments/ subtrees, no symlinks."""
         out = []
         for c in self.children(rel):
             out.append(c)

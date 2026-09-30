@@ -30,9 +30,16 @@
 
 namespace evergreenslam::agent {
 
+struct ScanMatch {
+  double score = 0.0;
+  double avg = 0.0;
+};
+
 struct RobotReading {
   std::optional<Eigen::Affine2d> pose;
   std::optional<double> keyframe_age_s;
+  // From the same host frame as `pose`; empty whenever it is.
+  std::optional<ScanMatch> scan_match;
 };
 
 struct BaseAlignment {
@@ -69,6 +76,7 @@ std::map<lifelong::AnchorId, lifelong::ResolvedAnchor> ById(
 void WritePose(JsonWriter& writer, std::string_view key,
                const std::optional<Eigen::Affine2d>& pose);
 void WriteSubmapId(JsonWriter& writer, std::string_view key, const lifelong::SubmapId& id);
+void WriteScanMatch(JsonWriter& writer, const std::optional<ScanMatch>& scan_match);
 
 }  // namespace evergreenslam::agent
 

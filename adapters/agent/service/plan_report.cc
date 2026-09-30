@@ -66,6 +66,7 @@ void PlanReport::WriteFields(JsonWriter& writer) const {
     writer.Int(static_cast<int64_t>(id));
   }
   writer.EndArray();
+  writer.Field("drops_fed", drops_fed).OptionalField("note", note);
   writer.Field("at_num_solves", at_num_solves).Field("plan_token", Token());
 }
 

@@ -111,6 +111,9 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   EXPECT_EQ(JsonRaw(resaved.body, "anchor"), anchor);
   EXPECT_EQ(ReadText(memory / "places/dock/place.yaml"), "anchor: " + anchor + "\n");
   EXPECT_EQ(client.Post("/place/save", {{"path", "places/skills"}}).status, 400);
+  EXPECT_EQ(
+      JsonRaw(client.Post("/place/save", {{"path", "places/dock/attachments"}}).body, "reason"),
+      "reserved_name");
   EXPECT_EQ(JsonRaw(client.Post("/place/save", {{"path", "places/Dock"}}).body, "reason"),
             "not_slug");
   EXPECT_EQ(JsonRaw(client.Post("/place/save", {{"path", "dock"}}).body, "reason"), "bad_param");
@@ -181,10 +184,11 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   EXPECT_EQ(JsonRaw(sessions.body, "role"), "fed");
   EXPECT_EQ(JsonNumber(sessions.body, "anchors"), 1);
 
-  // rm refuses the fed session and unknown ids; apply without a matching plan does nothing.
+  // rm refuses the fed session on a host without a drop hook, and unknown ids; apply without a
+  // matching plan does nothing.
   const Reply rm_fed = client.Post("/sessions/rm/plan", {{"id", fed}});
   EXPECT_EQ(JsonRaw(rm_fed.body, "ok"), "false");
-  EXPECT_EQ(JsonRaw(rm_fed.body, "rejection"), "fed_session");
+  EXPECT_EQ(JsonRaw(rm_fed.body, "rejection"), "not_supported");
   const Reply rm_fed_apply = client.Post(
       "/sessions/rm/apply", {{"id", fed}, {"plan_token", JsonRaw(rm_fed.body, "plan_token")}});
   EXPECT_EQ(JsonRaw(rm_fed_apply.body, "reason"), "plan_changed");
@@ -212,7 +216,14 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   const Reply ls = client.Get("/fs/ls?path=places/dock");
   EXPECT_NE(ls.body.find("{\"name\":\"notes.md\",\"type\":\"file\",\"size\":8}"), std::string::npos)
       << ls.body;
-  EXPECT_NE(client.Get("/fs/tree?path=.&depth=3").body.find("└── place.yaml"), std::string::npos);
+  const std::string tree = client.Get("/fs/tree?path=.").body;
+  EXPECT_EQ(tree, client.Get("/fs/tree?path=.&depth=3").body);
+  EXPECT_NE(tree.find("└── place.yaml"), std::string::npos) << tree;
+  EXPECT_EQ(tree.find("…"), std::string::npos) << tree;
+  // places/dock is cut off at depth 2: one marker line under it, not counted.
+  const std::string shallow = client.Get("/fs/tree?path=.&depth=2").body;
+  EXPECT_NE(shallow.find("    └── dock\n        └── …\n"), std::string::npos) << shallow;
+  EXPECT_EQ(shallow.find("place.yaml"), std::string::npos) << shallow;
   EXPECT_EQ(JsonRaw(client.Post("/fs/mkdir", {{"path", "places/kitchen/table"}}).body, "ok"),
             "true");
   EXPECT_TRUE(fs::is_directory(memory / "places/kitchen/table"));
@@ -256,6 +267,8 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   EXPECT_EQ(
       reason(client.Post("/fs/mv", {{"from", "places/dock"}, {"to", "places/kitchen/skills"}})),
       "reserved_name");
+  EXPECT_EQ(reason(client.Post("/fs/mv", {{"from", "places/dock"}, {"to", "places/attachments"}})),
+            "reserved_name");
   EXPECT_EQ(reason(client.Post("/fs/mkdir", {{"path", "places/kitchen/skills/clean"}})), "null");
   EXPECT_EQ(reason(client.Post("/fs/mv", {{"from", "places/kitchen/skills/clean"},
                                           {"to", "places/kitchen/skills/wipe"}})),
@@ -425,7 +438,7 @@ TEST(AgentServiceE2eTest, ViewsRenderPresetsAndRefuse) {
     EXPECT_TRUE(fs::is_regular_file(fs::path(map_dir) / view.Header("X-EGS-View"))) << preset;
   }
   const Reply map = client.Get("/view?preset=map");
-  EXPECT_EQ(map.Header("X-EGS-Layers"), "map,places");
+  EXPECT_EQ(map.Header("X-EGS-Layers"), "map,places,zones");
   EXPECT_NE(map.Header("X-EGS-Legend").find("places/dock"), std::string::npos)
       << map.Header("X-EGS-Legend");
   EXPECT_EQ(map.Header("X-EGS-View"), "views/000005_map.png");

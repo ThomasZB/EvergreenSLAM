@@ -23,10 +23,12 @@ memory/
     kitchen/SKILL.md                 what to know in the kitchen
     kitchen/skills/clean/SKILL.md    a kitchen skill, may carry scripts/
     kitchen/notes.md                 free notes
+    kitchen/slope/zone.yaml          a keep-out area, in kitchen's anchor frame (egs zone add)
     kitchen/fridge/place.yaml        a fixed thing you can stand at is a place
     kitchen/table/node.yaml          no place.yaml: a container, no geometry of its own
     kitchen/table/apple/node.yaml
     kitchen/table/apple/observations.jsonl
+    kitchen/table/apple/attachments/<id>.jpg   a file an observation line names; never a node
 ```
 
 Directory names are ASCII slugs, `[a-z0-9][a-z0-9_-]*`. Names in other languages go into
@@ -43,6 +45,8 @@ Directory names are ASCII slugs, `[a-z0-9][a-z0-9_-]*`. Names in other languages
 | `notes.md` | you or a human | `cat > f.tmp` then `mv` |
 | `SKILL.md`, `skills/**` | you or a human | `cat > f.tmp` then `mv` |
 | `observations.jsonl` | you, or `egs observe` | append one line per write (`>>`); never edit |
+| `attachments/` | you, via `egs observe --attach <file>` | copied before the line that names it; never edit |
+| `zone.yaml` | you, via `egs zone add` | relative to the nearest place's anchor; `egs zone rm` deletes it |
 
 One agent session per map at a time: every file has one writer *class* (the process, or you and
 humans), so nothing is locked.
@@ -54,8 +58,9 @@ humans), so nothing is locked.
    solve they came from, and stale by design. For a current position run `egs where <path>`.
 2. **`place.yaml` is `{anchor: <id>}` and nothing else.** The process writes it when you stand
    somewhere and run `egs place save <path>`; saving an existing place again keeps its anchor id and
-   updates the pose. It always means "a pose the robot stood at", never the centre of an object.
-   Save places only while standing at them.
+   updates the pose. It always means "a pose the robot stood at" (or could stand at), never the
+   centre of an object. Save places standing at them, or within 3 m in free space you can see
+   (`egs place save <path> --offset DX DY DTHETA`, robot frame: x forward, y left).
 3. **Things you can stand in front of (table, stove, fridge, door, bed) are places**: save them.
    Small movable things are plain subdirectories with a `node.yaml`, never a `place.yaml`. An
    object's position is inherited from its nearest ancestor with a `place.yaml`, or given by
@@ -66,11 +71,14 @@ humans), so nothing is locked.
 5. **`egs` paths are relative to `memory/` and start with `places/`**, exactly as `find places ...`
    prints them. Your shell stays in `memory/`; it does not follow the robot. Where the robot is
    comes only from `egs here`.
-6. **`skills` is a reserved name**: never a place or a thing, and never contains `place.yaml`.
+6. **`skills` and `attachments` are reserved names**: never a place or a thing, and never contain
+   `place.yaml`.
 7. **No symbolic links.** `find`, `tree` and `grep` disagree about them and `egs` refuses them. A
    second name for the same thing goes into `aliases`; two things with one name are two directories.
 8. **There is no `egs goto`.** `egs` never moves the robot. To go somewhere, hand the `approach`
    pose from `egs where` to the navigation stack your host gives you.
+9. **Keep-out zones go through `egs zone add`**; the polygon is in the anchor's frame and moves
+   with the map.
 
 Changing the tree: `mv` renames or re-parents (a place's binding moves with its directory);
 `rm -r` deletes; `mkdir` makes a container with no geometry. Never `cp -r` a directory that holds
@@ -91,6 +99,21 @@ while that anchor is still the nearest `place.yaml` above this directory; after 
 ignored and the position falls back to inherited. Prefer `egs observe <path> --offset dx dy dtheta`
 (given in the robot's current frame), which computes and writes both fields.
 
+## zone.yaml
+
+```yaml
+kind: keepout                        # the only kind; others are ignored
+frame: places/kitchen                # the nearest place.yaml above, at the time of `egs zone add`
+polygon: [[1.0, -1.0], [3.0, -1.0], [3.0, 1.0], [1.0, 1.0]]   # m, that place's anchor frame
+```
+
+An area the navigator must avoid (a slope, a wet floor), in its own directory below a place,
+never in the place's own directory. Its position comes from the nearest `place.yaml` above; after
+a `mv` under another place, `egs zone ls` reports `frame_mismatch`: `egs zone rm` it and add it
+again. Give the points in the robot's current frame (`egs zone add --rect` / `--polygon`); egs
+converts them, and refuses while the robot is not yet aligned to the base map. At most 100 m
+wide or tall (`too_large`).
+
 ## observations.jsonl
 
 One JSON object per line, appended, never rewritten:
@@ -106,6 +129,7 @@ One JSON object per line, appended, never rewritten:
   `absent` (checked, not there). One `not_observed` is not `absent`.
 - `invalidates`: retracts an earlier line by its `recorded_at`; nothing is ever deleted.
 - `note`: optional free text.
+- `attachment`: optional, `attachments/<id>.<ext>` relative to this directory (`egs observe --attach`).
 
 ## Where things are: precision
 
@@ -121,6 +145,9 @@ answers with a position, `approach` (A's robot pose: the one to navigate to) and
 
 An orphaned binding (its part of the map was deleted) resolves to nothing, not to an old
 position: go there and `egs place save` again.
+
+State `pending`: navigable now; its coordinates can move when the map re-optimizes, ask `egs where`
+again before each trip. `frozen`: fixed for good. `rebound`: pending again after a re-save.
 
 ## Places as workspaces
 

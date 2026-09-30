@@ -27,6 +27,8 @@ void RegisterMapEndpoints(httplib::Server& server, ServiceContext& context);
 void RegisterFsEndpoints(httplib::Server& server, ServiceContext& context);
 // /maps, /maps/new, /maps/open.
 void RegisterMapsEndpoints(httplib::Server& server, ServiceContext& context);
+// /zones.
+void RegisterZonesEndpoints(httplib::Server& server, ServiceContext& context);
 
 }  // namespace evergreenslam::agent
 

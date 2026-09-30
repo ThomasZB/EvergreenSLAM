@@ -18,25 +18,24 @@
 namespace evergreenslam::lifelong {
 namespace {
 
-// Empty when the node is gone or belongs to no submap.
-std::optional<Anchor> Bind(const PoseGraphData& graph, const NodeId& node_id, bool keep_scan) {
-  if (!graph.HasNode(node_id)) {
-    return std::nullopt;
-  }
-  const std::vector<SubmapId> containing = graph.ContainingSubmapIds(node_id);
-  if (containing.empty()) {
+std::optional<Anchor> Bind(const PoseGraphData& graph, const NodeId& node_id, bool keep_scan,
+                           const Eigen::Affine2d& node_from_anchor) {
+  const std::optional<SubmapId> submap_id = AnchorStore::BindingSubmap(graph, node_id);
+  if (!submap_id.has_value()) {
     return std::nullopt;
   }
   const Node& node = graph.node(node_id);
-  const SubmapId& oldest = containing.front();
   Anchor anchor;
-  anchor.submap_id = oldest;
-  anchor.submap_from_anchor =
-      Eigen::Affine2d(graph.submap(oldest).global_pose.inverse() * node.global_pose);
+  anchor.submap_id = *submap_id;
+  anchor.submap_from_anchor = Eigen::Affine2d(graph.submap(*submap_id).global_pose.inverse() *
+                                              node.global_pose * node_from_anchor);
   anchor.node_id = node_id;
   anchor.saved_at = node.constant_data.time;
   if (keep_scan) {
-    anchor.scan = node.constant_data.point_cloud;
+    anchor.scan = node_from_anchor.matrix().isIdentity(0.0)
+                      ? node.constant_data.point_cloud
+                      : sensor::TransformPointCloud(node.constant_data.point_cloud,
+                                                    node_from_anchor.inverse());
   }
   return anchor;
 }
@@ -74,9 +73,20 @@ const char* ToString(OrphanReason reason) {
   return "unknown";
 }
 
+std::optional<SubmapId> AnchorStore::BindingSubmap(const PoseGraphData& graph, const NodeId& node) {
+  if (!graph.HasNode(node)) {
+    return std::nullopt;
+  }
+  const std::vector<SubmapId> containing = graph.ContainingSubmapIds(node);
+  if (containing.empty()) {
+    return std::nullopt;
+  }
+  return containing.front();
+}
+
 std::optional<Anchor> AnchorStore::Save(const PoseGraphData& graph, const NodeId& node,
-                                        bool keep_scan) {
-  std::optional<Anchor> anchor = Bind(graph, node, keep_scan);
+                                        bool keep_scan, const Eigen::Affine2d& node_from_anchor) {
+  std::optional<Anchor> anchor = Bind(graph, node, keep_scan, node_from_anchor);
   if (!anchor.has_value()) {
     return std::nullopt;
   }
@@ -99,12 +109,13 @@ void AnchorStore::Erase(AnchorId id) {
 }
 
 std::optional<Anchor> AnchorStore::Rebind(const PoseGraphData& graph, AnchorId id,
-                                          const NodeId& node, bool keep_scan) {
+                                          const NodeId& node, bool keep_scan,
+                                          const Eigen::Affine2d& node_from_anchor) {
   const auto it = anchors_.find(id);
   if (it == anchors_.end()) {
     return std::nullopt;
   }
-  std::optional<Anchor> anchor = Bind(graph, node, keep_scan);
+  std::optional<Anchor> anchor = Bind(graph, node, keep_scan, node_from_anchor);
   if (!anchor.has_value()) {
     return std::nullopt;
   }

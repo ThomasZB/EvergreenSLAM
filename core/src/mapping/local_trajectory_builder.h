@@ -44,6 +44,8 @@ class LocalTrajectoryBuilder {
     common::Time time;
     Eigen::Affine2d local_pose = Eigen::Affine2d::Identity();
     double match_score = 0.0;
+    Eigen::Vector3d velocity = Eigen::Vector3d::Zero();      // [vx, vy, omega]
+    Eigen::Vector3d acceleration = Eigen::Vector3d::Zero();  // [ax, ay, alpha]
     std::unique_ptr<const InsertionResult> insertion_result = nullptr;
   };
 

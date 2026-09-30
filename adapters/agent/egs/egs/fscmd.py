@@ -1,8 +1,9 @@
 """egs fs: shell-alike file operations on memory/, local or through the /fs passthrough."""
 
+import os
 import sys
 
-from .client import EXIT_OK, EXIT_REFUSED
+from .client import EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EgsError
 from .store import norm
 
 
@@ -52,10 +53,21 @@ def cmd_tree(ctx, args):
 
 def cmd_cat(ctx, args):
     rel = _rel(ctx, args.path)
+    if args.output:
+        ctx.refuse_inside_memory(args.output)
     data = ctx.store().read(rel)
     if data is None:
         ctx.print("cannot read %s: no such file, or not a file" % rel)
         return EXIT_REFUSED
+    if args.output:
+        out = os.path.abspath(args.output)
+        try:
+            with open(out, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            raise EgsError("cannot write %s: %s" % (out, e.strerror or e), EXIT_USAGE)
+        ctx.print(out)
+        return EXIT_OK
     _write_bytes(ctx, data)
     return EXIT_OK
 

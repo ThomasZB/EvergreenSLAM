@@ -472,7 +472,9 @@ int main(int argc, char** argv) {
     last_estimate = estimate;
 #ifdef EVERGREENSLAM_WITH_AGENT
     if (agent_host != nullptr) {
-      agent_host->Update(timed_scan.time, estimate, timed_scan.point_cloud);
+      agent_host->Update(
+          timed_scan.time, estimate, timed_scan.point_cloud,
+          matching != nullptr ? std::optional<double>(matching->match_score) : std::nullopt);
     }
 #endif
 

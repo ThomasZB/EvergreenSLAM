@@ -22,6 +22,7 @@
 #include "lifelong/anchors/anchor_scenario.h"
 #include "service/agent_service.h"
 #include "service/httplib_include.h"
+#include "service/match_score_average.h"
 
 namespace evergreenslam::agent::testing {
 
@@ -138,10 +139,11 @@ inline std::string JsonRaw(const std::string& body, const std::string& path) {
 // the host's own mutex.
 class SimulatedHost {
  public:
-  void Update(common::Time time, const Eigen::Affine2d& local_pose,
-              const sensor::PointCloud& scan) {
+  void Update(common::Time time, const Eigen::Affine2d& local_pose, const sensor::PointCloud& scan,
+              double match_score = 0.0) {
     std::lock_guard<std::mutex> lock(mutex_);
-    frame_ = HostFrame{StampedPose{time, local_pose}, scan};
+    frame_ = HostFrame{StampedPose{time, local_pose}, scan, match_score,
+                       average_.Add(time, match_score)};
   }
 
   AgentServiceHooks Hooks() {
@@ -156,6 +158,7 @@ class SimulatedHost {
  private:
   std::mutex mutex_;
   std::optional<HostFrame> frame_;
+  MatchScoreAverage average_;
 };
 
 }  // namespace evergreenslam::agent::testing

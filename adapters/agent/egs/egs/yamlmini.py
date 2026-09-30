@@ -1,9 +1,11 @@
-"""The flat YAML subset memory/ files use (place.yaml, node.yaml).
+"""The flat YAML subset memory/ files use (place.yaml, node.yaml, zone.yaml).
 
 One `key: value` per line. Values: int, float, true/false, null/~, bare or quoted strings, and
-flow lists of those (`[a, b, 1.5]`). `#` starts a comment outside quotes. Nested maps, block lists
-(`- a`), anchors and multi-line strings are rejected with YamlSubsetError: egs never guesses.
-Writing drops comments.
+flow lists of those (`[a, b, 1.5]`); for the keys a caller names in `nested_keys` (zone.yaml's
+`polygon`) the items may themselves be flow lists of scalars (`[[1.0, -1.0], [3.0, -1.0]]`, one
+level). `#` starts a comment outside quotes. Nested maps,
+deeper lists, block lists (`- a`), anchors and multi-line strings are rejected with
+YamlSubsetError: egs never guesses. Writing drops comments.
 """
 
 import json
@@ -36,8 +38,8 @@ def _strip_comment(text):
     return text
 
 
-def _split_flow(body, lineno):
-    items, cur, quote, i = [], "", None, 0
+def _split_flow(body, lineno, allow_nested=False):
+    items, cur, quote, depth, i = [], "", None, 0, 0
     while i < len(body):
         c = body[i]
         if quote:
@@ -50,9 +52,15 @@ def _split_flow(body, lineno):
         elif c in "'\"":
             quote = c
             cur += c
+        elif c == "[" and allow_nested and depth == 0 and not cur.strip():
+            depth = 1
+            cur += c
+        elif c == "]" and depth == 1:
+            depth = 0
+            cur += c
         elif c in "[]{}":
             raise YamlSubsetError("line %d: nested collections are outside the subset" % lineno)
-        elif c == ",":
+        elif c == "," and depth == 0:
             items.append(cur)
             cur = ""
         else:
@@ -60,6 +68,8 @@ def _split_flow(body, lineno):
         i += 1
     if quote:
         raise YamlSubsetError("line %d: unterminated quote" % lineno)
+    if depth:
+        raise YamlSubsetError("line %d: unclosed inner list" % lineno)
     items.append(cur)
     items = [s.strip() for s in items]
     if items == [""]:
@@ -97,7 +107,7 @@ def _scalar(text, lineno):
     return text
 
 
-def loads(text):
+def loads(text, nested_keys=()):
     """Returns an ordered dict of the file's keys. Raises YamlSubsetError outside the subset."""
     out = {}
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -117,12 +127,27 @@ def loads(text):
         if value.startswith("["):
             if not value.endswith("]"):
                 raise YamlSubsetError("line %d: flow list must close on the same line" % lineno)
-            out[key] = [_scalar(s, lineno) for s in _split_flow(value[1:-1], lineno)]
+            nested = key in nested_keys
+            out[key] = [_item(s, lineno) for s in _split_flow(value[1:-1], lineno, nested)]
         elif value == "":
             raise YamlSubsetError("line %d: %r has no value (nested map?)" % (lineno, key))
         else:
             out[key] = _scalar(value, lineno)
     return out
+
+
+def _item(text, lineno):
+    if not text.startswith("["):
+        return _scalar(text, lineno)
+    if not text.endswith("]"):
+        raise YamlSubsetError("line %d: text after an inner list" % lineno)
+    return [_scalar(s, lineno) for s in _split_flow(text[1:-1], lineno)]
+
+
+def _dump_item(v):
+    if isinstance(v, (list, tuple)):
+        return "[%s]" % ", ".join(_dump_scalar(x) for x in v)
+    return _dump_scalar(v)
 
 
 def _dump_scalar(v):
@@ -162,7 +187,7 @@ def dumps(data, order=()):
     for k in keys:
         v = data[k]
         if isinstance(v, (list, tuple)):
-            lines.append("%s: [%s]" % (k, ", ".join(_dump_scalar(x) for x in v)))
+            lines.append("%s: [%s]" % (k, ", ".join(_dump_item(x) for x in v)))
         else:
             lines.append("%s: %s" % (k, _dump_scalar(v)))
     return "\n".join(lines) + "\n"
