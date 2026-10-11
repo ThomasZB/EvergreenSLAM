@@ -144,7 +144,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
   void FinishBatch();
   bool CheckpointDue() const;
-  bool CheckpointFedSession();
+  bool CheckpointSessions();
   void RelocalizeOnTask(const std::optional<Eigen::Affine2d>& prior);
   bool ReseedOnFirstAnchoring(const Constraint& constraint);
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);

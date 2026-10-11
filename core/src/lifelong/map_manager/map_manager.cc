@@ -130,7 +130,6 @@ void MapManager::OnSessionFrozen(const PoseGraphData& graph, SessionId id) {
   CHECK(graph.session(id).frozen()) << "OnSessionFrozen runs after the freeze has landed";
   const auto it = manifest_.find(id);
   if (it != manifest_.end() && it->second.state == SessionState::FROZEN) {
-    // A commit between the freeze and this callback already healed it in; frozen is write-once.
     return;
   }
   std::vector<SessionWrite> writes = {SessionWrite{id, /*frozen=*/true, /*fed=*/false}};
@@ -146,9 +145,13 @@ void MapManager::OnSessionStarted(const PoseGraphData& graph, SessionId id) {
   CommitSessions(graph, {SessionWrite{id, /*frozen=*/false, /*fed=*/true}}, BeginCommit());
 }
 
-bool MapManager::Checkpoint(const PoseGraphData& graph, SessionId id) {
-  CHECK(!graph.session(id).frozen()) << "a frozen session's file is write-once";
-  if (!CommitSessions(graph, {SessionWrite{id, /*frozen=*/false, /*fed=*/true}}, BeginCommit())) {
+bool MapManager::Checkpoint(const PoseGraphData& graph, SessionId fed_session) {
+  CHECK(!graph.session(fed_session).frozen()) << "a frozen session's file is write-once";
+  std::vector<SessionWrite> writes = UnfrozenSessionWrites(graph);
+  for (SessionWrite& write : writes) {
+    write.fed = write.id == fed_session;
+  }
+  if (!CommitSessions(graph, writes, BeginCommit())) {
     return false;
   }
   ++num_checkpoints_written_;

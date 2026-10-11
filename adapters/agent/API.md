@@ -257,7 +257,7 @@ otherwise robot and scan layers drop, noted in the legend), 400 `too_many_layers
 
 **POST /relocalize** — task, mutating. `RelocalizeGlobally()`. `→ {ok, reason, at_num_solves}`.
 
-**POST /checkpoint** — task, mutating. `CheckpointOnTask()` (one commit: the fed session file, the
+**POST /checkpoint** — task, mutating. `CheckpointOnTask()` (one commit: all unfrozen session files, the
 anchors file if changed, the manifest); a failed commit → `not_persisted`. `→ {ok, reason,
 at_num_solves, num_checkpoints_written}`.
 
@@ -405,7 +405,7 @@ anchors file is never rewritten with a lower `next_id` than the one read.
 must land on known free space in `AnchorStore::BindingSubmap(node)`, read via `SnapshotCopy`, else
 `OFFSET_NOT_FREE` before the table is touched; the stored scan is in the anchor frame) (valid
 right after a rotation too; `NO_KEYFRAME` when `last_ingested_node_index_ < 0`, since the graph's
-newest node may be a previous boot's) → `CheckpointFedSession()`, whose commit carries the new
+newest node may be a previous boot's) → `CheckpointSessions()`, whose commit carries the new
 table: a returned anchor survives a kill. A failed commit returns `NOT_PERSISTED` and no anchor,
 and rolls the table back to what the disk has (`AnchorStore::Replace` for a rebind, `Erase` for a
 new row); `next_id` stays past the refused id, which is never issued.

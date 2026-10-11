@@ -171,7 +171,7 @@ void PoseGraph::Finish() {
   task_queue_.Enqueue([this] { session_manager_.OnOptimizedOnTask(); });
   WaitUntilQuiescent();
   if (map_manager_ != nullptr) {
-    CheckpointFedSession();
+    CheckpointSessions();
   }
   RepublishActiveSessionToGlobal();
 }
@@ -258,13 +258,12 @@ void PoseGraph::FinishBatch() {
       const int trimmed_before = trimmer_.num_submaps_trimmed();
       trimmer_.TrimToCompletionOnTask();
       if (trimmer_.num_submaps_trimmed() > trimmed_before) {
-        // Inline, not enqueued: the checkpoint below must persist the re-solved state.
         OptimizeOnTask();
       }
     }
     session_manager_.OnOptimizedOnTask();
     if (map_manager_ != nullptr && CheckpointDue()) {
-      CheckpointFedSession();
+      CheckpointSessions();
     }
   }
   RepublishActiveSessionToGlobal();
@@ -277,7 +276,7 @@ bool PoseGraph::CheckpointDue() const {
          option_.checkpoint_min_interval;
 }
 
-bool PoseGraph::CheckpointFedSession() {
+bool PoseGraph::CheckpointSessions() {
   const std::optional<SessionId> fed = session_manager_.fed_session();
   CHECK(fed.has_value()) << "checkpoints only happen after Start opened the fed session";
   if (!map_manager_->Checkpoint(data_, *fed)) {
@@ -287,7 +286,7 @@ bool PoseGraph::CheckpointFedSession() {
   return true;
 }
 
-bool PoseGraph::CheckpointOnTask() { return map_manager_ == nullptr || CheckpointFedSession(); }
+bool PoseGraph::CheckpointOnTask() { return map_manager_ == nullptr || CheckpointSessions(); }
 
 std::optional<NodeId> PoseGraph::last_ingested_node() const {
   if (last_ingested_node_index_ < 0) {
@@ -321,7 +320,7 @@ PoseGraph::SaveAnchorResult PoseGraph::SaveAnchorOnTask(bool keep_scan,
     return SaveAnchorResult{std::nullopt, Refusal::NODE_GONE};
   }
   // A refused save leaves the table as the disk has it, or the next commit would land it anyway.
-  if (map_manager_ != nullptr && !CheckpointFedSession()) {
+  if (map_manager_ != nullptr && !CheckpointSessions()) {
     if (previous.has_value()) {
       anchor_store_.Replace(*previous);
     } else {

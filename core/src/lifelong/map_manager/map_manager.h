@@ -81,7 +81,7 @@ class MapManager : public SessionObserver {
   void OnSessionStarted(const PoseGraphData& graph, SessionId id) override;
 
   // Each returns whether its commit landed; a failed one changes nothing and a later one heals it.
-  bool Checkpoint(const PoseGraphData& graph, SessionId id);
+  bool Checkpoint(const PoseGraphData& graph, SessionId fed_session);
   // Anchors if changed, and the manifest, after reconciling it with the graph.
   bool Commit(const PoseGraphData& graph);
 
