@@ -1,7 +1,7 @@
 /**
  * @file trim_selector_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief Coverage-based selection: redundant submaps go, distant ones and the floor stay.
+ * @brief Coverage-based selection: redundant submaps go, distant ones and the fed floor stay.
  * @version 0.1
  * @date 2026-08-09
  *
@@ -134,7 +134,7 @@ TEST(TrimSelectorTest, PicksEveryRedundantSubmapOutsideTheNewestWindow) {
   }
 
   const TrimSelector selector;
-  const std::vector<SubmapId> selected = selector.Select(graph);
+  const std::vector<SubmapId> selected = selector.Select(graph, session);
 
   // Nine co-located submaps, 7 and 8 neither go nor cover: 0..5 have a newer covering node,
   // 0..4 two newer covering submaps.
@@ -142,7 +142,7 @@ TEST(TrimSelectorTest, PicksEveryRedundantSubmapOutsideTheNewestWindow) {
   for (int k = 0; k < 6; ++k) {
     EXPECT_EQ(selected[k], (SubmapId{session.session_index, k}));
   }
-  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph);
+  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph, session);
   ASSERT_EQ(all_mode.size(), 5u);
   for (int k = 0; k < 5; ++k) {
     EXPECT_EQ(all_mode[k], (SubmapId{session.session_index, k}));
@@ -160,7 +160,7 @@ TEST(TrimSelectorTest, TheSurvivorFloorCapsTheSelectionOldestFirst) {
 
   TrimSelectorOption option;
   option.min_surviving_submaps = 6;
-  const std::vector<SubmapId> selected = TrimSelector(option).Select(graph);
+  const std::vector<SubmapId> selected = TrimSelector(option).Select(graph, session);
 
   ASSERT_EQ(selected.size(), 3u);
   EXPECT_EQ(selected[0], (SubmapId{session.session_index, 0}));
@@ -183,12 +183,12 @@ TEST(TrimSelectorTest, AFrozenSessionNeverCoversAnIdleOne) {
   const SubmapId revisited{older.session_index, 0};
 
   const TrimSelector selector;
-  EXPECT_TRUE(Contains(selector.Select(graph), revisited));
+  EXPECT_TRUE(Contains(selector.Select(graph, newer), revisited));
 
   // A frozen session cannot move to correct what it excuses, and its higher session index makes
   // it "newer" than an idle session that may in fact predate it.
   graph.FreezeSession(newer);
-  EXPECT_FALSE(Contains(selector.Select(graph), revisited));
+  EXPECT_FALSE(Contains(selector.Select(graph, std::nullopt), revisited));
 }
 
 TEST(TrimSelectorTest, NeverPicksASubmapNothingNewerCovers) {
@@ -203,7 +203,7 @@ TEST(TrimSelectorTest, NeverPicksASubmapNothingNewerCovers) {
   }
 
   const TrimSelector selector;
-  const std::vector<SubmapId> selected = selector.Select(graph);
+  const std::vector<SubmapId> selected = selector.Select(graph, session);
 
   // The uncovered one is not eligible; with 6 and 7 out, 1..4 have a newer covering node.
   ASSERT_EQ(selected.size(), 4u);
@@ -211,7 +211,7 @@ TEST(TrimSelectorTest, NeverPicksASubmapNothingNewerCovers) {
     EXPECT_EQ(selected[k], (SubmapId{session.session_index, k + 1}));
   }
   // Area coverage needs two newer coverers among 1..5, which only 1..3 have.
-  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph);
+  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph, session);
   ASSERT_EQ(all_mode.size(), 3u);
   for (int k = 0; k < 3; ++k) {
     EXPECT_EQ(all_mode[k], (SubmapId{session.session_index, k + 1}));
@@ -229,8 +229,8 @@ TEST(TrimSelectorTest, AFrozenSessionYieldsNothing) {
   graph.FreezeSession(session);
 
   const TrimSelector selector;
-  EXPECT_TRUE(selector.Select(graph).empty());
-  EXPECT_TRUE(AllModeSelector().Select(graph).empty());
+  EXPECT_TRUE(selector.Select(graph, std::nullopt).empty());
+  EXPECT_TRUE(AllModeSelector().Select(graph, std::nullopt).empty());
 }
 
 TEST(TrimSelectorTest, TheNewestFinishedSubmapsNeitherGoNorCover) {
@@ -248,20 +248,51 @@ TEST(TrimSelectorTest, TheNewestFinishedSubmapsNeitherGoNorCover) {
   // Unfinished: outside the window and no coverer, so newer/3 and newer/4 stay the newest two.
   AddSubmap(graph, newer, 5, center, inserter, true, center, /*finished=*/false);
 
-  // older/0, third newest of its session, is buried under newer/0..2; older/1 and older/2 are
-  // just as buried but never go. newer/0 has two newer coverers, newer/1 only one: had newer/3
-  // or newer/4 covered, it would have three.
-  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph);
-  ASSERT_EQ(all_mode.size(), 2u);
-  EXPECT_EQ(all_mode[0], (SubmapId{older.session_index, 0}));
-  EXPECT_EQ(all_mode[1], (SubmapId{newer.session_index, 0}));
+  // The window holds for the fed session only: idle older/0..2 all go and all cover. newer/0
+  // has two newer coverers, newer/1 only one: had newer/3 or newer/4 covered, it would have three.
+  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph, newer);
+  ASSERT_EQ(all_mode.size(), 4u);
+  for (int k = 0; k < 3; ++k) {
+    EXPECT_EQ(all_mode[k], (SubmapId{older.session_index, k}));
+  }
+  EXPECT_EQ(all_mode[3], (SubmapId{newer.session_index, 0}));
 
   // Node coverage reaches newer/1 through newer/2's node; newer/2 has nothing newer covering.
-  const std::vector<SubmapId> selected = TrimSelector().Select(graph);
-  ASSERT_EQ(selected.size(), 3u);
-  EXPECT_EQ(selected[0], (SubmapId{older.session_index, 0}));
-  EXPECT_EQ(selected[1], (SubmapId{newer.session_index, 0}));
-  EXPECT_EQ(selected[2], (SubmapId{newer.session_index, 1}));
+  const std::vector<SubmapId> selected = TrimSelector().Select(graph, newer);
+  ASSERT_EQ(selected.size(), 5u);
+  EXPECT_EQ(selected[3], (SubmapId{newer.session_index, 0}));
+  EXPECT_EQ(selected[4], (SubmapId{newer.session_index, 1}));
+}
+
+TEST(TrimSelectorTest, TheFloorsHoldForTheFedSessionOnly) {
+  PoseGraphData graph;
+  mapping::CastRaysMapping inserter;
+  const Eigen::Vector2d center(3.017, 2.503);
+  const SessionId older = graph.StartNewSession(TestTime(0));
+  for (int k = 0; k < 3; ++k) {
+    AddObservedSubmap(graph, older, k, center, inserter);
+  }
+  const SessionId newer = graph.StartNewSession(TestTime(10));
+  for (int k = 0; k < 6; ++k) {
+    AddObservedSubmap(graph, newer, k, center, inserter);
+  }
+  TrimSelectorOption option;
+  option.min_surviving_submaps = 5;
+  const TrimSelector selector(option);
+
+  const std::vector<SubmapId> newer_fed = selector.Select(graph, newer);
+  ASSERT_EQ(newer_fed.size(), 4u);
+  for (int k = 0; k < 3; ++k) {
+    EXPECT_EQ(newer_fed[k], (SubmapId{older.session_index, k}));
+  }
+  EXPECT_EQ(newer_fed[3], (SubmapId{newer.session_index, 0}));
+
+  // newer/5 stays only because no newer node or submap covers it.
+  const std::vector<SubmapId> older_fed = selector.Select(graph, older);
+  ASSERT_EQ(older_fed.size(), 5u);
+  for (int k = 0; k < 5; ++k) {
+    EXPECT_EQ(older_fed[k], (SubmapId{newer.session_index, k}));
+  }
 }
 
 TEST(TrimSelectorTest, AnyModeTrimsOnNodeCoverageAlone) {
@@ -275,13 +306,13 @@ TEST(TrimSelectorTest, AnyModeTrimsOnNodeCoverageAlone) {
     AddObservedSubmap(graph, session, k, near, inserter);
   }
 
-  const std::vector<SubmapId> selected = TrimSelector().Select(graph);
+  const std::vector<SubmapId> selected = TrimSelector().Select(graph, session);
   ASSERT_EQ(selected.size(), 5u);
   EXPECT_EQ(selected[0], (SubmapId{session.session_index, 0}));
 
   // The conservative mode still demands the area signal too, so submap 0 stays; with 6 and 7
   // not covering, only 1..3 have two newer coverers.
-  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph);
+  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph, session);
   ASSERT_EQ(all_mode.size(), 3u);
   EXPECT_EQ(all_mode[0], (SubmapId{session.session_index, 1}));
 }
@@ -297,12 +328,12 @@ TEST(TrimSelectorTest, AnEmptySubmapGoesOnItsCoveredNodesAlone) {
   }
 
   // An empty grid contributes nothing to the map, so any-mode deletes it on the node signal.
-  const std::vector<SubmapId> selected = TrimSelector().Select(graph);
+  const std::vector<SubmapId> selected = TrimSelector().Select(graph, session);
   ASSERT_EQ(selected.size(), 5u);
   EXPECT_EQ(selected[0], (SubmapId{session.session_index, 0}));
 
   // The conservative mode keeps the old gate: an empty footprint disqualifies.
-  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph);
+  const std::vector<SubmapId> all_mode = AllModeSelector().Select(graph, session);
   ASSERT_EQ(all_mode.size(), 3u);
   EXPECT_EQ(all_mode[0], (SubmapId{session.session_index, 1}));
 }
@@ -319,7 +350,7 @@ TEST(TrimSelectorTest, ASubmapEmptiedOfNodesDoesNotCascade) {
     AddObservedSubmap(graph, session, k, near, inserter);
   }
 
-  const std::vector<SubmapId> selected = TrimSelector().Select(graph);
+  const std::vector<SubmapId> selected = TrimSelector().Select(graph, session);
   ASSERT_EQ(selected.size(), 4u);
   EXPECT_EQ(selected[0], (SubmapId{session.session_index, 1}));
 }

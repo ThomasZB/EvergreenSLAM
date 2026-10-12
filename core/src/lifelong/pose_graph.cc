@@ -15,6 +15,7 @@
 
 #include <future>
 #include <optional>
+#include <set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -399,6 +400,16 @@ TrimReport PoseGraph::ApplyTrim(const TrimRequest& request) {
   for (const Constraint& constraint : request.added_constraints) {
     optimization_.AddConstraint(constraint);
   }
+  std::set<SessionId> touched;
+  for (const SubmapId& id : request.deleted_submap_ids) {
+    touched.insert(SessionOf(id));
+  }
+  for (const SessionId id : touched) {
+    if (data_.session(id).submap_ids.empty() && id != session_manager_.fed_session()) {
+      LOG(INFO) << "idle session " << id.session_index << " trimmed to nothing: removed";
+      RemoveSession(id);
+    }
+  }
   return report;
 }
 
@@ -648,6 +659,9 @@ void PoseGraph::GcIdleSessions(const MapManager::LoadResult& loaded) {
 }
 
 void PoseGraph::CheckAndFreezeSession(SessionId id) {
+  if (!data_.HasSession(id)) {
+    return;
+  }
   if (data_.session(id).submap_ids.empty()) {
     RemoveSession(id);
   } else {

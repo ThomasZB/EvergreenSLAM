@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "lifelong/pose_graph_data.h"
@@ -21,12 +22,13 @@
 
 namespace evergreenslam::lifelong {
 
-// Returns oldest first, respecting the per-session survivor floor.
+// Returns oldest first. The survivor floor and the newest window hold for the fed session only.
 class TrimSelector {
  public:
   explicit TrimSelector(const TrimSelectorOption& option = TrimSelectorOption());
 
-  std::vector<SubmapId> Select(const PoseGraphData& graph) const;
+  std::vector<SubmapId> Select(const PoseGraphData& graph,
+                               std::optional<SessionId> fed_session) const;
 
   const std::vector<std::int64_t>& Footprint(const SubmapRecord& record) const;
 

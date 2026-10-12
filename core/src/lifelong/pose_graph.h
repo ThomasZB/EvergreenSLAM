@@ -83,6 +83,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
   void AddConstraint(const Constraint& constraint);
   bool AddConstraintIfEndpointsLive(const Constraint& constraint) override;
+  std::optional<SessionId> fed_session() const override { return session_manager_.fed_session(); }
   TrimReport ApplyTrim(const TrimRequest& request) override;
   void RemoveSession(SessionId id);
   void RepublishActiveSessionToGlobal();

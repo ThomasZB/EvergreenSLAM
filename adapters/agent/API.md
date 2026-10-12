@@ -380,7 +380,7 @@ runs in the task of the graph change it follows, or a reader in between sees a v
 `OnTrim(report)`; `TransferUnfinishedSubmaps` (the freeze rotation), per handed-over submap →
 `OnNodesTransferred(renamed)` (the nodes only it held move to the successor and get its ids), then
 after the `submap_translation_` re-key and before the freeze → `OnSubmapsTransferred(adoption)`;
-`RemoveSession` (agent, `GcIdleSessions`, a freeze whose trim emptied the session), after
+`RemoveSession` (agent, `GcIdleSessions`, a trim that emptied an idle session or a freezing one), after
 `data_.RemoveSession` → `OnSessionRemoved(id)`. A freeze needs no hook
 and there is no anchor observer: `frozen` is derived at Resolve.
 

@@ -371,8 +371,10 @@ void SessionManager::FreezeAndMaybeRotate(SessionId id) {
   }
 
   handle_.Enqueue([this, id] {
-    TrimCoveredSubmapsOnTask(id);
-    handle_.FreezeSessionOnTask(id);
+    if (handle_.graph().HasSession(id)) {
+      TrimCoveredSubmapsOnTask(id);
+      handle_.FreezeSessionOnTask(id);
+    }
     if (!handle_.graph().HasSession(id)) {
       OnEmptiedOnTask(id);
       return;

@@ -197,8 +197,8 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
   }
 
   // Loop search against the reloaded grids anchors the boot session onto the frozen base and
-  // the idle one. Neither maps anything new, so neither freezes: a known-area pass is
-  // localization, and the idle session is only judged when a constraint lands on it.
+  // the idle one. Nothing new is mapped, so nothing freezes; the boot session re-maps the idle
+  // one's area, so trimming empties and removes the idle session.
   Frontend frontend(backend, rebased);
   int step = steps_fed;
   const int stage3_end = std::min(steps_fed + kNodesPerLap, total_steps);
@@ -213,7 +213,7 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
       << "the boot session never anchored onto the frozen base";
   EXPECT_EQ(backend.session_manager().num_sessions_frozen(), 0)
       << "nothing new was mapped, so nothing earned a freeze";
-  EXPECT_FALSE(backend.graph().session(second_session).frozen());
+  EXPECT_FALSE(backend.graph().HasSession(second_session));
   EXPECT_EQ(*backend.session_manager().fed_session(), boot_session);
 
   backend.Finish();
@@ -234,11 +234,9 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
   // constant (asserted above) and says nothing about recovery. Closure distributes the yaw-bias
   // residual around the ring: 0.174 m at the kill at the shipped 30-node cadence (0.145 m when
   // every keyframe solved: closures now land on poses left uncorrected until the next cadence).
-  // The reload reproduces that to the digit, and the boot session's drifted closures then pull
-  // the still-free idle session out to 0.276 m (0.211 m solving per keyframe).
-  const double error_after = MeanNodeError(backend.graph(), second_session);
-  std::cout << "e2e: second session mean error at kill " << error_at_kill << " m, after reload "
-            << error_after << " m" << std::endl;
+  const double error_after = MeanNodeError(backend.graph(), boot_session);
+  std::cout << "e2e: second session mean error at kill " << error_at_kill
+            << " m, boot session after reload " << error_after << " m" << std::endl;
   EXPECT_LT(error_at_kill, 0.2);
   EXPECT_LT(error_after, 0.30) << "at kill " << error_at_kill << ", after " << error_after;
 

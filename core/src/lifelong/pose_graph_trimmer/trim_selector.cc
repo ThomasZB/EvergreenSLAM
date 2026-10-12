@@ -67,7 +67,8 @@ const std::vector<std::int64_t>& TrimSelector::Footprint(const SubmapRecord& rec
   return entry.cells;
 }
 
-std::vector<SubmapId> TrimSelector::Select(const PoseGraphData& graph) const {
+std::vector<SubmapId> TrimSelector::Select(const PoseGraphData& graph,
+                                           std::optional<SessionId> fed_session) const {
   // Ids are never reused, so entries for trimmed submaps would otherwise accumulate forever.
   for (auto it = footprint_cache_.begin(); it != footprint_cache_.end();) {
     it = graph.HasSubmap(it->first) ? std::next(it) : footprint_cache_.erase(it);
@@ -89,6 +90,9 @@ std::vector<SubmapId> TrimSelector::Select(const PoseGraphData& graph) const {
   for (const auto& [session_id, session] : graph.sessions()) {
     if (session.frozen()) {
       frozen_sessions.insert(session_id.session_index);
+      continue;
+    }
+    if (session_id != fed_session) {
       continue;
     }
     int kept = 0;
@@ -198,7 +202,8 @@ std::vector<SubmapId> TrimSelector::Select(const PoseGraphData& graph) const {
   std::vector<SubmapId> selected;
   for (auto& [session_id, candidates] : selected_by_session) {
     const int total = static_cast<int>(graph.session(session_id).submap_ids.size());
-    const int allowed = std::max(0, total - option_.min_surviving_submaps);
+    const int floor = session_id == fed_session ? option_.min_surviving_submaps : 0;
+    const int allowed = std::max(0, total - floor);
     const int take = std::min(allowed, static_cast<int>(candidates.size()));
     selected.insert(selected.end(), candidates.begin(), candidates.begin() + take);
   }

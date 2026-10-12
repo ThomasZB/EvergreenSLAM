@@ -159,10 +159,10 @@ lifelong:
       min_covered_node_fraction: 0.8
       # "any" trims on either signal, "all" requires both.
       coverage_mode: any
-      # Submaps a session keeps however redundant; freezing is gated on minted submaps, not these.
+      # Submaps the fed session keeps however redundant; idle sessions can be trimmed to none.
       min_surviving_submaps: 2
-      # Newest finished submaps per session that neither get trimmed nor cover: a match in flight
-      # may still name what they would cover.
+      # Newest finished submaps of the fed session that neither get trimmed nor cover: a match in
+      # flight may still name what they would cover.
       keep_newest_submaps: 2
     max_submaps_per_round: 2  # submaps a trim round may delete
     # Per-axis stddev floor on recovered constraints; must be at least the odometry stddev.

@@ -34,9 +34,9 @@ struct TrimSelectorOption {
   CoverageMode coverage_mode = CoverageMode::kAny;
   // Freezing is gated on minted submaps, not survivors, so this floor is free to be small.
   int min_surviving_submaps = 2;
-  // Finished submaps per session that neither get trimmed nor count as coverers. A node is matched
-  // against the submaps around it; if those just finished could cover an older one, it could be
-  // deleted while the match result is still on a worker.
+  // Newest finished submaps of the fed session that neither get trimmed nor count as coverers. A
+  // node is matched against the submaps around it; if those just finished could cover an older
+  // one, it could be deleted while the match result is still on a worker.
   int keep_newest_submaps = 2;
 
   friend std::ostream& operator<<(std::ostream& os, const TrimSelectorOption& option) {

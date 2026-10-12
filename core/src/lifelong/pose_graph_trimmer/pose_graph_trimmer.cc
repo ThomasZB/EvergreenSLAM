@@ -134,7 +134,7 @@ void PoseGraphTrimmer::EnqueueForTrim(const SubmapId& id) { pending_.push_back(i
 
 void PoseGraphTrimmer::RunRound() {
   if (pending_.empty()) {
-    for (const SubmapId& id : selector_.Select(handle_.graph())) {
+    for (const SubmapId& id : selector_.Select(handle_.graph(), handle_.fed_session())) {
       pending_.push_back(id);
     }
     return;

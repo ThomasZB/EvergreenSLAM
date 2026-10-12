@@ -14,6 +14,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <optional>
 #include <vector>
 
 #include "common/time.h"
@@ -30,6 +31,7 @@ class TrimmingHandle {
 
   virtual const PoseGraphData& graph() const = 0;
   virtual Optimization& optimization() = 0;
+  virtual std::optional<SessionId> fed_session() const = 0;
   virtual TrimReport ApplyTrim(const TrimRequest& request) = 0;
   virtual void Enqueue(TaskQueue::Task task) = 0;
 };
