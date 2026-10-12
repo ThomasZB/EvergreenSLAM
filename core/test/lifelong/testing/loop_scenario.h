@@ -53,6 +53,12 @@ inline common::Time TestTime(int index) {
   return common::FromUnixSeconds(1785000000.0) + common::FromSeconds(0.1 * index);
 }
 
+// The ground-truth step a Frontend-fed node was stamped with; node indices do not give it, since
+// the freeze rotation renumbers the nodes it hands over.
+inline int StepAt(common::Time time) {
+  return static_cast<int>(std::lround(common::ToSeconds(time - TestTime(0)) / 0.1));
+}
+
 struct World {
   double min_x;
   double max_x;
@@ -237,30 +243,17 @@ class Frontend {
   int fed_into_newest_ = 0;
 };
 
-// Session-local node index k was fed for ground-truth step first_step + k (0 for session 0; see
-// SessionStartSteps for the rest).
-inline double MeanNodeError(const PoseGraphData& graph, SessionId session, int first_step = 0) {
+inline double MeanNodeError(const PoseGraphData& graph, SessionId session) {
   double total = 0.0;
   int count = 0;
   for (const NodeId& id : graph.session(session).node_ids) {
-    total += (graph.node(id).global_pose.translation() -
-              LoopGroundTruth(first_step + id.node_index).translation())
+    const Node& node = graph.node(id);
+    total += (node.global_pose.translation() -
+              LoopGroundTruth(StepAt(node.constant_data.time)).translation())
                  .norm();
     ++count;
   }
   return count == 0 ? 0.0 : total / static_cast<double>(count);
-}
-
-// Ground-truth step of each session's node 0: sessions open in order and node indices are minted
-// in feed order, so a session starts where the previous sessions' mint counts end.
-inline std::map<int, int> SessionStartSteps(const PoseGraphData& graph) {
-  std::map<int, int> starts;
-  int start = 0;
-  for (const auto& [id, session] : graph.sessions()) {
-    starts[id.session_index] = start;
-    start += graph.id_allocator().next_node_index(id);
-  }
-  return starts;
 }
 
 }  // namespace evergreenslam::lifelong::testing

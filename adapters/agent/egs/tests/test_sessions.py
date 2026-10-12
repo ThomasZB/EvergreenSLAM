@@ -34,6 +34,13 @@ class SessionTest(EgsTestCase):
         self.assertTrue(apply[0][2]["plan_token"])
         self.assertGreaterEqual(len(self.requests("GET", "/sessions")), 2)
 
+    def test_freeze_that_removes_the_session(self):
+        self.state.freeze_removes = True
+        code, out, _ = self.egs("session", "freeze", "--yes")
+        self.assertEqual(code, 0, out)
+        self.assertIn("session 2 lay wholly in the frozen map: removed, not frozen", out)
+        self.assertIn("fed session now 3", out)
+
     def test_freeze_not_visible_in_time(self):
         self.state.freeze_visible_after = 10**6
         code, out, _ = self.egs("session", "new", "--yes", EGS_POLL_S="0.3")

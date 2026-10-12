@@ -92,6 +92,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   bool SolveAtBatchEnd();
 
   void FreezeSession(SessionId id) override;
+  void FreezeSessionOnTask(SessionId id) override;
   SessionId RotateAndFreezeFedSessionOnTask(SessionId id) override;
   void TrimSubmapsOnTask(const std::vector<SubmapId>& ids) override;
   // The freeze sequence on demand, verdict or not; returns at once.
@@ -141,6 +142,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void HandleConstraint(const Constraint& constraint);
   // Must run after BuildFrom: RemoveSession needs the Problem to still hold the blocks.
   void GcFloatingSessions(const MapManager::LoadResult& loaded);
+  void CheckAndFreezeSession(SessionId id);
 
   void FinishBatch();
   bool CheckpointDue() const;

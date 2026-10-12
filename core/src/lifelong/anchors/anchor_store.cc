@@ -223,6 +223,21 @@ void AnchorStore::OnSubmapsTransferred(const std::map<SubmapId, SubmapId>& old_t
   }
 }
 
+void AnchorStore::OnNodesTransferred(const std::map<NodeId, NodeId>& old_to_new) {
+  bool changed = false;
+  for (auto& [id, anchor] : anchors_) {
+    const auto renamed = old_to_new.find(anchor.node_id);
+    if (renamed == old_to_new.end()) {
+      continue;
+    }
+    anchor.node_id = renamed->second;
+    changed = true;
+  }
+  if (changed) {
+    ++revision_;
+  }
+}
+
 void AnchorStore::OnSessionRemoved(SessionId session) {
   bool changed = false;
   for (auto& [id, anchor] : anchors_) {

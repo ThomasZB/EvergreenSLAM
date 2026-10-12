@@ -287,11 +287,17 @@ mutable_optimization(), CovarianceEvaluator(mutable_optimization()), fed)` via
 `force` (humans only, never in `SKILL.md`) waives `not anchored` only. `sessions_affected = [fed]`,
 `would_delete = []` (the freeze-time trim is not predicted). Adds `verdict: {eligible, bootstrap,
 rejection}`.
+The freeze-time trim drops every finished submap the frozen map already covers; when that takes all
+of them the session is removed instead of frozen (`SessionManager::num_sessions_removed()`), its
+unfinished submaps and the nodes only they hold handed to the successor as usual. The successor is
+fed either way.
 
 **POST /sessions/freeze/apply** `{force, plan_token}` — task, mutating. Re-plan (solving again),
 then `FreezeFedSession(planned fed)`: the queued freeze task logs and does nothing if the fed
 session changed meanwhile. The receipt reports intent: `→ {ok, reason, at_num_solves,
-frozen_session, pending: true}`; `egs` polls `GET /sessions` (≤ 10 s) until it is `frozen`.
+frozen_session, pending: true}`: it cannot tell a freeze from a removal, the trim has not run
+yet. `egs` polls `GET /sessions` (≤ 10 s) until the session is `frozen`, or gone with another session
+fed: removed, exit 0 too.
 `egs session new` is a CLI alias of freeze: a fed freeze always rotates to a fresh fed session.
 
 **POST /sessions/rm/plan** `{id}` — task, read-only. Rejections: `unknown_session`, `freezing`
@@ -371,9 +377,11 @@ For agents without the directory. Paths relative to `memory/`. Dumb on purpose: 
 PoseGraph owns `AnchorStore anchor_store_` next to `map_manager_` and is its only writer. A hook
 runs in the task of the graph change it follows, or a reader in between sees a vanished id:
 `ApplyTrim` (every trim, cadence or `TrimCoveredSubmapsOnTask`), after `data_.ApplyTrim` →
-`OnTrim(report)`; `RotateAndFreezeFedSessionOnTask`, after the `submap_translation_` re-key and
-before `data_.FreezeSession(id)` → `OnSubmapsTransferred(adoption)`; `RemoveSession` (agent and
-`GcFloatingSessions`), after `data_.RemoveSession` → `OnSessionRemoved(id)`. A freeze needs no hook
+`OnTrim(report)`; `TransferUnfinishedSubmaps` (the freeze rotation), per handed-over submap →
+`OnNodesTransferred(renamed)` (the nodes only it held move to the successor and get its ids), then
+after the `submap_translation_` re-key and before the freeze → `OnSubmapsTransferred(adoption)`;
+`RemoveSession` (agent, `GcFloatingSessions`, a freeze whose trim emptied the session), after
+`data_.RemoveSession` → `OnSessionRemoved(id)`. A freeze needs no hook
 and there is no anchor observer: `frozen` is derived at Resolve.
 
 **Persistence**: `MapManager` holds `const AnchorStore&` and alone decides when the table is

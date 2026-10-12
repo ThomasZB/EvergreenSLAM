@@ -100,7 +100,8 @@ void PoseGraphData::AddNodeMembership(const NodeId& node_id, const SubmapId& sub
   submaps_.at(submap_id).node_ids.insert(node_id);
 }
 
-void PoseGraphData::TransferSubmap(const SubmapId& old_id, const SubmapId& new_id) {
+std::map<NodeId, NodeId> PoseGraphData::TransferSubmap(const SubmapId& old_id,
+                                                       const SubmapId& new_id) {
   CHECK(HasSubmap(old_id));
   CHECK(!HasSubmap(new_id)) << "submap ids are never reused";
   CHECK(!session(SessionOf(old_id)).frozen()) << "a frozen session's submaps are immutable";
@@ -133,6 +134,65 @@ void PoseGraphData::TransferSubmap(const SubmapId& old_id, const SubmapId& new_i
       constraint.to = new_variable;
     }
   }
+
+  return TransferNodesLeftBehind(new_id);
+}
+
+std::map<NodeId, NodeId> PoseGraphData::TransferNodesLeftBehind(const SubmapId& submap_id) {
+  const SessionId to = SessionOf(submap_id);
+  std::map<NodeId, NodeId> renamed_nodes;
+  // A copy: TransferNode edits the submap's node set while we walk it.
+  const std::set<NodeId> node_ids = submap(submap_id).node_ids;
+  for (const NodeId& node_id : node_ids) {
+    const std::set<SubmapId>& membership = node_to_submaps_.at(node_id);
+    const bool held_at_home =
+        std::any_of(membership.begin(), membership.end(),
+                    [&node_id](const SubmapId& id) { return SessionOf(id) == SessionOf(node_id); });
+    if (!held_at_home) {
+      renamed_nodes.emplace(node_id, TransferNode(node_id, to));
+    }
+  }
+
+  const auto rename = [&renamed_nodes](VariableId& variable) {
+    if (variable.kind != VariableId::Kind::NODE) {
+      return;
+    }
+    const auto it = renamed_nodes.find(variable.node_id());
+    if (it != renamed_nodes.end()) {
+      variable = VariableId::Of(it->second);
+    }
+  };
+  for (Constraint& constraint : constraints_) {
+    rename(constraint.from);
+    if (constraint.to.has_value()) {
+      rename(*constraint.to);
+    }
+  }
+  return renamed_nodes;
+}
+
+NodeId PoseGraphData::TransferNode(const NodeId& old_id, SessionId to) {
+  SessionData& to_session = MutableSession(to);
+  const NodeId new_id = AllocateNodeId(to);
+  auto node = nodes_.extract(old_id);
+  node.key() = new_id;
+  node.mapped().id = new_id;
+  to_session.last_node_time = std::max(to_session.last_node_time, node.mapped().constant_data.time);
+  nodes_.insert(std::move(node));
+
+  auto membership = node_to_submaps_.extract(old_id);
+  membership.key() = new_id;
+  for (const SubmapId& submap_id : membership.mapped()) {
+    std::set<NodeId>& submap_nodes = submaps_.at(submap_id).node_ids;
+    submap_nodes.erase(old_id);
+    submap_nodes.insert(new_id);
+  }
+  node_to_submaps_.insert(std::move(membership));
+
+  std::vector<NodeId>& from_ids = MutableSession(SessionOf(old_id)).node_ids;
+  from_ids.erase(std::remove(from_ids.begin(), from_ids.end(), old_id), from_ids.end());
+  to_session.node_ids.push_back(new_id);
+  return new_id;
 }
 
 void PoseGraphData::AddConstraint(const Constraint& constraint) {

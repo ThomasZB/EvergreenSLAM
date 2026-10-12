@@ -185,6 +185,8 @@ function renderBackendPanel() {
   html += row('accepted', `${s.matches_accepted} (${accepted}%)`);
   html += '</table><h4>trimming</h4><table>';
   html += row('submaps trimmed', s.submaps_trimmed) + row('priors added', s.priors_added);
+  html += row('sessions removed', s.sessions_removed, '',
+              'freezes whose trim left nothing: the session lay wholly in frozen area');
   html += '</table><h4>freeze verdict</h4><table>';
   html += row('eligible', graph.freeze.eligible ? 'yes' : 'no',
               graph.freeze.eligible ? 'good' : '');

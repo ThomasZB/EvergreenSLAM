@@ -118,6 +118,7 @@ class SessionManager {
   const FreezeVerdict& last_verdict() const { return last_verdict_; }
   // Atomic so a threaded caller may poll it; everything else here is backend-task state.
   int num_sessions_frozen() const { return num_sessions_frozen_.load(std::memory_order_acquire); }
+  int num_sessions_removed() const { return num_sessions_removed_.load(std::memory_order_acquire); }
   int num_judgements() const { return num_judgements_; }
   const FreezeJudge& freeze_judge() const { return judge_; }
   const FrozenCoverage& coverage() const { return coverage_; }
@@ -131,6 +132,7 @@ class SessionManager {
   void FreezeAndMaybeRotate(SessionId id);
   void TrimCoveredSubmapsOnTask(SessionId id);
   void OnFrozenOnTask(SessionId id);
+  void OnEmptiedOnTask(SessionId id);
 
   SessionHandle& handle_;
   SessionManagerOption option_;
@@ -144,6 +146,7 @@ class SessionManager {
   FreezeVerdict last_verdict_;
   int num_judgements_ = 0;
   std::atomic<int> num_sessions_frozen_{0};
+  std::atomic<int> num_sessions_removed_{0};
   // The freeze sequence solves, and a solve would otherwise judge the half-frozen session.
   bool freezing_ = false;
 };

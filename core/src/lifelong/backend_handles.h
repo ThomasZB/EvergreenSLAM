@@ -51,6 +51,7 @@ class SessionHandle {
   virtual Optimization& optimization() = 0;
   virtual SessionId StartNewSession(common::Time time, const Eigen::Affine2d& local_to_global) = 0;
   virtual void FreezeSession(SessionId id) = 0;
+  virtual void FreezeSessionOnTask(SessionId id) = 0;
   virtual SessionId RotateAndFreezeFedSessionOnTask(SessionId id) = 0;
   virtual void TrimSubmapsOnTask(const std::vector<SubmapId>& ids) = 0;
   virtual void Enqueue(TaskQueue::Task task) = 0;

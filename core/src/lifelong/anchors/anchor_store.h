@@ -100,6 +100,7 @@ class AnchorStore {
   void OnTrim(const TrimReport& report);
   // Rename only: TransferSubmap keeps the submap's poses, so T_rel and state are unchanged.
   void OnSubmapsTransferred(const std::map<SubmapId, SubmapId>& old_to_new);
+  void OnNodesTransferred(const std::map<NodeId, NodeId>& old_to_new);
   // Every non-orphan anchor bound in `id` becomes ORPHAN(SESSION_REMOVED).
   void OnSessionRemoved(SessionId id);
   // Load-time only. Missing submap -> ORPHAN(SUBMAP_MISSING), or SESSION_REMOVED when the whole

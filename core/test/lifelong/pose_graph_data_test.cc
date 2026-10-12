@@ -15,7 +15,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include "common/time.h"
@@ -527,6 +529,67 @@ TEST(PoseGraphData, TransferSubmapRewritesEveryReference) {
   const std::optional<Eigen::Affine2d> alignment = graph.ComputeSessionToGlobal(to);
   ASSERT_TRUE(alignment.has_value());
   EXPECT_NEAR(((*alignment * local).translation() - global.translation()).norm(), 0.0, kEpsilon);
+}
+
+// A node only the transferred submaps hold would freeze with the old session and pin the submap
+// against trimming; it moves along, a node a staying submap shares does not.
+TEST(PoseGraphData, TransferSubmapMovesTheNodesOnlyItHolds) {
+  PoseGraphData graph;
+  const SessionId from = graph.StartNewSession(TestTime(0));
+  const SessionId to = graph.StartNewSession(TestTime(1));
+  const SubmapId staying{from.session_index, 0};
+  const SubmapId older{from.session_index, 1};
+  const SubmapId newer{from.session_index, 2};
+  for (const SubmapId& id : {staying, older, newer}) {
+    graph.AddSubmap(MakeSubmap(id, Eigen::Affine2d::Identity(), Eigen::Affine2d::Identity()));
+  }
+  const NodeId shared{from.session_index, 0};
+  const NodeId both_moving{from.session_index, 1};
+  const NodeId newest_only{from.session_index, 2};
+  graph.AddNode(MakeNode(shared, Eigen::Affine2d::Identity()), {staying, older});
+  graph.AddNode(MakeNode(both_moving, Eigen::Affine2d::Identity()), {older, newer});
+  graph.AddNode(MakeNode(newest_only, Eigen::Affine2d::Identity()), {newer});
+  graph.AddConstraint(MakeIntra(older, shared));
+  graph.AddConstraint(MakeIntra(older, both_moving));
+  graph.AddConstraint(MakeIntra(newer, both_moving));
+  graph.AddConstraint(MakeIntra(newer, newest_only));
+
+  const SubmapId older_new = graph.AllocateSubmapId(to);
+  const std::map<NodeId, NodeId> first = graph.TransferSubmap(older, older_new);
+  // both_moving is still held by `newer`, which has not moved yet.
+  EXPECT_TRUE(first.empty());
+  const SubmapId newer_new = graph.AllocateSubmapId(to);
+  const std::map<NodeId, NodeId> second = graph.TransferSubmap(newer, newer_new);
+
+  ASSERT_EQ(second.size(), 2u);
+  const NodeId both_moved = second.at(both_moving);
+  const NodeId newest_moved = second.at(newest_only);
+  EXPECT_EQ(both_moved.session_id, to.session_index);
+  EXPECT_EQ(newest_moved.session_id, to.session_index);
+  EXPECT_LT(both_moved.node_index, newest_moved.node_index);
+  EXPECT_EQ(graph.id_allocator().next_node_index(to), newest_moved.node_index + 1);
+
+  EXPECT_TRUE(graph.HasNode(shared));
+  EXPECT_FALSE(graph.HasNode(both_moving));
+  EXPECT_FALSE(graph.HasNode(newest_only));
+  EXPECT_TRUE(graph.node(both_moved).id == both_moved);
+  EXPECT_EQ(graph.session(from).node_ids, std::vector<NodeId>({shared}));
+  EXPECT_EQ(graph.session(to).node_ids, std::vector<NodeId>({both_moved, newest_moved}));
+
+  EXPECT_EQ(graph.ContainingSubmapIds(both_moved), std::vector<SubmapId>({older_new, newer_new}));
+  EXPECT_EQ(graph.ContainingSubmapIds(newest_moved), std::vector<SubmapId>({newer_new}));
+  EXPECT_TRUE(graph.ContainingSubmapIds(newest_only).empty());
+  EXPECT_EQ(graph.submap(older_new).node_ids, std::set<NodeId>({shared, both_moved}));
+  EXPECT_EQ(graph.submap(newer_new).node_ids, std::set<NodeId>({both_moved, newest_moved}));
+
+  EXPECT_TRUE(HasConstraintBetween(graph, older_new, shared));
+  EXPECT_TRUE(HasConstraintBetween(graph, older_new, both_moved));
+  EXPECT_TRUE(HasConstraintBetween(graph, newer_new, both_moved));
+  EXPECT_TRUE(HasConstraintBetween(graph, newer_new, newest_moved));
+  for (const Constraint& constraint : graph.constraints()) {
+    EXPECT_TRUE(graph.HasVariable(constraint.from));
+    EXPECT_TRUE(graph.HasVariable(*constraint.to));
+  }
 }
 
 TEST(PoseGraphDeathTest, TransferSubmapRejectsFrozenEndpoints) {

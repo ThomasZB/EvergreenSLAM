@@ -98,6 +98,7 @@ class FakeState:
         self.freeze_rejection = None
         self.freeze_visible_after = 1  # /sessions polls before the frozen role shows
         self.mutate_before_apply = False  # makes apply see a different plan
+        self.freeze_removes = False  # the freeze-time trim took every submap
         self.delays = {}
         self.requests = []
         self.lock = threading.Lock()
@@ -465,8 +466,9 @@ class _Handler(BaseHTTPRequestHandler):
                 if s.get("_freezing") is not None:
                     s["_freezing"] -= 1
                     if s["_freezing"] <= 0:
-                        s["role"] = "frozen"
+                        s["role"] = "removed" if self.st.freeze_removes else "frozen"
                         del s["_freezing"]
+            self.st.sessions = [s for s in self.st.sessions if s["role"] != "removed"]
             listed = [
                 {k: v for k, v in s.items() if not k.startswith("_")} for s in self.st.sessions
             ]

@@ -430,11 +430,12 @@ void PoseGraph::Optimize() {
 void PoseGraph::OptimizeOnTask() { optimization_.Optimize(data_); }
 
 void PoseGraph::FreezeSession(SessionId id) {
-  task_queue_.Enqueue([this, id] {
-    optimization_.Optimize(data_);
-    data_.FreezeSession(id);
-    optimization_.FreezeSession(id);
-  });
+  task_queue_.Enqueue([this, id] { FreezeSessionOnTask(id); });
+}
+
+void PoseGraph::FreezeSessionOnTask(SessionId id) {
+  optimization_.Optimize(data_);
+  CheckAndFreezeSession(id);
 }
 
 SessionId PoseGraph::RotateAndFreezeFedSessionOnTask(SessionId id) {
@@ -457,8 +458,7 @@ SessionId PoseGraph::RotateAndFreezeFedSessionOnTask(SessionId id) {
     }
   }
   anchor_store_.OnSubmapsTransferred(adoption);
-  data_.FreezeSession(id);
-  optimization_.FreezeSession(id);
+  CheckAndFreezeSession(id);
   return next;
 }
 
@@ -523,8 +523,15 @@ std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from
       continue;
     }
     const SubmapId new_id = data_.AllocateSubmapId(to);
-    data_.TransferSubmap(old_id, new_id);
+    const std::map<NodeId, NodeId> renamed_nodes = data_.TransferSubmap(old_id, new_id);
     optimization_.RenameVariable(VariableId::Of(old_id), VariableId::Of(new_id));
+    for (const auto& [old_node, new_node] : renamed_nodes) {
+      optimization_.RenameVariable(VariableId::Of(old_node), VariableId::Of(new_node));
+      if (last_ingested_node_ == old_node) {
+        last_ingested_node_ = new_node;
+      }
+    }
+    anchor_store_.OnNodesTransferred(renamed_nodes);
     adoption.emplace(old_id, new_id);
   }
   return adoption;
@@ -637,6 +644,15 @@ void PoseGraph::GcFloatingSessions(const MapManager::LoadResult& loaded) {
     LOG(INFO) << "garbage collecting floating session " << unfrozen.id.session_index
               << ", last fed " << boots_behind << " boots ago";
     RemoveSession(unfrozen.id);
+  }
+}
+
+void PoseGraph::CheckAndFreezeSession(SessionId id) {
+  if (data_.session(id).submap_ids.empty()) {
+    RemoveSession(id);
+  } else {
+    data_.FreezeSession(id);
+    optimization_.FreezeSession(id);
   }
 }
 

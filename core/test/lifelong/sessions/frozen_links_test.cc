@@ -98,7 +98,7 @@ struct Rotated {
     fixture.Intra(second, tail_node);
 
     transferred = SubmapId{live.session_index, 0};
-    fixture.graph().TransferSubmap(second, transferred);
+    tail_node = fixture.graph().TransferSubmap(second, transferred).at(tail_node);
     fixture.graph().FreezeSession(frozen);
   }
 };
@@ -118,16 +118,17 @@ TEST(FrozenLinksTest, IntraOverlapLeftBehindByARotationCounts) {
   Rotated scene;
   const std::map<SubmapId, int> links = CountFrozenLinks(scene.fixture.graph(), scene.live);
   ASSERT_EQ(links.size(), 1u);
-  // The shared and the tail node both stayed in the frozen session.
-  EXPECT_EQ(links.at(scene.transferred), 2);
+  // Only the shared node stayed in the frozen session; the tail moved with its submap.
+  EXPECT_EQ(scene.tail_node.session_id, scene.live.session_index);
+  EXPECT_EQ(links.at(scene.transferred), 1);
 }
 
 TEST(FrozenLinksTest, FrozenToFrozenDoesNotCount) {
   Rotated scene;
   // The shared node is held by the transferred submap, but both endpoints are frozen.
-  scene.fixture.Inter(VariableId::Of(scene.frozen_submap), VariableId::Of(scene.tail_node));
+  scene.fixture.Inter(VariableId::Of(scene.frozen_submap), VariableId::Of(scene.shared_node));
   const std::map<SubmapId, int> links = CountFrozenLinks(scene.fixture.graph(), scene.live);
-  EXPECT_EQ(links.at(scene.transferred), 2);
+  EXPECT_EQ(links.at(scene.transferred), 1);
 
   const std::map<SubmapId, int> frozen_links =
       CountFrozenLinks(scene.fixture.graph(), scene.frozen);
@@ -138,13 +139,13 @@ TEST(FrozenLinksTest, InterFromAFrozenSubmapCountsForEverySubmapHoldingTheNode) 
   Rotated scene;
   const SubmapId one = scene.fixture.AddSubmap(scene.live, 1);
   const SubmapId two = scene.fixture.AddSubmap(scene.live, 2);
-  const NodeId node = scene.fixture.AddNode(scene.live, 0, {one, two});
+  const NodeId node = scene.fixture.AddNode(scene.live, 1, {one, two});
   scene.fixture.Intra(one, node);
   scene.fixture.Intra(two, node);
   scene.fixture.Inter(VariableId::Of(scene.frozen_submap), VariableId::Of(node));
 
   const std::map<SubmapId, int> links = CountFrozenLinks(scene.fixture.graph(), scene.live);
-  EXPECT_EQ(links.at(scene.transferred), 2);
+  EXPECT_EQ(links.at(scene.transferred), 1);
   EXPECT_EQ(links.at(one), 1);
   EXPECT_EQ(links.at(two), 1);
 }
@@ -165,14 +166,14 @@ TEST(FrozenLinksTest, PriorCounts) {
   Rotated scene;
   const SubmapId one = scene.fixture.AddSubmap(scene.live, 1);
   const SubmapId two = scene.fixture.AddSubmap(scene.live, 2);
-  const NodeId node = scene.fixture.AddNode(scene.live, 0, {one, two});
+  const NodeId node = scene.fixture.AddNode(scene.live, 1, {one, two});
   scene.fixture.Prior(VariableId::Of(one));
   scene.fixture.Prior(VariableId::Of(node));
   // A prior inside the frozen session is not a tie for anyone.
-  scene.fixture.Prior(VariableId::Of(scene.tail_node));
+  scene.fixture.Prior(VariableId::Of(scene.shared_node));
 
   const std::map<SubmapId, int> links = CountFrozenLinks(scene.fixture.graph(), scene.live);
-  EXPECT_EQ(links.at(scene.transferred), 2);
+  EXPECT_EQ(links.at(scene.transferred), 1);
   EXPECT_EQ(links.at(one), 2);
   EXPECT_EQ(links.at(two), 1);
 }
@@ -180,7 +181,7 @@ TEST(FrozenLinksTest, PriorCounts) {
 TEST(FrozenLinksTest, UnfrozenToUnfrozenDoesNotCount) {
   Rotated scene;
   const SubmapId one = scene.fixture.AddSubmap(scene.live, 1);
-  const NodeId node = scene.fixture.AddNode(scene.live, 0, {one});
+  const NodeId node = scene.fixture.AddNode(scene.live, 1, {one});
   scene.fixture.Intra(one, node);
 
   const SessionId other = scene.fixture.StartSession();

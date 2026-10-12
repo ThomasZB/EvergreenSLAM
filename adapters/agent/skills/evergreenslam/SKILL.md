@@ -66,6 +66,8 @@ The other map's places are not visible from the new one, and the odometry frame 
 plan the rm again.
 `plan_changed`: the map moved between plan and apply, nothing was done; plan again. `not anchored`:
 the session has no link to the frozen map yet; drive where they overlap. Freezing cannot be undone.
+A freeze can end in `removed, not frozen`: the session only retraced the frozen map, so there was
+nothing to add; the fresh fed session carries on as usual.
 
 ## Question → view preset
 

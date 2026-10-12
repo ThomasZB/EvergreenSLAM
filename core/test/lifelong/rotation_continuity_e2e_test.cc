@@ -80,8 +80,6 @@ TEST(RotationContinuityE2eTest, HandedOverSubmapsKeepAbsorbingAndTheErrorShowsNo
   const PoseGraphData& graph = backend.graph();
   ASSERT_TRUE(graph.session(first_session).frozen());
 
-  // The node fed at the rotation step still landed in the frozen session, so the successor's node
-  // index n maps to ground-truth step rotation_step + 1 + n.
   const int rotation_step = step - 1;
   const SessionId second_session = *backend.session_manager().fed_session();
   ASSERT_EQ(second_session.session_index, first_session.session_index + 1);
@@ -95,6 +93,19 @@ TEST(RotationContinuityE2eTest, HandedOverSubmapsKeepAbsorbingAndTheErrorShowsNo
   for (const SubmapId& id : transferred) {
     EXPECT_EQ(id.session_id, second_session.session_index);
     EXPECT_FALSE(graph.submap(id).submap->finished());
+  }
+  // A node only the adopted submaps hold must not stay behind in the frozen session: as a constant
+  // it would block every later trim of the submap.
+  for (const SubmapId& id : transferred) {
+    for (const NodeId& node_id : graph.submap(id).node_ids) {
+      const std::vector<SubmapId> containing = graph.ContainingSubmapIds(node_id);
+      const bool held_by_frozen =
+          std::any_of(containing.begin(), containing.end(), [&first_session](const SubmapId& c) {
+            return c.session_id == first_session.session_index;
+          });
+      EXPECT_EQ(node_id.session_id == first_session.session_index, held_by_frozen)
+          << "node " << node_id.session_id << "." << node_id.node_index;
+    }
   }
   const SubmapId adopted_newest = transferred.back();
   const int scans_at_rotation = graph.submap(adopted_newest).submap->num_scans();
@@ -124,11 +135,15 @@ TEST(RotationContinuityE2eTest, HandedOverSubmapsKeepAbsorbingAndTheErrorShowsNo
 
   // No young-map plateau: the truth-relative error must be continuous across the boundary. The
   // error field varies along the ring, so the windows hug the boundary instead of averaging.
-  const auto error_at = [&graph, rotation_step, &first_session, &second_session](int s) {
-    const NodeId id = s <= rotation_step
-                          ? NodeId{first_session.session_index, s}
-                          : NodeId{second_session.session_index, s - rotation_step - 1};
-    return StepError(graph, id, s);
+  // By time, not index: the handover renumbers the nodes it moves into the successor.
+  std::map<common::Time, NodeId> node_at;
+  for (const SessionId session : {first_session, second_session}) {
+    for (const NodeId& id : graph.session(session).node_ids) {
+      node_at.emplace(graph.node(id).constant_data.time, id);
+    }
+  }
+  const auto error_at = [&graph, &node_at](int s) {
+    return StepError(graph, node_at.at(TestTime(s)), s);
   };
   constexpr int kErrorWindow = 10;
   double mean_before = 0.0;

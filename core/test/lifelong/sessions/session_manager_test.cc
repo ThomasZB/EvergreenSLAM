@@ -720,9 +720,11 @@ TEST(SessionManagerTest, AreaWithoutTrackIsNotGrowth) {
   Harness h(ShutGateOption());
   const SessionId first = h.manager.Start(TestTime(0));
   Feeder feeder(h.pose_graph, &h.manager, first);
+  // Pinned from the start: the bootstrap's tail nodes move to the successor with its open submaps,
+  // and a walking tail would be track of its own.
+  feeder.set_step(0.0);
   const SessionId second = Bootstrap(h, feeder);
   const int judged = h.manager.num_judgements();
-  feeder.set_step(0.0);
 
   feeder.FeedSubmap(kAway);
   feeder.FeedSubmap(kFar);
@@ -919,6 +921,13 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   const SessionId first = h.manager.Start(TestTime(0));
   Feeder feeder(h.pose_graph, &h.manager, first);
   const SessionId fed = Bootstrap(h, feeder);
+  // The two submaps handed over by the bootstrap lie in frozen area and go with the freeze trim;
+  // the closures need one that survives it.
+  feeder.set_ring_center(kFar);
+  feeder.FeedNodes(3 * kNodesPerSubmap);
+  h.pose_graph.WaitUntilQuiescent();
+  const SubmapId surviving{fed.session_index, 2};
+  ASSERT_TRUE(h.pose_graph.graph().submap(surviving).submap->finished());
 
   const SessionId floating = h.pose_graph.StartNewSession(TestTime(100));
   Feeder floating_feeder(h.pose_graph, nullptr, floating);
@@ -929,9 +938,9 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   floating_feeder.FinishAll();
   h.pose_graph.WaitUntilQuiescent();
 
-  // Closures from the fed session's head submap onto both ends of the floater.
+  // Closures from the fed session onto both ends of the floater.
   for (const int node_index : {0, 5 * kNodesPerSubmap - 1}) {
-    h.LandClosure(SubmapId{fed.session_index, 0}, NodeId{floating.session_index, node_index});
+    h.LandClosure(surviving, NodeId{floating.session_index, node_index});
   }
   h.pose_graph.WaitUntilQuiescent();
   const int judged = h.manager.num_judgements();
@@ -946,8 +955,6 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   EXPECT_EQ(state.accounted_submap_index, -1) << "unanchored: not accounted";
   EXPECT_EQ(h.manager.num_judgements(), judged);
 
-  feeder.FeedNodes(kNodesPerSubmap);
-  h.pose_graph.WaitUntilQuiescent();
   h.manager.FreezeFedSession();
   h.pose_graph.WaitUntilQuiescent();
   ASSERT_EQ(h.manager.num_sessions_frozen(), 2);
@@ -962,6 +969,34 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   EXPECT_EQ(h.manager.num_sessions_frozen(), 3) << ToString(h.manager.last_verdict().rejection);
   EXPECT_TRUE(h.pose_graph.graph().session(floating).frozen());
   EXPECT_EQ(*h.manager.fed_session(), fed_after_rotation) << "a floating freeze does not rotate";
+}
+
+// The removal takes the floater's tie with it, but the trim summarized it onto the survivors, so
+// the others are re-read as after a freeze.
+TEST(SessionManagerTest, AFreezeThatRemovesTheFedSessionStillMarksTheOthersDirty) {
+  Harness h;
+  const SessionId first = h.manager.Start(TestTime(0));
+  Feeder feeder(h.pose_graph, &h.manager, first);
+  const SessionId fed = Bootstrap(h, feeder);
+
+  const SessionId floating = h.pose_graph.StartNewSession(TestTime(100));
+  Feeder floating_feeder(h.pose_graph, nullptr, floating);
+  floating_feeder.set_ring_center(kAway);
+  floating_feeder.FeedNodes(3 * kNodesPerSubmap);
+  floating_feeder.FinishAll();
+  h.pose_graph.WaitUntilQuiescent();
+  h.LandClosure(SubmapId{fed.session_index, 0}, NodeId{floating.session_index, 0});
+  h.Solve();
+  ASSERT_FALSE(h.state(floating).dirty);
+
+  feeder.FeedNodes(kNodesPerSubmap);
+  h.pose_graph.WaitUntilQuiescent();
+  h.manager.FreezeFedSession();
+  h.pose_graph.WaitUntilQuiescent();
+  EXPECT_EQ(h.manager.num_sessions_frozen(), 1);
+  EXPECT_EQ(h.manager.num_sessions_removed(), 1);
+  EXPECT_FALSE(h.pose_graph.graph().HasSession(fed));
+  EXPECT_TRUE(h.state(floating).dirty);
 }
 
 // What a boot finds on disk: a frozen layer and unfrozen sessions whose account is rebuilt from
@@ -1122,8 +1157,8 @@ TEST(SessionManagerTest, AFloatingSessionIsFrozenInPlaceWhenAConstraintLandsOnIt
 }
 
 // Finished submaps lying inside frozen area are trimmed on the way into the freeze; the one that
-// grew the map stays, and the last finished one stays whatever it covers.
-TEST(SessionManagerTest, TheOverlapTrimDropsCoveredSubmapsBeforeTheFreezeAndKeepsOne) {
+// grew the map stays. A session the trim empties is removed instead of frozen.
+TEST(SessionManagerTest, TheOverlapTrimDropsCoveredSubmapsAndRemovesASessionItEmpties) {
   SessionManagerOption option = TestOption();
   option.auto_freeze = false;
   Harness h(option);
@@ -1154,25 +1189,29 @@ TEST(SessionManagerTest, TheOverlapTrimDropsCoveredSubmapsBeforeTheFreezeAndKeep
   ASSERT_EQ(h.manager.num_sessions_frozen(), 2);
   EXPECT_TRUE(h.pose_graph.graph().session(second).frozen());
   EXPECT_TRUE(h.Has(second, excursion));
-  // At most the handover's junction submap may still lie in known area: as the sole holder of
-  // frozen nodes it is the trimmer's constant guard's to keep.
-  EXPECT_LE(CountCoveredSubmaps(h, second), 1);
+  EXPECT_EQ(CountCoveredSubmaps(h, second), 0);
   EXPECT_GE(h.pose_graph.trimmer().num_submaps_trimmed(), trimmed_before + 2);
   EXPECT_EQ(h.observer->submaps_when_notified.back(), 2) << "the open ones were handed over";
 
-  // A third session entirely inside known area keeps its last finished submap whatever it
-  // covers, plus at most the junction submap.
+  // A third session entirely inside known area adds nothing: it goes, its open submaps and the
+  // nodes only they hold go on to the successor.
   const SessionId third = *h.manager.fed_session();
   feeder.Adopt(third);
   feeder.FeedNodes(3 * kNodesPerSubmap);
   h.pose_graph.WaitUntilQuiescent();
   h.manager.FreezeFedSession();
   h.pose_graph.WaitUntilQuiescent();
-  ASSERT_EQ(h.manager.num_sessions_frozen(), 3);
-  const std::vector<SubmapId>& kept = h.pose_graph.graph().session(third).submap_ids;
-  ASSERT_FALSE(kept.empty());
-  EXPECT_EQ(kept.back(), (SubmapId{third.session_index, 2}));
-  EXPECT_LE(kept.size(), 2u);
+  EXPECT_EQ(h.manager.num_sessions_frozen(), 2);
+  EXPECT_EQ(h.manager.num_sessions_removed(), 1);
+  const PoseGraphData& graph = h.pose_graph.graph();
+  EXPECT_FALSE(graph.HasSession(third));
+  EXPECT_EQ(h.manager.expansion().count(third), 0u);
+  EXPECT_FALSE(h.manager.freezing());
+  const SessionId fourth = *h.manager.fed_session();
+  EXPECT_EQ(fourth.session_index, third.session_index + 1);
+  EXPECT_EQ(h.observer->started.back(), fourth);
+  EXPECT_EQ(graph.session(fourth).submap_ids.size(), 2u);
+  EXPECT_FALSE(graph.session(fourth).node_ids.empty());
   EXPECT_GE(h.pose_graph.trimmer().num_submaps_trimmed(), trimmed_before + 3);
 }
 
@@ -1182,8 +1221,11 @@ TEST(SessionManagerTest, SessionIdsStayMonotoneAcrossRepeatedFreezes) {
   Harness h(option);
   const SessionId first = h.manager.Start(TestTime(0));
   Feeder feeder(h.pose_graph, &h.manager, first);
+  // A ring of its own per round: a session wholly in frozen area would be removed, not frozen.
+  const std::vector<Eigen::Vector2d> rings = {kHome, kAway, kFar};
   for (int round = 0; round < 3; ++round) {
     feeder.Adopt(*h.manager.fed_session());
+    feeder.set_ring_center(rings[round]);
     feeder.FeedNodes(30);
     h.pose_graph.WaitUntilQuiescent();
     h.manager.FreezeFedSession();

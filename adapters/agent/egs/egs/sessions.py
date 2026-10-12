@@ -111,11 +111,19 @@ def cmd_freeze(ctx, args):
     deadline = time.monotonic() + ctx.poll_s
     while True:
         s = ctx.client.get("/sessions")
-        role = {x.get("id"): x.get("role") for x in s.get("sessions") or []}.get(sid)
+        roles = {x.get("id"): x.get("role") for x in s.get("sessions") or []}
+        role = roles.get(sid)
         if role == "frozen":
             ctx.print(
                 "session %s frozen; fed session now %s  @solve %s"
                 % (sid, s.get("fed"), s.get("at_num_solves"))
+            )
+            return EXIT_OK
+        # The freeze-time trim can take every submap: such a session is removed, not frozen.
+        if sid not in roles and s.get("fed") != sid:
+            ctx.print(
+                "session %s lay wholly in the frozen map: removed, not frozen; fed session now %s"
+                "  @solve %s" % (sid, s.get("fed"), s.get("at_num_solves"))
             )
             return EXIT_OK
         if time.monotonic() >= deadline:

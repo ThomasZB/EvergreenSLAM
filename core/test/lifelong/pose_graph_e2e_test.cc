@@ -65,7 +65,6 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
 
   SessionId first_session;
   SessionId second_session;
-  int second_session_start_step = 0;
   int watermark_node_index = 0;
   int watermark_submap_index = 0;
   int second_session_submaps_created = 0;
@@ -97,8 +96,6 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
     EXPECT_TRUE(backend.session_manager().last_verdict().bootstrap);
     EXPECT_TRUE(backend.graph().session(first_session).frozen());
     second_session = *backend.session_manager().fed_session();
-    // The node fed at the freeze step still landed in the frozen session.
-    second_session_start_step = step;
     EXPECT_EQ(second_session.session_index, first_session.session_index + 1);
     for (; step < kNodesPerLap + 30; ++step) {
       frontend.Feed(step);
@@ -155,7 +152,7 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
     EXPECT_TRUE(frozen_file->frozen);
     EXPECT_GT(frozen_file->num_constraints, 0) << "frozen constraints are stored in the file";
 
-    error_at_kill = MeanNodeError(backend.graph(), second_session, second_session_start_step);
+    error_at_kill = MeanNodeError(backend.graph(), second_session);
     watermark_node_index = backend.graph().id_allocator().next_node_index(second_session);
     watermark_submap_index = backend.graph().id_allocator().next_submap_index(second_session);
   }
@@ -191,7 +188,7 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
 
   // The restarted frontend starts a fresh local frame at identity where the checkpoint left the
   // robot, so the drifted odometry stream is rebased onto the last restored keyframe.
-  const int resume_step = second_session_start_step + last_restored.node_index;
+  const int resume_step = testing::StepAt(backend.graph().node(last_restored).constant_data.time);
   const Eigen::Affine2d resume_inverse = odometry[resume_step].inverse();
   std::vector<Eigen::Affine2d> rebased;
   rebased.reserve(odometry.size());
@@ -239,9 +236,7 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
   // every keyframe solved: closures now land on poses left uncorrected until the next cadence).
   // The reload reproduces that to the digit, and the boot session's drifted closures then pull
   // the still-free floating session out to 0.276 m (0.211 m solving per keyframe).
-  const double error_after =
-      MeanNodeError(backend.graph(), second_session,
-                    testing::SessionStartSteps(backend.graph()).at(second_session.session_index));
+  const double error_after = MeanNodeError(backend.graph(), second_session);
   std::cout << "e2e: second session mean error at kill " << error_at_kill << " m, after reload "
             << error_after << " m" << std::endl;
   EXPECT_LT(error_at_kill, 0.2);

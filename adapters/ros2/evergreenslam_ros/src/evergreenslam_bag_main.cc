@@ -693,6 +693,7 @@ int main(int argc, char** argv) {
               << ", accepted " << backend->constraint_builder().num_constraints_added()
               << std::endl;
     std::cout << "sessions frozen " << backend->session_manager().num_sessions_frozen()
+              << ", removed " << backend->session_manager().num_sessions_removed()
               << " (last verdict: " << backend->session_manager().last_verdict()
               << ")  submaps trimmed " << backend->trimmer().num_submaps_trimmed() << std::endl;
     if (backend->map_manager() != nullptr) {

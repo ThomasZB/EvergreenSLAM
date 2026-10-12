@@ -353,11 +353,15 @@ void SessionManager::FreezeAndMaybeRotate(SessionId id) {
       TrimCoveredSubmapsOnTask(id);
       const SessionId next = handle_.RotateAndFreezeFedSessionOnTask(id);
       const PoseGraphData& graph = handle_.graph();
-      LOG(INFO) << "session " << id.session_index << " frozen with "
-                << graph.session(id).submap_ids.size() << " submaps; "
-                << graph.session(next).submap_ids.size() << " unfinished handed to session "
-                << next.session_index;
-      OnFrozenOnTask(id);
+      if (graph.HasSession(id)) {
+        LOG(INFO) << "session " << id.session_index << " frozen with "
+                  << graph.session(id).submap_ids.size() << " submaps; "
+                  << graph.session(next).submap_ids.size() << " unfinished handed to session "
+                  << next.session_index;
+        OnFrozenOnTask(id);
+      } else {
+        OnEmptiedOnTask(id);
+      }
       fed_session_ = next;
       for (const std::shared_ptr<SessionObserver>& observer : observers_) {
         observer->OnSessionStarted(graph, next);
@@ -366,9 +370,13 @@ void SessionManager::FreezeAndMaybeRotate(SessionId id) {
     return;
   }
 
-  handle_.Enqueue([this, id] { TrimCoveredSubmapsOnTask(id); });
-  handle_.FreezeSession(id);
   handle_.Enqueue([this, id] {
+    TrimCoveredSubmapsOnTask(id);
+    handle_.FreezeSessionOnTask(id);
+    if (!handle_.graph().HasSession(id)) {
+      OnEmptiedOnTask(id);
+      return;
+    }
     LOG(INFO) << "session " << id.session_index << " frozen with "
               << handle_.graph().session(id).submap_ids.size() << " submaps (floating)";
     OnFrozenOnTask(id);
@@ -388,10 +396,6 @@ void SessionManager::TrimCoveredSubmapsOnTask(SessionId id) {
     if (coverage_.Query(record).covered_fraction() >= option_.frozen_covered_fraction) {
       covered.push_back(submap_id);
     }
-  }
-  // Never the whole session: the newest pass through known area still ends somewhere.
-  if (!covered.empty() && covered.size() == finished.size()) {
-    covered.pop_back();
   }
   if (covered.empty()) {
     return;
@@ -414,6 +418,17 @@ void SessionManager::OnFrozenOnTask(SessionId id) {
     state.dirty = true;
   }
   num_sessions_frozen_.fetch_add(1, std::memory_order_release);
+  freezing_ = false;
+}
+
+void SessionManager::OnEmptiedOnTask(SessionId id) {
+  LOG(INFO) << "session " << id.session_index
+            << " lay wholly in frozen area: removed instead of frozen";
+  expansion_.erase(id);
+  for (auto& [other, state] : expansion_) {
+    state.dirty = true;
+  }
+  num_sessions_removed_.fetch_add(1, std::memory_order_release);
   freezing_ = false;
 }
 

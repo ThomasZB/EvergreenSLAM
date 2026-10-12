@@ -43,10 +43,9 @@ using testing::TestTime;
 // Submaps go through the emulator's creation-step map keyed by local_index, which a freeze
 // rotation's graph-id rename cannot disturb.
 Eigen::Affine2d TruthPoseOf(const PoseGraphData& graph, const VariableId& variable,
-                            const std::map<int, int>& session_starts,
                             const std::map<int, int>& submap_steps) {
   const int step = variable.kind == VariableId::Kind::NODE
-                       ? session_starts.at(variable.session_id) + variable.index
+                       ? testing::StepAt(graph.node(variable.node_id()).constant_data.time)
                        : submap_steps.at(graph.submap(variable.submap_id()).submap->local_index());
   return LoopGroundTruth(step);
 }
@@ -71,11 +70,10 @@ bool IsBuilderClosure(const Constraint& constraint) {
 // A wrong loop closure is metres off; a right one differs from truth only by the drift baked
 // into one submap's grid (a fraction of these bounds).
 bool ClosureConsistentWithTruth(const PoseGraphData& graph, const Constraint& constraint,
-                                const std::map<int, int>& session_starts,
                                 const std::map<int, int>& submap_steps) {
   const Eigen::Affine2d truth_rel =
-      Eigen::Affine2d(TruthPoseOf(graph, constraint.from, session_starts, submap_steps).inverse() *
-                      TruthPoseOf(graph, *constraint.to, session_starts, submap_steps));
+      Eigen::Affine2d(TruthPoseOf(graph, constraint.from, submap_steps).inverse() *
+                      TruthPoseOf(graph, *constraint.to, submap_steps));
   return PoseClose(constraint.relative_pose, truth_rel, 0.35, 0.2);
 }
 
@@ -175,23 +173,20 @@ void RunScenario(ScenarioResult& result) {
   backend.Finish();
 
   const PoseGraphData& graph = backend.graph();
-  // Which session each keyframe landed in can jitter with the rotation's task timing; the total
-  // minted must equal the feeds either way.
-  const std::map<int, int> session_starts = testing::SessionStartSteps(graph);
   result.sessions_frozen = backend.session_manager().num_sessions_frozen();
   // The drifted lap and its closure live in the successor; the frozen session is bitwise
   // constant and says nothing about recovery.
-  result.mean_second_session_error =
-      MeanNodeError(graph, second_session, session_starts.at(second_session.session_index));
+  result.mean_second_session_error = MeanNodeError(graph, second_session);
   result.constraints_added = backend.constraint_builder().num_constraints_added();
   result.constraints_dropped = backend.constraint_builder().num_constraints_dropped();
   result.submaps_created = graph.id_allocator().next_submap_index(second_session);
   result.submaps_surviving = static_cast<int>(graph.session(second_session).submap_ids.size());
   result.submaps_trimmed = backend.trimmer().num_submaps_trimmed();
   result.steps_fed = step;
-  for (const auto& [id, session] : graph.sessions()) {
-    result.nodes_ingested += graph.id_allocator().next_node_index(id);
-  }
+  result.nodes_ingested =
+      backend.last_ingested_node().has_value()
+          ? testing::StepAt(graph.node(*backend.last_ingested_node()).constant_data.time) + 1
+          : 0;
 
   for (size_t i = 0; i < frozen_ids.size(); ++i) {
     result.max_frozen_move = std::max(
@@ -203,8 +198,7 @@ void RunScenario(ScenarioResult& result) {
       continue;
     }
     if (IsBuilderClosure(constraint)) {
-      if (!ClosureConsistentWithTruth(graph, constraint, session_starts,
-                                      frontend.submap_creation_steps())) {
+      if (!ClosureConsistentWithTruth(graph, constraint, frontend.submap_creation_steps())) {
         ++result.bad_closures;
       }
     } else if (!SummaryConsistentWithEstimate(constraint, graph)) {
@@ -250,8 +244,8 @@ TEST(ThreadedBackendE2eTest, RecoversTheTrajectoryAndBoundsTheGraph) {
 
   EXPECT_LT(run.max_frozen_move, 1e-12) << "frozen means frozen, to the bit";
 
-  // Every keyframe fed lands in the graph; only which session a rotation-boundary keyframe lands
-  // in may differ between runs.
+  // Per-session watermarks double-count the nodes a rotation hands over, so the newest node's
+  // stamp stands in: it must be the last step fed, still reachable after every renumbering.
   EXPECT_EQ(run.nodes_ingested, run.steps_fed);
 }
 

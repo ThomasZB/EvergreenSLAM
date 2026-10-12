@@ -185,9 +185,7 @@ class PoseGraphData {
   void AddNodeMembership(const NodeId& node_id, const SubmapId& submap_id);
   void AddConstraint(const Constraint& constraint);
 
-  // Nodes stay put, so their intra constraints become cross-session edges. The caller must
-  // re-key the ingest translation table in the same step.
-  void TransferSubmap(const SubmapId& old_id, const SubmapId& new_id);
+  std::map<NodeId, NodeId> TransferSubmap(const SubmapId& old_id, const SubmapId& new_id);
 
   void SetNodeGlobalPose(const NodeId& id, const Eigen::Affine2d& global_pose);
   void SetSubmapGlobalPose(const SubmapId& id, const Eigen::Affine2d& global_pose);
@@ -219,6 +217,8 @@ class PoseGraphData {
 
  private:
   SessionData& MutableSession(SessionId id);
+  std::map<NodeId, NodeId> TransferNodesLeftBehind(const SubmapId& submap_id);
+  NodeId TransferNode(const NodeId& old_id, SessionId to);
   void RemoveSubmap(const SubmapId& id);
   void RemoveNode(const NodeId& id);
   void RemoveConstraintsTouching(const std::set<VariableId>& removed);

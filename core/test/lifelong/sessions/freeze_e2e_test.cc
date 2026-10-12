@@ -166,17 +166,15 @@ PoseGraphOption TestOption() {
   return option;
 }
 
-// Session-local node index k was fed for step first_step + k.
 double MeanNodeError(
     const PoseGraphData& graph, SessionId session, const std::vector<Eigen::Affine2d>& truth,
-    int first_step,
     const std::function<bool(const Eigen::Affine2d&)>& include = [](const Eigen::Affine2d&) {
       return true;
     }) {
   double total = 0.0;
   int count = 0;
   for (const NodeId& id : graph.session(session).node_ids) {
-    const Eigen::Affine2d& expected = truth.at(first_step + id.node_index);
+    const Eigen::Affine2d& expected = truth.at(testing::StepAt(graph.node(id).constant_data.time));
     if (!include(expected)) {
       continue;
     }
@@ -294,7 +292,6 @@ TEST(FreezeE2eTest, FirstSessionFreezesAtItsFirstSubmapAndTheWingSessionOnSigmaA
   const SessionId second = *manager.fed_session();
   EXPECT_EQ(second.session_index, first.session_index + 1);
   EXPECT_EQ(graph.session(second).submap_ids.size(), 2u);
-  const int second_start_step = step;
   const int judgements_at_bootstrap = manager.num_judgements();
   const std::vector<std::array<double, 6>> frozen_at_freeze = SnapshotSession(graph, first);
 
@@ -302,7 +299,7 @@ TEST(FreezeE2eTest, FirstSessionFreezesAtItsFirstSubmapAndTheWingSessionOnSigmaA
   // stands still, and the first verdict freezes the session where it is.
   double error_before_freeze = 0.0;
   while (manager.num_sessions_frozen() == 1 && step < static_cast<int>(truth.size())) {
-    error_before_freeze = MeanNodeError(graph, second, truth, second_start_step, InWing);
+    error_before_freeze = MeanNodeError(graph, second, truth, InWing);
     frontend.Feed(step++);
     backend.WaitUntilQuiescent();
   }
@@ -328,7 +325,7 @@ TEST(FreezeE2eTest, FirstSessionFreezesAtItsFirstSubmapAndTheWingSessionOnSigmaA
   // Frozen halfway round on a 0.03 m sigma, the wing keeps the 0.58 m the yaw bias gave it:
   // the gate reads the chain's noise, not its drift. The ceiling only catches a divergence; the
   // bitwise check below is what proves the freeze.
-  const double error_in_wing = MeanNodeError(graph, second, truth, second_start_step, InWing);
+  const double error_in_wing = MeanNodeError(graph, second, truth, InWing);
   EXPECT_LT(error_in_wing, 1.0) << "before the freeze " << error_before_freeze;
   // The pass through known area is discarded on the way in; the one junction submap that alone
   // holds frozen nodes is the handover's known cost.
@@ -348,9 +345,9 @@ TEST(FreezeE2eTest, FirstSessionFreezesAtItsFirstSubmapAndTheWingSessionOnSigmaA
   ASSERT_EQ(manager.expansion().count(third), 1u);
   EXPECT_EQ(manager.expansion().at(third).phase, SessionManager::Phase::LOCALIZING);
   // Back in the room the successor snaps onto the frozen room, whatever the wing says.
-  EXPECT_LT(MeanNodeError(graph, third, truth, freeze_step + 1,
-                          [](const Eigen::Affine2d& pose) { return !InWing(pose); }),
-            0.25);
+  EXPECT_LT(
+      MeanNodeError(graph, third, truth, [](const Eigen::Affine2d& pose) { return !InWing(pose); }),
+      0.25);
   ExpectBitwiseEqual(frozen_at_freeze, SnapshotSession(graph, first));
   ExpectBitwiseEqual(wing_at_freeze, SnapshotSession(graph, second));
 }
@@ -391,7 +388,7 @@ TEST(FreezeE2eTest, ExcursionFreezesInsideTheWingAndItsKnownAreaPassIsTrimmed) {
 
   // Entered with the drift the base's closures left and closed on itself, the wing is frozen
   // 0.23 m adrift; nothing corrects it after that.
-  EXPECT_LT(MeanNodeError(graph, session, truth, 0, InWing), 0.4);
+  EXPECT_LT(MeanNodeError(graph, session, truth, InWing), 0.4);
   EXPECT_EQ(CountCoveredSubmaps(graph, option, session), 0)
       << "a frozen submap lying in the base's area survived the overlap trim";
   EXPECT_GT(graph.session(session).submap_ids.size(), 2u) << "the wing itself must survive";
@@ -442,7 +439,7 @@ TEST(FreezeE2eTest, ALocalizingSessionNeverFreezes) {
   EXPECT_TRUE(manager.expansion().at(session).anchored);
   EXPECT_EQ(manager.expansion().at(session).phase, SessionManager::Phase::LOCALIZING);
   EXPECT_LT(manager.expansion().at(session).novel_area, option.session_manager.min_new_area);
-  EXPECT_LT(MeanNodeError(graph, session, truth, 0), 0.25);
+  EXPECT_LT(MeanNodeError(graph, session, truth), 0.25);
 
   EXPECT_GT(backend.trimmer().num_submaps_trimmed(), 0) << "trimming never engaged";
   EXPECT_EQ(backend.constraint_builder().num_constraints_dropped(), 0);

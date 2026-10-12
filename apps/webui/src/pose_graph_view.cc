@@ -231,6 +231,7 @@ void AppendStats(std::ostringstream& out, const lifelong::PoseGraph& graph) {
       << ",\"matches_attempted\":" << graph.constraint_builder().num_matches_attempted()
       << ",\"matches_accepted\":" << graph.constraint_builder().num_constraints_added()
       << ",\"sessions_frozen\":" << graph.session_manager().num_sessions_frozen()
+      << ",\"sessions_removed\":" << graph.session_manager().num_sessions_removed()
       << ",\"submaps_trimmed\":" << graph.trimmer().num_submaps_trimmed()
       << ",\"priors_added\":" << graph.trimmer().num_priors_added()
       << ",\"variables\":" << graph.optimization().num_variables()
