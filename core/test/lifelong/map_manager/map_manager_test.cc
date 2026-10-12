@@ -667,24 +667,24 @@ TEST(MapManagerTest, MultipleUnfrozenSessionsRoundTripWithoutOverwritingEachOthe
             CountNonFullyFrozenConstraints(built.graph));
 }
 
-TEST(MapManagerTest, CheckpointPersistsFloatingSessionPosesAndTrimmedStructure) {
-  const std::string directory = MakeTempDir("checkpoint_floating");
+TEST(MapManagerTest, CheckpointPersistsIdleSessionPosesAndTrimmedStructure) {
+  const std::string directory = MakeTempDir("checkpoint_idle");
   BuiltGraph built = BuildGraph();
   const SessionId fed = AddFedSession(built);
-  const SessionId floating = built.active_session;
+  const SessionId idle = built.active_session;
   MapManager manager(directory);
   ASSERT_EQ(manager.RecordBoot(), 1);
   manager.OnSessionFrozen(built.graph, built.frozen_session);
   ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
   const auto frozen_file = manager.FileNameOf(built.frozen_session);
 
-  const SubmapId removed = built.graph.session(floating).submap_ids.front();
-  const NodeId orphan = built.graph.session(floating).node_ids.front();
-  const SubmapId survivor = built.graph.session(floating).submap_ids.back();
+  const SubmapId removed = built.graph.session(idle).submap_ids.front();
+  const NodeId orphan = built.graph.session(idle).node_ids.front();
+  const SubmapId survivor = built.graph.session(idle).submap_ids.back();
   built.graph.SetSubmapGlobalPose(survivor, transform::FromXYTheta(3.3, 1.1, 0.4));
-  built.graph.SetNodeGlobalPose(built.graph.session(floating).node_ids.back(),
-                               transform::FromXYTheta(2.8, 0.7, 0.3));
-  built.graph.SetSessionLocalToGlobal(floating, transform::FromXYTheta(1.2, 0.5, 0.2));
+  built.graph.SetNodeGlobalPose(built.graph.session(idle).node_ids.back(),
+                                transform::FromXYTheta(2.8, 0.7, 0.3));
+  built.graph.SetSessionLocalToGlobal(idle, transform::FromXYTheta(1.2, 0.5, 0.2));
   TrimRequest trim;
   trim.deleted_submap_ids = {removed};
   Constraint recovered;
@@ -705,11 +705,11 @@ TEST(MapManagerTest, CheckpointPersistsFloatingSessionPosesAndTrimmedStructure) 
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(loaded.HasSubmap(removed));
   EXPECT_FALSE(loaded.HasNode(orphan));
-  ExpectSessionRestored(built.graph, loaded, floating);
+  ExpectSessionRestored(built.graph, loaded, idle);
   ExpectSessionRestored(built.graph, loaded, fed);
   EXPECT_EQ(static_cast<int>(loaded.constraints().size()),
             CountNonFullyFrozenConstraints(built.graph));
-  EXPECT_EQ(reader.InspectSessionFile(floating)->num_constraints, 2);
+  EXPECT_EQ(reader.InspectSessionFile(idle)->num_constraints, 2);
   EXPECT_EQ(reader.InspectSessionFile(fed)->num_constraints, 2);
   ASSERT_EQ(result->unfrozen_sessions.size(), 2u);
   EXPECT_EQ(result->unfrozen_sessions[0].last_fed_boot, 0);
@@ -727,14 +727,14 @@ TEST(MapManagerTest, ConstraintOwnershipSplitsAcrossUnfrozenFilesWithoutDuplicat
   manager.Checkpoint(built.graph, fed);
 
   // A constraint goes to the file of its highest-indexed unfrozen endpoint.
-  const std::optional<MapManager::FileSummary> floating_file =
+  const std::optional<MapManager::FileSummary> idle_file =
       manager.InspectSessionFile(built.active_session);
   const std::optional<MapManager::FileSummary> fed_file = manager.InspectSessionFile(fed);
-  ASSERT_TRUE(floating_file.has_value());
+  ASSERT_TRUE(idle_file.has_value());
   ASSERT_TRUE(fed_file.has_value());
-  EXPECT_EQ(floating_file->num_constraints, 3);
+  EXPECT_EQ(idle_file->num_constraints, 3);
   EXPECT_EQ(fed_file->num_constraints, 1);
-  EXPECT_EQ(floating_file->num_constraints + fed_file->num_constraints,
+  EXPECT_EQ(idle_file->num_constraints + fed_file->num_constraints,
             CountNonFullyFrozenConstraints(built.graph));
 }
 
@@ -749,7 +749,7 @@ TEST(MapManagerTest, AConstraintMigratesToItsNextUnfrozenEndpointWhenItsOwnerFre
   ASSERT_EQ(manager.InspectSessionFile(built.active_session)->num_constraints, 3);
 
   // The active-to-fed constraint is not fully frozen, so it may not vanish into the write-once
-  // frozen file: ownership migrates to the floating session.
+  // frozen file: ownership migrates to the idle session.
   built.graph.FreezeSession(fed);
   manager.OnSessionFrozen(built.graph, fed);
   EXPECT_EQ(manager.InspectSessionFile(built.active_session)->num_constraints, 4);
@@ -1046,32 +1046,32 @@ TEST(MapManagerTest, FailedFileWriteLeavesPreviousGeneration) {
   ExpectSessionRestored(built.graph, loaded, built.active_session);
 }
 
-TEST(MapManagerTest, FailedFloatingSessionWriteKeepsTheWholePreviousCheckpoint) {
-  const std::string directory = MakeTempDir("checkpoint_floating_failed");
+TEST(MapManagerTest, FailedIdleSessionWriteKeepsTheWholePreviousCheckpoint) {
+  const std::string directory = MakeTempDir("checkpoint_idle_failed");
   BuiltGraph built = BuildGraph();
   const SessionId fed = AddFedSession(built);
   MapManager manager(directory);
   manager.OnSessionFrozen(built.graph, built.frozen_session);
   ASSERT_TRUE(manager.Checkpoint(built.graph, fed));
   const int64_t generation = manager.generation();
-  const auto floating_file = manager.FileNameOf(built.active_session);
+  const auto idle_file = manager.FileNameOf(built.active_session);
   const auto fed_file = manager.FileNameOf(fed);
-  const NodeId floating_node = built.graph.session(built.active_session).node_ids.back();
+  const NodeId idle_node = built.graph.session(built.active_session).node_ids.back();
   const NodeId fed_node = built.graph.session(fed).node_ids.back();
-  const Eigen::Affine2d old_floating_pose = built.graph.node(floating_node).global_pose;
+  const Eigen::Affine2d old_idle_pose = built.graph.node(idle_node).global_pose;
   const Eigen::Affine2d old_fed_pose = built.graph.node(fed_node).global_pose;
-  built.graph.SetNodeGlobalPose(floating_node, transform::FromXYTheta(1.0, 2.0, 0.3));
+  built.graph.SetNodeGlobalPose(idle_node, transform::FromXYTheta(1.0, 2.0, 0.3));
   built.graph.SetNodeGlobalPose(fed_node, transform::FromXYTheta(3.0, 4.0, 0.5));
   const auto blocker = Block(directory, NextSessionFile(manager, built.active_session));
   EXPECT_FALSE(manager.Checkpoint(built.graph, fed));
   EXPECT_EQ(manager.generation(), generation);
-  EXPECT_EQ(manager.FileNameOf(built.active_session), floating_file);
+  EXPECT_EQ(manager.FileNameOf(built.active_session), idle_file);
   EXPECT_EQ(manager.FileNameOf(fed), fed_file);
   {
     PoseGraphData loaded;
     MapManager reader(directory);
     ASSERT_TRUE(testing::LoadMap(reader, loaded).has_value());
-    ExpectPoseRestored(old_floating_pose, loaded.node(floating_node).global_pose);
+    ExpectPoseRestored(old_idle_pose, loaded.node(idle_node).global_pose);
     ExpectPoseRestored(old_fed_pose, loaded.node(fed_node).global_pose);
   }
   std::filesystem::remove_all(blocker);

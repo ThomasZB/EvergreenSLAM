@@ -57,7 +57,7 @@ void HandleSnapshot(ServiceContext& context, httplib::Response& response) {
     const std::optional<SessionId> fed = pose_graph.session_manager().fed_session();
     for (const auto& [id, session] : graph.sessions()) {
       input.sessions.push_back(
-          {id.session_index, session.frozen() ? "frozen" : (fed == id ? "fed" : "floating"),
+          {id.session_index, session.frozen() ? "frozen" : (fed == id ? "fed" : "idle"),
            static_cast<int>(session.node_ids.size()), static_cast<int>(session.submap_ids.size())});
     }
     result.resolved = pose_graph.anchors().ResolveAll(graph);

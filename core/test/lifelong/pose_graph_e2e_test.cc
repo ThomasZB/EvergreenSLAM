@@ -167,8 +167,8 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
       << "boot has to open a fresh session";
   ASSERT_TRUE(backend.graph().HasSession(second_session));
   EXPECT_FALSE(backend.graph().session(second_session).frozen())
-      << "the loaded unfrozen session floats instead of being fed or dropped";
-  // The floating session's persisted watermarks survive even though nothing feeds it again.
+      << "the loaded unfrozen session idles instead of being fed or dropped";
+  // The idle session's persisted watermarks survive even though nothing feeds it again.
   EXPECT_GT(backend.graph().id_allocator().next_node_index(second_session), 0);
   EXPECT_LE(backend.graph().id_allocator().next_node_index(second_session), watermark_node_index);
   EXPECT_GT(backend.graph().id_allocator().next_submap_index(second_session), 0);
@@ -197,8 +197,8 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
   }
 
   // Loop search against the reloaded grids anchors the boot session onto the frozen base and
-  // the floating one. Neither maps anything new, so neither freezes: a known-area pass is
-  // localization, and the floating session is only judged when a constraint lands on it.
+  // the idle one. Neither maps anything new, so neither freezes: a known-area pass is
+  // localization, and the idle session is only judged when a constraint lands on it.
   Frontend frontend(backend, rebased);
   int step = steps_fed;
   const int stage3_end = std::min(steps_fed + kNodesPerLap, total_steps);
@@ -235,7 +235,7 @@ TEST(PoseGraphE2eTest, FullChainSurvivesAKillAndAnchorsBackIntoTheFrozenBase) {
   // residual around the ring: 0.174 m at the kill at the shipped 30-node cadence (0.145 m when
   // every keyframe solved: closures now land on poses left uncorrected until the next cadence).
   // The reload reproduces that to the digit, and the boot session's drifted closures then pull
-  // the still-free floating session out to 0.276 m (0.211 m solving per keyframe).
+  // the still-free idle session out to 0.276 m (0.211 m solving per keyframe).
   const double error_after = MeanNodeError(backend.graph(), second_session);
   std::cout << "e2e: second session mean error at kill " << error_at_kill << " m, after reload "
             << error_after << " m" << std::endl;

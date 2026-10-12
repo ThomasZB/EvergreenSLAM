@@ -320,16 +320,16 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   backend.Finish();
 }
 
-// Two boots: a frozen base, a floating session with a place on it, and a fed session.
-TEST(AgentServiceE2eTest, RemovesOnlyFloatingSessionsThroughPlanAndApply) {
+// Two boots: a frozen base, an idle session with a place on it, and a fed session.
+TEST(AgentServiceE2eTest, RemovesOnlyIdleSessionsThroughPlanAndApply) {
   const std::string map_dir = lifelong::testing::MakeTempDir("evergreenslam_agent_sessions");
   const lifelong::PoseGraphOption option = lifelong::testing::AnchorTestOption();
   const int total_steps = 2 * kNodesPerLap;
   const std::vector<Eigen::Affine2d> odometry = lifelong::testing::GroundTruthOdometry(total_steps);
-  const int floating_step = 45;
+  const int idle_step = 45;
 
-  lifelong::SessionId floating;
-  lifelong::AnchorId on_floating = 0;
+  lifelong::SessionId idle;
+  lifelong::AnchorId on_idle = 0;
   {
     PoseGraph backend(option, map_dir);
     backend.Start(TestTime(0));
@@ -340,13 +340,13 @@ TEST(AgentServiceE2eTest, RemovesOnlyFloatingSessionsThroughPlanAndApply) {
       backend.WaitUntilQuiescent();
     }
     ASSERT_EQ(backend.session_manager().num_sessions_frozen(), 1);
-    floating = lifelong::testing::RunOnTask(
+    idle = lifelong::testing::RunOnTask(
         backend, [&backend] { return *backend.session_manager().fed_session(); });
-    for (; step <= floating_step; ++step) {
+    for (; step <= idle_step; ++step) {
       frontend.Feed(step);
       backend.WaitUntilQuiescent();
     }
-    on_floating = lifelong::testing::SaveAnchor(backend)->id;
+    on_idle = lifelong::testing::SaveAnchor(backend)->id;
     backend.Finish();
   }
 
@@ -360,9 +360,9 @@ TEST(AgentServiceE2eTest, RemovesOnlyFloatingSessionsThroughPlanAndApply) {
   const Reply sessions = client.Get("/sessions");
   ASSERT_EQ(JsonRaw(sessions.body, "ok"), "true") << sessions.body;
   EXPECT_NE(sessions.body.find("\"role\":\"frozen\""), std::string::npos) << sessions.body;
-  EXPECT_NE(sessions.body.find("\"id\":" + std::to_string(floating.session_index) +
-                               ",\"role\":\"floating\""),
-            std::string::npos)
+  EXPECT_NE(
+      sessions.body.find("\"id\":" + std::to_string(idle.session_index) + ",\"role\":\"idle\""),
+      std::string::npos)
       << sessions.body;
   const Reply status = client.Get("/status");
   EXPECT_EQ(JsonRaw(status.body, "has_frozen_base"), "true");
@@ -373,10 +373,10 @@ TEST(AgentServiceE2eTest, RemovesOnlyFloatingSessionsThroughPlanAndApply) {
   EXPECT_EQ(JsonRaw(client.Post("/sessions/rm/plan", {{"id", "0"}}).body, "rejection"),
             "frozen_session");
 
-  const std::string id = std::to_string(floating.session_index);
+  const std::string id = std::to_string(idle.session_index);
   const Reply plan = client.Post("/sessions/rm/plan", {{"id", id}});
   ASSERT_EQ(JsonRaw(plan.body, "ok"), "true") << plan.body;
-  EXPECT_NE(plan.body.find("\"anchors_orphaned\":[" + std::to_string(on_floating) + "]"),
+  EXPECT_NE(plan.body.find("\"anchors_orphaned\":[" + std::to_string(on_idle) + "]"),
             std::string::npos)
       << plan.body;
   EXPECT_NE(plan.body.find("\"would_delete\":[[" + id + ","), std::string::npos) << plan.body;
@@ -389,8 +389,8 @@ TEST(AgentServiceE2eTest, RemovesOnlyFloatingSessionsThroughPlanAndApply) {
   const Reply applied = client.Post("/sessions/rm/apply", {{"id", id}, {"plan_token", token}});
   ASSERT_EQ(JsonRaw(applied.body, "ok"), "true") << applied.body;
   EXPECT_EQ(JsonRaw(applied.body, "removed"), id);
-  EXPECT_EQ(client.Get("/sessions").body.find("\"role\":\"floating\""), std::string::npos);
-  const Reply orphan = client.Get("/anchors/" + std::to_string(on_floating));
+  EXPECT_EQ(client.Get("/sessions").body.find("\"role\":\"idle\""), std::string::npos);
+  const Reply orphan = client.Get("/anchors/" + std::to_string(on_idle));
   EXPECT_EQ(JsonRaw(orphan.body, "state"), "orphan");
   EXPECT_EQ(JsonRaw(orphan.body, "orphan_reason"), "session_removed");
   EXPECT_EQ(JsonRaw(orphan.body, "pose"), "null");

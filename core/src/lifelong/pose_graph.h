@@ -141,7 +141,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void HandleInsertionResult(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
   void HandleConstraint(const Constraint& constraint);
   // Must run after BuildFrom: RemoveSession needs the Problem to still hold the blocks.
-  void GcFloatingSessions(const MapManager::LoadResult& loaded);
+  void GcIdleSessions(const MapManager::LoadResult& loaded);
   void CheckAndFreezeSession(SessionId id);
 
   void FinishBatch();

@@ -269,7 +269,7 @@ def build_parser():
         sp.set_defaults(fn=fn)
     rm = ssub.add_parser(
         "rm",
-        help="remove a floating session, or drop the fed one in process: a fresh one is fed and "
+        help="remove an idle session, or drop the fed one in process: a fresh one is fed and "
         "the robot's pose is lost (plan, then --yes applies)",
     )
     rm.add_argument("id", type=int)

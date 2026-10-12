@@ -392,7 +392,7 @@ TEST(ConstraintBuilder, DriftSlackGrowsTheFootprintMarginAndTheSearchWindow) {
 }
 
 // A loaded frozen map has no path record; the cap that covers an unknown drift belongs to
-// floating sessions only, or every frozen submap sits inside a 40 m candidate radius.
+// idle sessions only, or every frozen submap sits inside a 40 m candidate radius.
 TEST(ConstraintBuilder, AFrozenEndpointAddsNoDriftSlack) {
   const auto attempted = [](bool freeze_base) {
     PoseGraph pose_graph;
@@ -425,7 +425,7 @@ TEST(ConstraintBuilder, AFrozenEndpointAddsNoDriftSlack) {
     return builder.num_matches_attempted();
   };
 
-  EXPECT_EQ(attempted(/*freeze_base=*/false), 1) << "a floating base without a path gets the cap";
+  EXPECT_EQ(attempted(/*freeze_base=*/false), 1) << "an idle base without a path gets the cap";
   EXPECT_EQ(attempted(/*freeze_base=*/true), 0);
 }
 
@@ -508,7 +508,7 @@ TEST(ConstraintBuilder, ACrossSessionClosureOntoAFrozenBaseResetsTheDrift) {
 
 // The base is never searched by this builder, so it has no path record, like a session loaded
 // from disk: its drift is unknown until a closure ties it.
-TEST(ConstraintBuilder, APathlessFloatingSessionIsTiedByItsFirstClosure) {
+TEST(ConstraintBuilder, APathlessIdleSessionIsTiedByItsFirstClosure) {
   PoseGraph pose_graph;
   const SessionId base = pose_graph.StartNewSession(TestTime(0));
   const Eigen::Affine2d base_pose = transform::FromXYTheta(2.1, 2.6, 0.1);

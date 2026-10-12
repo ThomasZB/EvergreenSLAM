@@ -168,7 +168,7 @@ TEST(TrimSelectorTest, TheSurvivorFloorCapsTheSelectionOldestFirst) {
   EXPECT_EQ(selected[2], (SubmapId{session.session_index, 2}));
 }
 
-TEST(TrimSelectorTest, AFrozenSessionNeverCoversAFloatingOne) {
+TEST(TrimSelectorTest, AFrozenSessionNeverCoversAnIdleOne) {
   PoseGraphData graph;
   mapping::CastRaysMapping inserter;
   const Eigen::Vector2d shared(3.017, 2.503);
@@ -186,7 +186,7 @@ TEST(TrimSelectorTest, AFrozenSessionNeverCoversAFloatingOne) {
   EXPECT_TRUE(Contains(selector.Select(graph), revisited));
 
   // A frozen session cannot move to correct what it excuses, and its higher session index makes
-  // it "newer" than a floating session that may in fact predate it.
+  // it "newer" than an idle session that may in fact predate it.
   graph.FreezeSession(newer);
   EXPECT_FALSE(Contains(selector.Select(graph), revisited));
 }

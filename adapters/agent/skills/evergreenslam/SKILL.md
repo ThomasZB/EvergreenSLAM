@@ -56,7 +56,7 @@ they delete nothing.
 | list sessions | `egs session ls` |
 | make the current session part of the permanent map | `egs session freeze`, then `egs session freeze --yes` |
 | start a fresh session | `egs session new`, then `--yes` (same as freeze) |
-| delete a floating session | `egs session rm <id>`, then `egs session rm <id> --yes` |
+| delete an idle session | `egs session rm <id>`, then `egs session rm <id> --yes` |
 | the last stretch of mapping is broken (a fall, a carried robot) | `egs session rm <fed id>`, then `--yes`: the whole current session goes at once and a fresh one is fed; the robot's pose is lost, so then `egs init-pose --place places/<p>` or `egs relocalize` |
 
 After `egs map new` / `egs map open` the workspace changes: run `egs root` and `cd` there again.

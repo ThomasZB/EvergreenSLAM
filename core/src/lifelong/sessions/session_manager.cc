@@ -49,7 +49,7 @@ bool Grew(const SessionManagerOption& option, const SessionManager::ExpansionSta
 
 void Step(const SessionManagerOption& option, double min_new_area,
           SessionManager::ExpansionState& state, int new_submaps, bool fed) {
-  // A floating session gets no more submaps: its area is final, so it is judged as soon as it
+  // An idle session gets no more submaps: its area is final, so it is judged as soon as it
   // is worth freezing.
   if (!fed) {
     if (state.phase != Phase::JUDGING && state.novel_area >= min_new_area) {
@@ -344,7 +344,7 @@ void SessionManager::FreezeFedSession(std::optional<SessionId> expected) {
 }
 
 void SessionManager::FreezeAndMaybeRotate(SessionId id) {
-  // Rotation belongs to the fed session alone; a floating session's freeze only notifies.
+  // Rotation belongs to the fed session alone; an idle session's freeze only notifies.
   const bool rotate = fed_session_.has_value() && id == *fed_session_;
   freezing_ = true;
 
@@ -378,7 +378,7 @@ void SessionManager::FreezeAndMaybeRotate(SessionId id) {
       return;
     }
     LOG(INFO) << "session " << id.session_index << " frozen with "
-              << handle_.graph().session(id).submap_ids.size() << " submaps (floating)";
+              << handle_.graph().session(id).submap_ids.size() << " submaps (idle)";
     OnFrozenOnTask(id);
   });
 }

@@ -101,7 +101,7 @@ std::vector<SubmapId> TrimSelector::Select(const PoseGraphData& graph) const {
     }
   }
 
-  // A frozen session can carry a higher index than a floating one, so its submaps would count as
+  // A frozen session can carry a higher index than an idle one, so its submaps would count as
   // "newer". Unfinished grids belong to the frontend thread, so they are excluded as coverers.
   std::vector<SubmapId> all_ids;
   for (const SubmapId& id : finished) {

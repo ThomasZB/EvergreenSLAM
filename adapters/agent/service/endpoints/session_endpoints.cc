@@ -34,7 +34,7 @@ const char* Role(const PoseGraph& pose_graph, SessionId id) {
   if (pose_graph.graph().session(id).frozen()) {
     return "frozen";
   }
-  return pose_graph.session_manager().fed_session() == id ? "fed" : "floating";
+  return pose_graph.session_manager().fed_session() == id ? "fed" : "idle";
 }
 
 // Backend task. Solves first: the judge reads covariances, only meaningful right after a solve.

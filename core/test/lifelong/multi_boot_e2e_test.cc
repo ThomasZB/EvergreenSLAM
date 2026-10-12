@@ -1,7 +1,7 @@
 /**
  * @file multi_boot_e2e_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief Floating sessions across many boots: the GC sweep for the abandoned ones, the late
+ * @brief Idle sessions across many boots: the GC sweep for the abandoned ones, the late
  *        freeze for the one a cross-session loop closure anchors, relocalization of a wrongly
  *        seeded boot, and the last-pose seed.
  * @version 0.1
@@ -50,7 +50,7 @@ std::vector<Eigen::Affine2d> GroundTruthOdometry(int num_steps) {
 }
 
 // Relaxed judge and a small solve window so judging and checkpointing get their cadence within a
-// few dozen nodes; the slack cap is shrunk to keep loaded floating sessions' windows affordable.
+// few dozen nodes; the slack cap is shrunk to keep loaded idle sessions' windows affordable.
 // One match worker: these stories assert which closures exist, so the match order must not vary.
 PoseGraphOption RelaxedOption() {
   PoseGraphOption option;
@@ -65,7 +65,7 @@ PoseGraphOption RelaxedOption() {
   return option;
 }
 
-// A boot whose session is under test as a floating one, so it must never freeze itself.
+// A boot whose session is under test as an idle one, so it must never freeze itself.
 PoseGraphOption NoFreeze(PoseGraphOption option) {
   option.session_manager.auto_freeze = false;
   return option;
@@ -116,9 +116,9 @@ int CountCrossSessionConstraints(const PoseGraphData& graph, SessionId session) 
   return count;
 }
 
-// A floating session nothing will ever anchor must be swept once it lags the boot count by more
+// An idle session nothing will ever anchor must be swept once it lags the boot count by more
 // than gc_unfrozen_after_n_boots, with graph and manifest kept in agreement.
-TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoots) {
+TEST(MultiBootE2eTest, AbandonedIdleSessionIsGarbageCollectedAfterEnoughBoots) {
   const std::string directory = testing::MakeTempDir("evergreenslam_multi_boot_gc");
   PoseGraphOption option = RelaxedOption();
   option.gc_unfrozen_after_n_boots = 3;
@@ -127,7 +127,7 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
 
   SessionId frozen_session;
   std::vector<Eigen::Vector2d> frozen_translations;
-  SessionId floating_session;
+  SessionId idle_session;
 
   {
     PoseGraph backend(option, directory);
@@ -153,33 +153,33 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
     PoseGraph backend(NoFreeze(option), directory);
     backend.Start(TestTime(total_steps), transform::FromXYTheta(60.0, 45.0, 0.8));
     Frontend frontend(backend, odometry);
-    floating_session = *backend.session_manager().fed_session();
+    idle_session = *backend.session_manager().fed_session();
     for (int step = 0; step < 30; ++step) {
       frontend.Feed(step);
     }
     backend.WaitUntilQuiescent();
-    EXPECT_FALSE(backend.graph().session(floating_session).frozen());
+    EXPECT_FALSE(backend.graph().session(idle_session).frozen());
   }
 
   // The floater was last fed at boot 2; with the threshold at 3 it survives through boot 5 and
   // must be swept at boot 6.
-  std::optional<std::string> floating_file;
+  std::optional<std::string> idle_file;
   for (int boot = 3; boot <= 5; ++boot) {
     PoseGraph backend(NoFreeze(option), directory);
     backend.Start(TestTime(total_steps + boot));
     EXPECT_EQ(backend.map_manager()->boot_count(), boot);
-    EXPECT_TRUE(backend.graph().HasSession(floating_session))
+    EXPECT_TRUE(backend.graph().HasSession(idle_session))
         << "swept at boot " << boot << ", before the lag exceeded the threshold";
-    floating_file = backend.map_manager()->FileNameOf(floating_session);
+    idle_file = backend.map_manager()->FileNameOf(idle_session);
   }
 
   PoseGraph backend(NoFreeze(option), directory);
   backend.Start(TestTime(total_steps + 6));
   EXPECT_EQ(backend.map_manager()->boot_count(), 6);
 
-  EXPECT_FALSE(backend.graph().HasSession(floating_session));
-  ASSERT_TRUE(floating_file.has_value());
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / *floating_file))
+  EXPECT_FALSE(backend.graph().HasSession(idle_session));
+  ASSERT_TRUE(idle_file.has_value());
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / *idle_file))
       << "the swept session's file must go with it";
   const SessionId empty_replacement{frozen_session.session_index + 1};
   EXPECT_FALSE(backend.graph().HasSession(empty_replacement));
@@ -212,7 +212,7 @@ TEST(MultiBootE2eTest, AbandonedFloatingSessionIsGarbageCollectedAfterEnoughBoot
 
 // Once the fed session closes a loop against the floater's reloaded submaps, the floater is
 // anchored, earns its freeze in place, and no rotation fires.
-TEST(MultiBootE2eTest, FloatingSessionAnchoredByCrossSessionLoopClosureFreezesWithoutRotation) {
+TEST(MultiBootE2eTest, IdleSessionAnchoredByCrossSessionLoopClosureFreezesWithoutRotation) {
   const std::string directory = testing::MakeTempDir("evergreenslam_multi_boot_anchor");
   const PoseGraphOption option = RelaxedOption();
   const int total_steps = 3 * kNodesPerLap;
@@ -232,7 +232,7 @@ TEST(MultiBootE2eTest, FloatingSessionAnchoredByCrossSessionLoopClosureFreezesWi
   }
 
   // Nothing is frozen, so the bootstrap rule applies: the closure joins both sessions into one
-  // component whose datum sits on the older, floating one, and only the dirty constraint gets
+  // component whose datum sits on the older, idle one, and only the dirty constraint gets
   // that session judged at all.
   PoseGraph backend(option, directory);
   backend.Start(TestTime(30));
@@ -262,7 +262,7 @@ TEST(MultiBootE2eTest, FloatingSessionAnchoredByCrossSessionLoopClosureFreezesWi
     backend.WaitUntilQuiescent();
   }
   ASSERT_GT(CountCrossSessionConstraints(backend.graph(), first_session), 0)
-      << "no cross-session loop closure anchored the floating session";
+      << "no cross-session loop closure anchored the idle session";
 
   const int freeze_deadline = step + kNodesPerLap;
   while (backend.session_manager().num_sessions_frozen() == 0 && step < freeze_deadline) {
@@ -270,13 +270,13 @@ TEST(MultiBootE2eTest, FloatingSessionAnchoredByCrossSessionLoopClosureFreezesWi
     backend.WaitUntilQuiescent();
   }
   ASSERT_EQ(backend.session_manager().num_sessions_frozen(), 1)
-      << "the anchored floating session never froze; last verdict: "
+      << "the anchored idle session never froze; last verdict: "
       << ToString(backend.session_manager().last_verdict().rejection);
   EXPECT_TRUE(backend.graph().session(first_session).frozen())
-      << "the late freeze must land on the floating session";
+      << "the late freeze must land on the idle session";
   EXPECT_FALSE(backend.graph().session(boot_session).frozen());
   EXPECT_EQ(*backend.session_manager().fed_session(), boot_session)
-      << "a floating freeze rotates nothing";
+      << "an idle freeze rotates nothing";
 }
 
 // A wrong manual seed leaves the session floating; an operator hint off by a few decimetres lets

@@ -521,7 +521,7 @@ FrozenBase AddFrozenBase(PoseGraph& pose_graph, const Eigen::Affine2d& local_to_
 }
 
 // The first closure onto frozen truth places the whole floating session rigidly where the edge
-// says, before the solve; a floating other endpoint or a later closure moves the alignment only
+// says, before the solve; an idle other endpoint or a later closure moves the alignment only
 // through the solve.
 TEST(PoseGraphTest, FirstClosureOntoAFrozenSessionReseedsTheFedSessionBeforeSolving) {
   PoseGraph pose_graph;
@@ -534,9 +534,9 @@ TEST(PoseGraphTest, FirstClosureOntoAFrozenSessionReseedsTheFedSessionBeforeSolv
   const NodeId fed_node{fed.session_index, 0};
   const SubmapId fed_submap{fed.session_index, 0};
 
-  const FrozenBase floating =
+  const FrozenBase idle =
       AddFrozenBase(pose_graph, transform::FromXYTheta(-3.0, 8.0, -0.4), 1, /*freeze=*/false);
-  pose_graph.AddConstraint(MakeLoopClosure(floating.submap, fed_node));
+  pose_graph.AddConstraint(MakeLoopClosure(idle.submap, fed_node));
   pose_graph.WaitUntilQuiescent();
   ExpectPoseNear(pose_graph.graph().session(fed).local_to_global, Eigen::Affine2d::Identity());
 

@@ -871,15 +871,15 @@ TEST(SessionManagerTest, TrimmedSubmapsNeitherShrinkTheCountNorLeaveJudging) {
 }
 
 // The boot session's growth before anything is frozen is accounted the moment a freeze anchors
-// it: here the floating datum holder freezes in place under the closure that landed on it, and
+// it: here the idle datum holder freezes in place under the closure that landed on it, and
 // the next entry moves the fed session out of BOOTSTRAP and reads its finished submap against
 // the new frozen layer.
 TEST(SessionManagerTest, GrowthFinishedBeforeTheBootstrapFreezeIsAccountedOnceTheSessionAnchors) {
   Harness h;
-  const SessionId floating = h.pose_graph.StartNewSession(TestTime(0));
-  Feeder floating_feeder(h.pose_graph, nullptr, floating);
-  floating_feeder.FeedNodes(30);
-  floating_feeder.FinishAll();
+  const SessionId idle = h.pose_graph.StartNewSession(TestTime(0));
+  Feeder idle_feeder(h.pose_graph, nullptr, idle);
+  idle_feeder.FeedNodes(30);
+  idle_feeder.FinishAll();
   h.pose_graph.WaitUntilQuiescent();
 
   const SessionId fed = h.manager.Start(TestTime(30));
@@ -894,10 +894,10 @@ TEST(SessionManagerTest, GrowthFinishedBeforeTheBootstrapFreezeIsAccountedOnceTh
   EXPECT_FALSE(h.state(fed).anchored);
   EXPECT_DOUBLE_EQ(h.state(fed).novel_area, 0.0) << "nothing is read before the entry";
 
-  h.LandClosure(SubmapId{floating.session_index, 0}, NodeId{fed.session_index, 0});
+  h.LandClosure(SubmapId{idle.session_index, 0}, NodeId{fed.session_index, 0});
   h.Solve();
   ASSERT_EQ(h.observer->frozen.size(), 1u) << ToString(h.manager.last_verdict().rejection);
-  EXPECT_EQ(h.observer->frozen.front(), floating);
+  EXPECT_EQ(h.observer->frozen.front(), idle);
   EXPECT_EQ(*h.manager.fed_session(), fed);
   const SessionManager::ExpansionState& state = h.state(fed);
   EXPECT_TRUE(state.dirty) << "the neighbour's freeze re-dirties it";
@@ -913,10 +913,10 @@ TEST(SessionManagerTest, GrowthFinishedBeforeTheBootstrapFreezeIsAccountedOnceTh
   EXPECT_FALSE(state.dirty);
 }
 
-// A floating session tied only to the fed one is unanchored until the fed one freezes: no
+// An idle session tied only to the fed one is unanchored until the fed one freezes: no
 // account and no judgement before. After, it skips the growth phases: nothing feeds it, so its
 // area is final and it is judged at the first entry that finds it worth freezing.
-TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneFreezes) {
+TEST(SessionManagerTest, AnIdleSessionLinkedToTheFedOneIsJudgedOnceTheFedOneFreezes) {
   Harness h;
   const SessionId first = h.manager.Start(TestTime(0));
   Feeder feeder(h.pose_graph, &h.manager, first);
@@ -929,27 +929,27 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   const SubmapId surviving{fed.session_index, 2};
   ASSERT_TRUE(h.pose_graph.graph().submap(surviving).submap->finished());
 
-  const SessionId floating = h.pose_graph.StartNewSession(TestTime(100));
-  Feeder floating_feeder(h.pose_graph, nullptr, floating);
-  floating_feeder.set_ring_center(kAway);
-  floating_feeder.FeedNodes(3 * kNodesPerSubmap);
-  floating_feeder.set_ring_center(kHome);
-  floating_feeder.FeedNodes(2 * kNodesPerSubmap);
-  floating_feeder.FinishAll();
+  const SessionId idle = h.pose_graph.StartNewSession(TestTime(100));
+  Feeder idle_feeder(h.pose_graph, nullptr, idle);
+  idle_feeder.set_ring_center(kAway);
+  idle_feeder.FeedNodes(3 * kNodesPerSubmap);
+  idle_feeder.set_ring_center(kHome);
+  idle_feeder.FeedNodes(2 * kNodesPerSubmap);
+  idle_feeder.FinishAll();
   h.pose_graph.WaitUntilQuiescent();
 
   // Closures from the fed session onto both ends of the floater.
   for (const int node_index : {0, 5 * kNodesPerSubmap - 1}) {
-    h.LandClosure(surviving, NodeId{floating.session_index, node_index});
+    h.LandClosure(surviving, NodeId{idle.session_index, node_index});
   }
   h.pose_graph.WaitUntilQuiescent();
   const int judged = h.manager.num_judgements();
-  ASSERT_EQ(h.manager.expansion().count(floating), 1u);
-  EXPECT_TRUE(h.state(floating).dirty);
-  EXPECT_EQ(h.state(floating).phase, Phase::BOOTSTRAP);
-  EXPECT_EQ(h.state(floating).accounted_submap_index, -1);
+  ASSERT_EQ(h.manager.expansion().count(idle), 1u);
+  EXPECT_TRUE(h.state(idle).dirty);
+  EXPECT_EQ(h.state(idle).phase, Phase::BOOTSTRAP);
+  EXPECT_EQ(h.state(idle).accounted_submap_index, -1);
   h.Solve();
-  const SessionManager::ExpansionState& state = h.state(floating);
+  const SessionManager::ExpansionState& state = h.state(idle);
   EXPECT_FALSE(state.anchored) << "the fed session is not truth";
   EXPECT_EQ(state.phase, Phase::LOCALIZING) << "out of BOOTSTRAP, but unanchored: not stepped";
   EXPECT_EQ(state.accounted_submap_index, -1) << "unanchored: not accounted";
@@ -967,8 +967,8 @@ TEST(SessionManagerTest, AFloatingSessionLinkedToTheFedOneIsJudgedOnceTheFedOneF
   h.Solve();
   EXPECT_EQ(h.manager.num_judgements(), judged + 1);
   EXPECT_EQ(h.manager.num_sessions_frozen(), 3) << ToString(h.manager.last_verdict().rejection);
-  EXPECT_TRUE(h.pose_graph.graph().session(floating).frozen());
-  EXPECT_EQ(*h.manager.fed_session(), fed_after_rotation) << "a floating freeze does not rotate";
+  EXPECT_TRUE(h.pose_graph.graph().session(idle).frozen());
+  EXPECT_EQ(*h.manager.fed_session(), fed_after_rotation) << "an idle freeze does not rotate";
 }
 
 // The removal takes the floater's tie with it, but the trim summarized it onto the survivors, so
@@ -979,15 +979,15 @@ TEST(SessionManagerTest, AFreezeThatRemovesTheFedSessionStillMarksTheOthersDirty
   Feeder feeder(h.pose_graph, &h.manager, first);
   const SessionId fed = Bootstrap(h, feeder);
 
-  const SessionId floating = h.pose_graph.StartNewSession(TestTime(100));
-  Feeder floating_feeder(h.pose_graph, nullptr, floating);
-  floating_feeder.set_ring_center(kAway);
-  floating_feeder.FeedNodes(3 * kNodesPerSubmap);
-  floating_feeder.FinishAll();
+  const SessionId idle = h.pose_graph.StartNewSession(TestTime(100));
+  Feeder idle_feeder(h.pose_graph, nullptr, idle);
+  idle_feeder.set_ring_center(kAway);
+  idle_feeder.FeedNodes(3 * kNodesPerSubmap);
+  idle_feeder.FinishAll();
   h.pose_graph.WaitUntilQuiescent();
-  h.LandClosure(SubmapId{fed.session_index, 0}, NodeId{floating.session_index, 0});
+  h.LandClosure(SubmapId{fed.session_index, 0}, NodeId{idle.session_index, 0});
   h.Solve();
-  ASSERT_FALSE(h.state(floating).dirty);
+  ASSERT_FALSE(h.state(idle).dirty);
 
   feeder.FeedNodes(kNodesPerSubmap);
   h.pose_graph.WaitUntilQuiescent();
@@ -996,7 +996,7 @@ TEST(SessionManagerTest, AFreezeThatRemovesTheFedSessionStillMarksTheOthersDirty
   EXPECT_EQ(h.manager.num_sessions_frozen(), 1);
   EXPECT_EQ(h.manager.num_sessions_removed(), 1);
   EXPECT_FALSE(h.pose_graph.graph().HasSession(fed));
-  EXPECT_TRUE(h.state(floating).dirty);
+  EXPECT_TRUE(h.state(idle).dirty);
 }
 
 // What a boot finds on disk: a frozen layer and unfrozen sessions whose account is rebuilt from
@@ -1032,7 +1032,7 @@ TEST(SessionManagerTest, AfterLoadUnfrozenSessionsAreDirtyAndRefreshAtTheFirstEn
   EXPECT_EQ(state.accounted_submap_index, -1);
   EXPECT_DOUBLE_EQ(state.novel_area, 0.0);
 
-  // Anchored and floating with fresh area on the first refresh: judged, and frozen in place.
+  // Anchored and idle with fresh area on the first refresh: judged, and frozen in place.
   h.Solve();
   EXPECT_EQ(h.manager.num_judgements(), 1);
   EXPECT_TRUE(h.pose_graph.graph().session(other).frozen());
@@ -1125,14 +1125,14 @@ TEST(SessionManagerTest, FreezeFedSessionForASessionNoLongerFedDoesNothing) {
   EXPECT_EQ(*h.manager.fed_session(), successor);
 }
 
-// A floating session is not fed, so only a constraint landing on it can get it judged; in the
+// An idle session is not fed, so only a constraint landing on it can get it judged; in the
 // bootstrap it carries the merged component's datum and freezes in place.
-TEST(SessionManagerTest, AFloatingSessionIsFrozenInPlaceWhenAConstraintLandsOnIt) {
+TEST(SessionManagerTest, AnIdleSessionIsFrozenInPlaceWhenAConstraintLandsOnIt) {
   Harness h;
-  const SessionId floating = h.pose_graph.StartNewSession(TestTime(0));
-  Feeder floating_feeder(h.pose_graph, nullptr, floating);
-  floating_feeder.FeedNodes(30);
-  floating_feeder.FinishAll();
+  const SessionId idle = h.pose_graph.StartNewSession(TestTime(0));
+  Feeder idle_feeder(h.pose_graph, nullptr, idle);
+  idle_feeder.FeedNodes(30);
+  idle_feeder.FinishAll();
   h.pose_graph.WaitUntilQuiescent();
 
   const SessionId fed = h.manager.Start(TestTime(30));
@@ -1143,16 +1143,16 @@ TEST(SessionManagerTest, AFloatingSessionIsFrozenInPlaceWhenAConstraintLandsOnIt
   EXPECT_EQ(h.manager.num_judgements(), 0) << "INTRA edges alone never ask for a verdict";
 
   // Landed and notified in one task; a closure solves nothing, the cadence solve judges it.
-  h.LandClosure(SubmapId{floating.session_index, 0}, NodeId{fed.session_index, 0});
+  h.LandClosure(SubmapId{idle.session_index, 0}, NodeId{fed.session_index, 0});
   h.Solve();
 
   ASSERT_EQ(h.observer->frozen.size(), 1u) << ToString(h.manager.last_verdict().rejection);
-  EXPECT_EQ(h.observer->frozen.front(), floating);
+  EXPECT_EQ(h.observer->frozen.front(), idle);
   EXPECT_TRUE(h.manager.last_verdict().bootstrap);
-  EXPECT_TRUE(h.pose_graph.graph().session(floating).frozen());
+  EXPECT_TRUE(h.pose_graph.graph().session(idle).frozen());
   EXPECT_EQ(h.manager.num_sessions_frozen(), 1);
   EXPECT_EQ(*h.manager.fed_session(), fed);
-  EXPECT_EQ(h.observer->started.size(), 1u) << "a floating freeze opens no replacement";
+  EXPECT_EQ(h.observer->started.size(), 1u) << "an idle freeze opens no replacement";
   EXPECT_FALSE(h.pose_graph.graph().session(fed).frozen());
 }
 

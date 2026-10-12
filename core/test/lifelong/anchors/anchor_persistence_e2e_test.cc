@@ -48,7 +48,7 @@ void FeedTo(PoseGraph& backend, Frontend& frontend, int& step, int last_step) {
   }
 }
 
-// Three anchors, one on the frozen bootstrap submap and two in its floating successor, through
+// Three anchors, one on the frozen bootstrap submap and two in its idle successor, through
 // Finish and a restart that changes nothing: the file is left byte for byte as it was.
 TEST(AnchorPersistenceE2eTest, SaveLoadRestartIsByteIdentical) {
   const std::string directory = testing::MakeTempDir("evergreenslam_anchor_restart");
@@ -85,7 +85,7 @@ TEST(AnchorPersistenceE2eTest, SaveLoadRestartIsByteIdentical) {
     ExpectNearTruth(before[i], save_steps[i]);
   }
 
-  // No freeze in boot 2: a floating session's freeze trims, and a trim rebinds.
+  // No freeze in boot 2: an idle session's freeze trims, and a trim rebinds.
   PoseGraph backend(testing::NoFreeze(option), directory);
   backend.Start(TestTime(total_steps));
   EXPECT_EQ(common::ReadFile(AnchorsPath(*backend.map_manager())).value_or(""), bytes_before)
@@ -119,7 +119,7 @@ TEST(AnchorPersistenceE2eTest, SaveLoadRestartIsByteIdentical) {
     ASSERT_TRUE(after[i].global_pose.has_value());
     EXPECT_LT(TranslationError(*after[i].global_pose, *before[i].global_pose),
               testing::kAnchorTranslationTolerance)
-        << "anchor " << after[i].id << ": the reload re-solves the floating session";
+        << "anchor " << after[i].id << ": the reload re-solves the idle session";
     ExpectNearTruth(after[i], save_steps[i]);
   }
 
@@ -167,9 +167,9 @@ TEST(AnchorPersistenceE2eTest, SaveKillRestart) {
   ExpectNearTruth(ResolveAnchor(backend, id), save_step);
 }
 
-// An anchor on an abandoned floating session is orphaned when the session is swept, persisted as
+// An anchor on an abandoned idle session is orphaned when the session is swept, persisted as
 // such, and stays exactly that on every later boot.
-TEST(AnchorPersistenceE2eTest, GcOfFloatingSessionFlagsOrphan) {
+TEST(AnchorPersistenceE2eTest, GcOfIdleSessionFlagsOrphan) {
   const std::string directory = testing::MakeTempDir("evergreenslam_anchor_gc");
   PoseGraphOption option = testing::NoFreeze(testing::AnchorTestOption());
   option.gc_unfrozen_after_n_boots = 1;
@@ -178,11 +178,11 @@ TEST(AnchorPersistenceE2eTest, GcOfFloatingSessionFlagsOrphan) {
   const int save_step = 20;
 
   AnchorId id = 0;
-  SessionId floating;
+  SessionId idle;
   {
     PoseGraph backend(option, directory);
     backend.Start(TestTime(0));
-    floating = *backend.session_manager().fed_session();
+    idle = *backend.session_manager().fed_session();
     Frontend frontend(backend, odometry);
     int step = 0;
     FeedTo(backend, frontend, step, save_step);
@@ -193,14 +193,14 @@ TEST(AnchorPersistenceE2eTest, GcOfFloatingSessionFlagsOrphan) {
     // Last fed one boot ago: kept.
     PoseGraph backend(option, directory);
     backend.Start(TestTime(total_steps));
-    ASSERT_TRUE(RunOnTask(backend, [&] { return backend.graph().HasSession(floating); }));
+    ASSERT_TRUE(RunOnTask(backend, [&] { return backend.graph().HasSession(idle); }));
     ExpectNearTruth(ResolveAnchor(backend, id), save_step);
   }
   {
     PoseGraph backend(option, directory);
     backend.Start(TestTime(total_steps + 1));
-    ASSERT_FALSE(RunOnTask(backend, [&] { return backend.graph().HasSession(floating); }))
-        << "the floating session outlived the sweep";
+    ASSERT_FALSE(RunOnTask(backend, [&] { return backend.graph().HasSession(idle); }))
+        << "the idle session outlived the sweep";
     const std::optional<Anchor> swept = GetAnchor(backend, id);
     ASSERT_TRUE(swept.has_value()) << "an orphan is kept, never dropped";
     EXPECT_EQ(swept->state, AnchorState::ORPHAN);

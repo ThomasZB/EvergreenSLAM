@@ -119,7 +119,7 @@ void Stop();              // stops the server and joins its threads
   index 0. The robot's pose is unknown until `init-pose` or `relocalize`: `ActiveSessionToGlobal()`
   is empty until the new frontend's first keyframe, and identity after it. `last_pose.pb` still
   names a node of the dropped session until that keyframe overwrites it; a boot ignores a last pose
-  whose session is gone. After a drop the next boot seeds from the newest floating session with
+  whose session is gone. After a drop the next boot seeds from the newest idle session with
   nodes, exactly as any boot does.
 - **`current_frame`** runs **inside the task** and takes only the host's own mutex. Both ways:
   `current_frame` and `switch_map` never enqueue or wait on the `PoseGraph` (`drop_session` waits,
@@ -263,7 +263,7 @@ at_num_solves, num_checkpoints_written}`.
 
 ### Sessions
 
-**GET /sessions** — task. `→ {ok, at_num_solves, fed, sessions: [{id, role: fed|floating|frozen,
+**GET /sessions** — task. `→ {ok, at_num_solves, fed, sessions: [{id, role: fed|idle|frozen,
 nodes, submaps, anchors, phase|null, anchored|null, start_ns, last_node_ns}]}`; `anchors` = live
 anchors bound there; `phase` / `anchored` (`HasFrozenLink`) as in `/status`, `null` when frozen.
 `egs session ls` needs the running process: no offline listing in v0.1 (zero-dependency CLI).
@@ -380,7 +380,7 @@ runs in the task of the graph change it follows, or a reader in between sees a v
 `OnTrim(report)`; `TransferUnfinishedSubmaps` (the freeze rotation), per handed-over submap →
 `OnNodesTransferred(renamed)` (the nodes only it held move to the successor and get its ids), then
 after the `submap_translation_` re-key and before the freeze → `OnSubmapsTransferred(adoption)`;
-`RemoveSession` (agent, `GcFloatingSessions`, a freeze whose trim emptied the session), after
+`RemoveSession` (agent, `GcIdleSessions`, a freeze whose trim emptied the session), after
 `data_.RemoveSession` → `OnSessionRemoved(id)`. A freeze needs no hook
 and there is no anchor observer: `frozen` is derived at Resolve.
 
@@ -404,7 +404,7 @@ Trim, rotation and removal change the table in the same task as the graph, befor
 persists both.
 
 **Start**: `Load`, `RemoveUnreferencedFiles`, `RecordBoot`, `FinishSubmaps`, `BuildFrom`,
-`Restore(ReadAnchors())`, `GcFloatingSessions`, `Reconcile(data_)`, `Commit(data_)`. With a `map_manager_`, Restore **always**
+`Restore(ReadAnchors())`, `GcIdleSessions`, `Reconcile(data_)`, `Commit(data_)`. With a `map_manager_`, Restore **always**
 runs, on a fresh directory with an empty table; a damaged directory never gets this far. The
 anchors file is never rewritten with a lower `next_id` than the one read.
 
@@ -477,8 +477,8 @@ The bag replay has no ROS node and publishes no mask.
 Simulated-laser e2e in `core/test/lifelong/anchors/` on `core/test/lifelong/testing/`:
 `AnchorSurvivesLoopClosure`, `AnchorSurvivesTrimBySuccession`, `AnchorSurvivesFreezeRotation`,
 `SaveLoadRestartIsByteIdentical` (through `Finish`), `SaveKillRestart` (kill right after
-`SaveAnchorOnTask` returns, no `Finish`: resolves after restart), `GcOfFloatingSessionFlagsOrphan`,
-`SetInitialPoseByPlaceThenRelocalize`, `DeleteFloatingSessionKeepsOthers`,
+`SaveAnchorOnTask` returns, no `Finish`: resolves after restart), `GcOfIdleSessionFlagsOrphan`,
+`SetInitialPoseByPlaceThenRelocalize`, `DeleteIdleSessionKeepsOthers`,
 `TrimThenKillNoLongerOrphans` (a kill inside the commit that trims the anchor's submap restarts on
 the previous generation, still BOUND), `UnpersistedSaveIsRefused` (a save whose commit fails
 returns no id and changes nothing), `StartCollectsAnInterruptedCommit` (Start loads the previous

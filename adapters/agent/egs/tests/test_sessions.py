@@ -10,7 +10,7 @@ class SessionTest(EgsTestCase):
         code, out, _ = self.egs("session", "ls")
         self.assertEqual(code, 0)
         self.assertIn("fed 2", out)
-        self.assertIn("1 floating  nodes 40", out)
+        self.assertIn("1 idle  nodes 40", out)
         self.assertIn("2 fed", out)
         self.assertIn("last node 0s", out)
 

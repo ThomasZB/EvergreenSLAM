@@ -74,7 +74,7 @@ class FakeState:
             },
             {
                 "id": 1,
-                "role": "floating",
+                "role": "idle",
                 "nodes": 40,
                 "submaps": 3,
                 "anchors": 1,

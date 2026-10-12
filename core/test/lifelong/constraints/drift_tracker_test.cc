@@ -151,7 +151,7 @@ TEST(DriftTracker, AFrozenEndpointDriftsNothingAndACrossSessionClosureAlwaysCoun
   EXPECT_DOUBLE_EQ(tracker.Slack(graph, next, base_submap), kPerMeter * 1.0);
 }
 
-TEST(DriftTracker, APathlessFloatingSessionGetsTheCapUntilAClosureTiesIt) {
+TEST(DriftTracker, APathlessIdleSessionGetsTheCapUntilAClosureTiesIt) {
   PoseGraphData graph;
   DriftTracker tracker(Option(100));
   // Loaded from disk: nodes exist but were never recorded.

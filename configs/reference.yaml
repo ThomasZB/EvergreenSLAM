@@ -87,7 +87,7 @@ lifelong:
     # submaps_without_growth more finished submaps under baseline + tolerance reach JUDGING, the
     # covariance gate; a rise of both above it returns to EXPANDING. The track keeps a
     # re-driven lap, which adds area at its rim but no new cells to stand in, from resetting
-    # the count. A floating session gets no more submaps and goes to JUDGING as soon as it is
+    # the count. An idle session gets no more submaps and goes to JUDGING as soon as it is
     # worth freezing.
     min_new_area: 200.0          # m^2
     min_new_area_fraction: 0.1   # of the frozen area; 0 keeps min_new_area alone
