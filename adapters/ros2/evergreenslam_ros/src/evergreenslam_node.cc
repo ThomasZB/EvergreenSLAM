@@ -166,6 +166,8 @@ class EvergreenSlamNode : public rclcpp::Node {
 #endif
   }
 
+  bool time_discontinuity() const { return time_discontinuity_; }
+
   // ~PoseGraph only drains; without Finish the fed session since its last checkpoint is lost.
   ~EvergreenSlamNode() override {
 #ifdef EVERGREENSLAM_WITH_AGENT
@@ -318,7 +320,7 @@ class EvergreenSlamNode : public rclcpp::Node {
 #endif
 
   void HandleScan(const sensor_msgs::msg::LaserScan& scan) {
-    if (!ResolveExtrinsic(scan.header.frame_id)) {
+    if (time_discontinuity_ || !ResolveExtrinsic(scan.header.frame_id)) {
       return;
     }
     const TimedScan timed_scan = FromLaserScan(scan, base_from_laser_);
@@ -328,6 +330,16 @@ class EvergreenSlamNode : public rclcpp::Node {
     }
 
     std::lock_guard<std::mutex> lock(frontend_mutex_);
+    if (builder_->IsTimeDiscontinuity(timed_scan.time)) {
+      RCLCPP_ERROR(get_logger(),
+                   "scan timestamp discontinuity: last scan %.9f, this scan %.9f "
+                   "(max_scan_gap_seconds %.1f); saving the map and exiting for a restart",
+                   common::ToUnixSeconds(*builder_->last_scan_time()),
+                   common::ToUnixSeconds(timed_scan.time), option_.max_scan_gap_seconds);
+      time_discontinuity_ = true;
+      rclcpp::shutdown();
+      return;
+    }
     if (backend_ != nullptr && !backend_started_) {
       // Boot on the sensor clock, not ours.
       backend_->Start(timed_scan.time, std::nullopt, !ignore_last_pose_);
@@ -526,6 +538,7 @@ class EvergreenSlamNode : public rclcpp::Node {
   std::unique_ptr<PoseGraphPublisher> pose_graph_publisher_;
   rclcpp::TimerBase::SharedPtr graph_timer_;
   bool ignore_last_pose_ = false;
+  bool time_discontinuity_ = false;
 #ifdef EVERGREENSLAM_WITH_AGENT
   AgentHostOption agent_option_;
   std::unique_ptr<AgentHost> agent_host_;
@@ -541,7 +554,10 @@ class EvergreenSlamNode : public rclcpp::Node {
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<evergreenslam::ros2::EvergreenSlamNode>());
+  auto node = std::make_shared<evergreenslam::ros2::EvergreenSlamNode>();
+  rclcpp::spin(node);
+  const bool time_discontinuity = node->time_discontinuity();
+  node.reset();
   rclcpp::shutdown();
-  return 0;
+  return time_discontinuity ? EXIT_FAILURE : EXIT_SUCCESS;
 }

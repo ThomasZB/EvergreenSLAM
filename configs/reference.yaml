@@ -2,9 +2,10 @@
 # key in the wrong section is ignored.
 
 local_trajectory_builder:
-  min_range: 0.3     # m, anything below this is usually the robot itself
-  max_range: 30.0    # m, beyond this a return is dropped rather than trusted
-  voxel_size: 0.025  # m, thins the cloud that goes into the grid
+  min_range: 0.3              # m, anything below this is usually the robot itself
+  max_range: 30.0             # m, beyond this a return is dropped rather than trusted
+  voxel_size: 0.025           # m, thins the cloud that goes into the grid
+  max_scan_gap_seconds: 60.0  # s, a longer or backward step rejects the scan as a clock jump
 
   # For matching and the graph node, never the grid: shrinks until min_num_points survive.
   adaptive_voxel_filter:
@@ -180,5 +181,5 @@ lifelong:
   # Seconds of sensor time between checkpoints. Finish, freeze and rotation always write, and
   # last_pose follows every keyframe.
   checkpoint_min_interval: 30.0
-  # Boot-time GC: an unfrozen session unfed for this many boots is deleted at Start. 0 disables.
+  # Boot-time GC: deletes a session with no frozen link left unfed this many boots. 0 disables.
   gc_unfrozen_after_n_boots: 5

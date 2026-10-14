@@ -243,6 +243,15 @@ The repository is also a plain colcon workspace source: clone it into any `ws/sr
 `rosdep install --from-paths src --ignore-src -y && colcon build`. Docker Compose wraps the same
 targets for Linux (`docker compose run --rm core-test`).
 
+On a board without a real-time clock, start the node after time synchronization: order its
+systemd unit `After=time-sync.target` with `Wants=time-sync.target`, and enable the wait service
+of the time daemon (`chrony-wait.service` or `systemd-time-wait-sync.service`). A scan timestamp
+that moves backwards, or forwards by more than `max_scan_gap_seconds` (60 s by default), is
+treated as a clock step: the node saves the map and exits with a non-zero status, and on restart
+re-aligns from the last saved pose. It therefore needs a supervisor, either `Restart=on-failure`
+in systemd or `respawn` in ROS 2 launch (`evergreenslam.launch.py` sets it). The replay tool stops
+with an error in the same situation.
+
 ### Data
 
 No data ships with the repository. Most public 2D lidar bags are ROS 1; two scripts convert them

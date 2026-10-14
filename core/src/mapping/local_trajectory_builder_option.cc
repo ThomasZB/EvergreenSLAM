@@ -26,8 +26,8 @@ using utils::config::LoadOption;
 const utils::config::Schema& LocalTrajectoryBuilderSchema() {
   static const utils::config::Schema schema = {
       {"",
-       {"min_range", "max_range", "voxel_size", "adaptive_voxel_filter", "generic_tracking_filter",
-        "pose_optimization", "motion_filter", "active_map"}},
+       {"min_range", "max_range", "voxel_size", "max_scan_gap_seconds", "adaptive_voxel_filter",
+        "generic_tracking_filter", "pose_optimization", "motion_filter", "active_map"}},
       {"adaptive_voxel_filter", {"max_length", "min_num_points"}},
       {"generic_tracking_filter",
        {"trans_alpha", "rot_alpha", "trans_sigma", "rot_sigma", "measurement_translation_sigma",
@@ -49,6 +49,8 @@ LocalTrajectoryBuilderOption LoadLocalTrajectoryBuilderOption(const YAML::Node& 
   option.min_range = LoadOption(node, "min_range", option.min_range);
   option.max_range = LoadOption(node, "max_range", option.max_range);
   option.voxel_size = LoadOption(node, "voxel_size", option.voxel_size);
+  option.max_scan_gap_seconds =
+      LoadOption(node, "max_scan_gap_seconds", option.max_scan_gap_seconds);
   option.adaptive_voxel_filter_option =
       sensor::LoadAdaptiveVoxelFilterOption(Child(node, "adaptive_voxel_filter"));
   option.tracking_filter_option =

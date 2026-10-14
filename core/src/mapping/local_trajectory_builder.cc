@@ -98,6 +98,10 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
 
 std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::AddScan(
     common::Time time, const sensor::TimedPointCloud& point_cloud) {
+  if (IsTimeDiscontinuity(time)) {
+    return nullptr;
+  }
+  last_scan_time_ = time;
   // With no motion estimate yet the identity pair degenerates to stripping the offsets.
   Eigen::Affine2d start_pose = Eigen::Affine2d::Identity();
   Eigen::Affine2d end_pose = Eigen::Affine2d::Identity();
@@ -110,6 +114,12 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
     end_pose = pose_at(time + point_cloud.points().back().offset);
   }
   return AddUndistortedScan(time, sensor::Undistort(point_cloud, start_pose, end_pose));
+}
+
+bool LocalTrajectoryBuilder::IsTimeDiscontinuity(common::Time time) const {
+  return last_scan_time_.has_value() &&
+         (time < *last_scan_time_ ||
+          time - *last_scan_time_ > common::FromSeconds(option_.max_scan_gap_seconds));
 }
 
 void LocalTrajectoryBuilder::SetDebugSink(std::shared_ptr<debug::DebugSink> debug_sink) {

@@ -22,6 +22,8 @@ def generate_launch_description():
                 executable="evergreenslam_node",
                 name="evergreenslam",
                 output="screen",
+                respawn=True,
+                respawn_delay=2.0,
                 parameters=[
                     PathJoinSubstitution([share, "config", "config.yaml"]),
                     {"config": config},

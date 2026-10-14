@@ -390,6 +390,7 @@ int main(int argc, char** argv) {
   int num_keyframes = 0;
   int num_scored = 0;
   int num_missing_extrinsic = 0;
+  bool time_discontinuity = false;
   bool have_first = false;
   Eigen::Affine2d first_estimate = Eigen::Affine2d::Identity();
   Eigen::Affine2d first_reference = Eigen::Affine2d::Identity();
@@ -466,6 +467,12 @@ int main(int argc, char** argv) {
 #endif
     }
 
+    if (builder.IsTimeDiscontinuity(timed_scan.time)) {
+      std::cerr << "scan timestamp discontinuity: last scan " << *builder.last_scan_time()
+                << ", this scan " << timed_scan.time << "; stopping the replay" << std::endl;
+      time_discontinuity = true;
+      break;
+    }
     const auto matching = builder.AddScan(timed_scan.time, timed_scan.point_cloud);
     ++num_scans;
     const Eigen::Affine2d estimate = builder.local_pose();
@@ -661,6 +668,10 @@ int main(int argc, char** argv) {
     std::cout << "\n=== result ===" << std::endl;
     std::cout << "scans: " << num_scans << "  keyframes: " << num_keyframes
               << "  skipped for missing extrinsic: " << num_missing_extrinsic << std::endl;
+    if (time_discontinuity) {
+      std::cerr << "replay stopped early on a scan timestamp discontinuity" << std::endl;
+      return 1;
+    }
     if (num_scans == 0) {
       std::cerr << "no usable scan on topic " << args.scan_topic << std::endl;
       return 1;

@@ -15,6 +15,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "common/time.h"
@@ -55,6 +56,9 @@ class LocalTrajectoryBuilder {
   std::unique_ptr<MatchingResult> AddScan(common::Time time,
                                           const sensor::TimedPointCloud& point_cloud);
 
+  bool IsTimeDiscontinuity(common::Time time) const;
+  const std::optional<common::Time>& last_scan_time() const { return last_scan_time_; }
+
   void SetDebugSink(std::shared_ptr<debug::DebugSink> debug_sink);
 
   const Eigen::Affine2d& local_pose() const { return local_pose_; }
@@ -78,6 +82,7 @@ class LocalTrajectoryBuilder {
   Eigen::Matrix<double, 3, 3> measurement_covariance_;
 
   Eigen::Affine2d local_pose_ = Eigen::Affine2d::Identity();
+  std::optional<common::Time> last_scan_time_;
   int next_node_index_ = 0;
 };
 

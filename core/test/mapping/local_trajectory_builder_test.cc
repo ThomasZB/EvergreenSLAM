@@ -319,5 +319,93 @@ TEST(LocalTrajectoryBuilderTest, AttachingADebugSinkChangesNothing) {
   EXPECT_GT(sink->last_score, 0.0);
 }
 
+TEST(LocalTrajectoryBuilderTest, RejectsBackwardStepsAndForwardJumpsBeyondTheThreshold) {
+  const sensor::TimedPointCloud scan = SimulateScan(WorldPoseAt(0, 2), 360);
+  const common::Time start = ScanTime(0);
+
+  LocalTrajectoryBuilder builder;
+  EXPECT_FALSE(builder.IsTimeDiscontinuity(start));
+  ASSERT_NE(builder.AddScan(start, scan), nullptr);
+
+  EXPECT_TRUE(builder.IsTimeDiscontinuity(start - common::Duration(1)));
+  EXPECT_EQ(builder.AddScan(start - common::Duration(1), scan), nullptr);
+  ASSERT_TRUE(builder.last_scan_time().has_value());
+  EXPECT_EQ(*builder.last_scan_time(), start);
+
+  EXPECT_FALSE(builder.IsTimeDiscontinuity(start));
+  const common::Time after_dropout = start + common::FromSeconds(5.0);
+  ASSERT_NE(builder.AddScan(after_dropout, scan), nullptr);
+  EXPECT_EQ(*builder.last_scan_time(), after_dropout);
+
+  EXPECT_FALSE(builder.IsTimeDiscontinuity(after_dropout + common::FromSeconds(60.0)));
+  EXPECT_TRUE(
+      builder.IsTimeDiscontinuity(after_dropout + common::FromSeconds(60.0) + common::Duration(1)));
+  EXPECT_EQ(builder.AddScan(after_dropout + common::FromSeconds(61.0), scan), nullptr);
+  EXPECT_EQ(*builder.last_scan_time(), after_dropout);
+}
+
+TEST(LocalTrajectoryBuilderTest, ScanGapThresholdIsConfigurable) {
+  const sensor::TimedPointCloud scan = SimulateScan(WorldPoseAt(0, 2), 360);
+  LocalTrajectoryBuilderOption options;
+  options.max_scan_gap_seconds = 10.0;
+  LocalTrajectoryBuilder builder(options);
+  ASSERT_NE(builder.AddScan(ScanTime(0), scan), nullptr);
+
+  EXPECT_FALSE(builder.IsTimeDiscontinuity(ScanTime(0) + common::FromSeconds(9.0)));
+  EXPECT_TRUE(builder.IsTimeDiscontinuity(ScanTime(0) + common::FromSeconds(11.0)));
+  EXPECT_EQ(builder.AddScan(ScanTime(0) + common::FromSeconds(11.0), scan), nullptr);
+}
+
+TEST(LocalTrajectoryBuilderTest, AClockStepMidRunLeavesThePreJumpStateUntouched) {
+  constexpr int kNumScans = 240;
+  constexpr int kJumpAt = 120;
+  constexpr int kNumBeams = 360;
+  const common::Duration jump = common::FromSeconds(86104.0);
+
+  LocalTrajectoryBuilderOption options;
+  options.active_map_option.num_scans_per_submap = 10;
+
+  LocalTrajectoryBuilder reference(options);
+  for (int i = 0; i < kJumpAt; ++i) {
+    reference.AddScan(ScanTime(i), SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams));
+  }
+
+  LocalTrajectoryBuilder builder(options);
+  int num_keyframes_before_jump = 0;
+  for (int i = 0; i < kJumpAt; ++i) {
+    const auto result =
+        builder.AddScan(ScanTime(i), SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams));
+    ASSERT_NE(result, nullptr);
+    if (result->insertion_result != nullptr) {
+      ++num_keyframes_before_jump;
+    }
+  }
+  ASSERT_GT(num_keyframes_before_jump, 10);
+  ASSERT_GT(builder.active_map().submaps().size(), 1u);
+
+  for (int i = kJumpAt; i < kNumScans; ++i) {
+    const common::Time time = ScanTime(i) + jump;
+    EXPECT_TRUE(builder.IsTimeDiscontinuity(time)) << "scan " << i;
+    EXPECT_EQ(builder.AddScan(time, SimulateScan(WorldPoseAt(i, kNumScans), kNumBeams)), nullptr)
+        << "scan " << i;
+  }
+
+  EXPECT_EQ(*builder.last_scan_time(), ScanTime(kJumpAt - 1));
+  EXPECT_TRUE(
+      (builder.local_pose().matrix().array() == reference.local_pose().matrix().array()).all());
+  const auto& submaps = builder.active_map().submaps();
+  const auto& reference_submaps = reference.active_map().submaps();
+  ASSERT_EQ(submaps.size(), reference_submaps.size());
+  for (size_t i = 0; i < submaps.size(); ++i) {
+    EXPECT_EQ(submaps[i]->num_scans(), reference_submaps[i]->num_scans()) << "submap " << i;
+    EXPECT_EQ(submaps[i]->SnapshotCopy().data(), reference_submaps[i]->SnapshotCopy().data())
+        << "submap " << i;
+  }
+
+  const Eigen::Affine2d expected =
+      WorldPoseAt(0, kNumScans).inverse() * WorldPoseAt(kJumpAt - 1, kNumScans);
+  EXPECT_LT((builder.local_pose().translation() - expected.translation()).norm(), 0.10);
+}
+
 }  // namespace
 }  // namespace evergreenslam::mapping

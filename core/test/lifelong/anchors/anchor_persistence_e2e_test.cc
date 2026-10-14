@@ -167,9 +167,9 @@ TEST(AnchorPersistenceE2eTest, SaveKillRestart) {
   ExpectNearTruth(ResolveAnchor(backend, id), save_step);
 }
 
-// An anchor on an abandoned idle session is orphaned when the session is swept, persisted as
+// An anchor on an abandoned floating session is orphaned when the session is swept, persisted as
 // such, and stays exactly that on every later boot.
-TEST(AnchorPersistenceE2eTest, GcOfIdleSessionFlagsOrphan) {
+TEST(AnchorPersistenceE2eTest, GcOfFloatingSessionFlagsOrphan) {
   const std::string directory = testing::MakeTempDir("evergreenslam_anchor_gc");
   PoseGraphOption option = testing::NoFreeze(testing::AnchorTestOption());
   option.gc_unfrozen_after_n_boots = 1;

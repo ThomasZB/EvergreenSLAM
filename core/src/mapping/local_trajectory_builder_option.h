@@ -27,9 +27,10 @@
 namespace evergreenslam::mapping {
 
 struct LocalTrajectoryBuilderOption {
-  double min_range = 0.3;     // m, anything below this is usually the robot itself
-  double max_range = 30.0;    // m
-  double voxel_size = 0.025;  // m, thins the cloud that goes into the grid
+  double min_range = 0.3;              // m, anything below this is usually the robot itself
+  double max_range = 30.0;             // m
+  double voxel_size = 0.025;           // m, thins the cloud that goes into the grid
+  double max_scan_gap_seconds = 60.0;  // s, a longer gap is a clock step, not a dropout
 
   sensor::AdaptiveVoxelFilterOption adaptive_voxel_filter_option;
   utils::filters::GenericTrackingFilterOption tracking_filter_option;
@@ -42,6 +43,7 @@ struct LocalTrajectoryBuilderOption {
     os << "  min_range: " << option.min_range << std::endl;
     os << "  max_range: " << option.max_range << std::endl;
     os << "  voxel_size: " << option.voxel_size << std::endl;
+    os << "  max_scan_gap_seconds: " << option.max_scan_gap_seconds << std::endl;
     os << option.adaptive_voxel_filter_option;
     os << option.tracking_filter_option;
     os << option.pose_optimization_option;

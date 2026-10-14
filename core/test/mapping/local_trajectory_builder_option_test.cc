@@ -23,6 +23,7 @@ namespace {
 TEST(LocalTrajectoryBuilderOptionTest, OverridesApplyThroughNestedSections) {
   const YAML::Node node = YAML::Load(R"(
 min_range: 0.3
+max_scan_gap_seconds: 30.0
 adaptive_voxel_filter:
   min_num_points: 120
 generic_tracking_filter:
@@ -39,6 +40,7 @@ active_map:
   const LocalTrajectoryBuilderOption option = LoadLocalTrajectoryBuilderOption(node);
 
   EXPECT_DOUBLE_EQ(option.min_range, 0.3);
+  EXPECT_DOUBLE_EQ(option.max_scan_gap_seconds, 30.0);
   EXPECT_EQ(option.adaptive_voxel_filter_option.min_num_points, 120);
   EXPECT_DOUBLE_EQ(option.tracking_filter_option.trans_sigma, 2.5);
   EXPECT_DOUBLE_EQ(option.pose_optimization_option.linear_search_window, 0.25);
@@ -101,6 +103,7 @@ void ExpectFileMatchesTheDefaults(const std::string& name) {
   EXPECT_DOUBLE_EQ(option.min_range, defaults.min_range);
   EXPECT_DOUBLE_EQ(option.max_range, defaults.max_range);
   EXPECT_DOUBLE_EQ(option.voxel_size, defaults.voxel_size);
+  EXPECT_DOUBLE_EQ(option.max_scan_gap_seconds, defaults.max_scan_gap_seconds);
   EXPECT_DOUBLE_EQ(option.adaptive_voxel_filter_option.max_length,
                    defaults.adaptive_voxel_filter_option.max_length);
   EXPECT_EQ(option.adaptive_voxel_filter_option.min_num_points,

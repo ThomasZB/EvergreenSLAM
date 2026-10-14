@@ -380,7 +380,7 @@ runs in the task of the graph change it follows, or a reader in between sees a v
 `OnTrim(report)`; `TransferUnfinishedSubmaps` (the freeze rotation), per handed-over submap →
 `OnNodesTransferred(renamed)` (the nodes only it held move to the successor and get its ids), then
 after the `submap_translation_` re-key and before the freeze → `OnSubmapsTransferred(adoption)`;
-`RemoveSession` (agent, `GcIdleSessions`, a trim that emptied an idle session or a freezing one), after
+`RemoveSession` (agent, `GcFloatingSessions`, a trim that emptied an idle session or a freezing one), after
 `data_.RemoveSession` → `OnSessionRemoved(id)`. A freeze needs no hook
 and there is no anchor observer: `frozen` is derived at Resolve.
 
@@ -404,7 +404,7 @@ Trim, rotation and removal change the table in the same task as the graph, befor
 persists both.
 
 **Start**: `Load`, `RemoveUnreferencedFiles`, `RecordBoot`, `FinishSubmaps`, `BuildFrom`,
-`Restore(ReadAnchors())`, `GcIdleSessions`, `Reconcile(data_)`, `Commit(data_)`. With a `map_manager_`, Restore **always**
+`Restore(ReadAnchors())`, `GcFloatingSessions`, `Reconcile(data_)`, `Commit(data_)`. With a `map_manager_`, Restore **always**
 runs, on a fresh directory with an empty table; a damaged directory never gets this far. The
 anchors file is never rewritten with a lower `next_id` than the one read.
 

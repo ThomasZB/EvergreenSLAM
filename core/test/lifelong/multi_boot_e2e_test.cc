@@ -1,7 +1,7 @@
 /**
  * @file multi_boot_e2e_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief Idle sessions across many boots: the GC sweep for the abandoned ones, the late
+ * @brief Idle sessions across many boots: the GC sweep for the floating ones, the late
  *        freeze for the one a cross-session loop closure anchors, relocalization of a wrongly
  *        seeded boot, and the last-pose seed.
  * @version 0.1
@@ -25,6 +25,7 @@
 #include "lifelong/map_manager/map_manager.h"
 #include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_option.h"
+#include "lifelong/sessions/frozen_links.h"
 #include "testing/load_map.h"
 #include "testing/loop_scenario.h"
 #include "utils/transform/transform.h"
@@ -116,9 +117,10 @@ int CountCrossSessionConstraints(const PoseGraphData& graph, SessionId session) 
   return count;
 }
 
-// An idle session nothing will ever anchor must be swept once it lags the boot count by more
-// than gc_unfrozen_after_n_boots, with graph and manifest kept in agreement.
-TEST(MultiBootE2eTest, AbandonedIdleSessionIsGarbageCollectedAfterEnoughBoots) {
+// A floating session (no frozen link) is swept once it lags the boot count by more than
+// gc_unfrozen_after_n_boots, with graph and manifest kept in agreement; an anchored idle session
+// that lags as far is kept.
+TEST(MultiBootE2eTest, FloatingSessionIsGarbageCollectedAfterEnoughBootsAnchoredIdleIsKept) {
   const std::string directory = testing::MakeTempDir("evergreenslam_multi_boot_gc");
   PoseGraphOption option = RelaxedOption();
   option.gc_unfrozen_after_n_boots = 3;
@@ -128,6 +130,7 @@ TEST(MultiBootE2eTest, AbandonedIdleSessionIsGarbageCollectedAfterEnoughBoots) {
   SessionId frozen_session;
   std::vector<Eigen::Vector2d> frozen_translations;
   SessionId idle_session;
+  SessionId anchored_session;
 
   {
     PoseGraph backend(option, directory);
@@ -159,12 +162,30 @@ TEST(MultiBootE2eTest, AbandonedIdleSessionIsGarbageCollectedAfterEnoughBoots) {
     }
     backend.WaitUntilQuiescent();
     EXPECT_FALSE(backend.graph().session(idle_session).frozen());
+    EXPECT_FALSE(HasFrozenLink(backend.graph(), idle_session));
+  }
+
+  {
+    // A correct relocalization that closes onto the base, held unfrozen.
+    PoseGraph backend(NoFreeze(option), directory);
+    backend.Start(TestTime(total_steps + 1), Eigen::Affine2d::Identity());
+    Frontend frontend(backend, odometry);
+    anchored_session = *backend.session_manager().fed_session();
+    int step = 0;
+    while (!HasFrozenLink(backend.graph(), anchored_session) && step < total_steps) {
+      frontend.Feed(step++);
+      backend.WaitUntilQuiescent();
+    }
+    EXPECT_FALSE(backend.graph().session(anchored_session).frozen());
+    ASSERT_TRUE(HasFrozenLink(backend.graph(), anchored_session))
+        << "no closure anchored the session onto the base";
+    backend.Finish();
   }
 
   // The floater was last fed at boot 2; with the threshold at 3 it survives through boot 5 and
   // must be swept at boot 6.
   std::optional<std::string> idle_file;
-  for (int boot = 3; boot <= 5; ++boot) {
+  for (int boot = 4; boot <= 5; ++boot) {
     PoseGraph backend(NoFreeze(option), directory);
     backend.Start(TestTime(total_steps + boot));
     EXPECT_EQ(backend.map_manager()->boot_count(), boot);
@@ -173,16 +194,30 @@ TEST(MultiBootE2eTest, AbandonedIdleSessionIsGarbageCollectedAfterEnoughBoots) {
     idle_file = backend.map_manager()->FileNameOf(idle_session);
   }
 
+  // The anchored session, last fed at boot 3, is past the threshold from boot 7 on.
+  for (int boot = 6; boot <= 8; ++boot) {
+    PoseGraph backend(NoFreeze(option), directory);
+    backend.Start(TestTime(total_steps + boot));
+    EXPECT_EQ(backend.map_manager()->boot_count(), boot);
+    ASSERT_TRUE(backend.graph().HasSession(anchored_session))
+        << "anchored idle session swept at boot " << boot;
+    EXPECT_FALSE(backend.graph().session(anchored_session).frozen());
+    EXPECT_TRUE(HasFrozenLink(backend.graph(), anchored_session));
+    EXPECT_FALSE(backend.graph().HasSession(idle_session)) << "floater back at boot " << boot;
+  }
+
   PoseGraph backend(NoFreeze(option), directory);
-  backend.Start(TestTime(total_steps + 6));
-  EXPECT_EQ(backend.map_manager()->boot_count(), 6);
+  backend.Start(TestTime(total_steps + 9));
+  EXPECT_EQ(backend.map_manager()->boot_count(), 9);
 
   EXPECT_FALSE(backend.graph().HasSession(idle_session));
   ASSERT_TRUE(idle_file.has_value());
   EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(directory) / *idle_file))
       << "the swept session's file must go with it";
-  const SessionId empty_replacement{frozen_session.session_index + 1};
-  EXPECT_FALSE(backend.graph().HasSession(empty_replacement));
+  const SessionId rotation_successor{frozen_session.session_index + 1};
+  ASSERT_TRUE(backend.graph().HasSession(rotation_successor));
+  EXPECT_TRUE(HasFrozenLink(backend.graph(), rotation_successor));
+  EXPECT_TRUE(backend.graph().HasSession(anchored_session));
 
   // The frozen base is intact, bitwise up to the serialization round trip.
   ASSERT_TRUE(backend.graph().HasSession(frozen_session));

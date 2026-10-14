@@ -121,7 +121,7 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
                                << " in " << map_manager_->directory();
     anchor_store_.Restore(std::move(*anchors));
     if (loaded.has_value()) {
-      GcIdleSessions(*loaded);
+      GcFloatingSessions(*loaded);
     }
     anchor_store_.Reconcile(data_);
     map_manager_->Commit(data_);
@@ -641,19 +641,18 @@ void PoseGraph::HandleConstraint(const Constraint& constraint) {
   }
 }
 
-void PoseGraph::GcIdleSessions(const MapManager::LoadResult& loaded) {
+void PoseGraph::GcFloatingSessions(const MapManager::LoadResult& loaded) {
   if (option_.gc_unfrozen_after_n_boots <= 0) {
     return;
   }
-  // A long-unanchored idle session is a dead run: freezing it would call its poses truth.
   const int boot_count = map_manager_->boot_count();
   for (const MapManager::LoadResult::UnfrozenSession& unfrozen : loaded.unfrozen_sessions) {
     const int boots_behind = boot_count - unfrozen.last_fed_boot;
-    if (boots_behind <= option_.gc_unfrozen_after_n_boots) {
+    if (boots_behind <= option_.gc_unfrozen_after_n_boots || HasFrozenLink(data_, unfrozen.id)) {
       continue;
     }
-    LOG(INFO) << "garbage collecting idle session " << unfrozen.id.session_index << ", last fed "
-              << boots_behind << " boots ago";
+    LOG(INFO) << "garbage collecting floating session " << unfrozen.id.session_index
+              << ", last fed " << boots_behind << " boots ago";
     RemoveSession(unfrozen.id);
   }
 }

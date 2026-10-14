@@ -202,6 +202,13 @@ pixi run -e ros live                    # 实时节点：/scan 进，地图、tf
 `rosdep install --from-paths src --ignore-src -y && colcon build`。Docker Compose 在 Linux 上
 封装了同样的目标（`docker compose run --rm core-test`）。
 
+没有实时时钟（RTC）的板子上，节点应在时间同步之后启动：systemd unit 里写
+`After=time-sync.target` 和 `Wants=time-sync.target`，并启用时间服务的等待单元
+（`chrony-wait.service` 或 `systemd-time-wait-sync.service`）。扫描时间戳倒退，或向前跳过
+`max_scan_gap_seconds`（默认 60 s），都按时钟跳变处理：节点保存地图后以非零状态退出，重启时从
+上次保存的位姿重新对齐。因此它需要一个守护者：systemd 的 `Restart=on-failure`，或 ROS 2 launch
+的 `respawn`（`evergreenslam.launch.py` 已设置）。回放工具遇到同样情况会报错停止。
+
 ### 数据
 
 仓库不带数据。公开的 2D 激光包大多是 ROS 1 的，两个脚本不装 ROS 也能转：
