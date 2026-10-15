@@ -43,8 +43,8 @@ timeout prints 'outcome unknown': check with egs status / here / session ls befo
 --json (usage commands, map ls, session ls): one JSON object instead of text; prefer it to parsing.
 
 exit codes: 0 done (a session plan printed without --yes is done too), 1 refused or plan
-rejected (nothing changed unless stated), 2 usage or bad path, 3 process unreachable, not
-started, or outcome unknown.
+rejected (nothing changed unless stated), or a relocalization ended no_match or superseded,
+2 usage or bad path, 3 process unreachable, not started, or outcome unknown.
 There is no goto: egs never moves the robot; hand `approach` from `egs where` to your navigator."""
 
 AGENT_HELP = """\
@@ -67,17 +67,16 @@ it is DX ahead, DY left of the robot -> egs observe places/<path> --offset DX DY
 ...in a photo taken a moment ago -> add --at <stamp_ns> (robot sensor clock, see egs pose --json)
 go somewhere -> egs where places/<path>, give its approach pose to your navigator
 the navigator must avoid an area -> egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1 (ls | rm)
-is the map healthy, aligned to the base -> egs status
+is the map healthy, linked to the base -> egs status; after a start: egs here before moving
 a picture -> egs view map | here | route places/<p> | trail | session [id]
-export the map as files -> egs snapshot -o DIR (DIR outside memory/)
-the robot's pose is wrong -> egs init-pose --place places/<p>, then egs here; else egs relocalize
-make sure it is on disk now -> egs checkpoint
-a broken session (a fall) -> egs session rm <fed id> --yes: drops it in process; pose lost
+the robot's pose is wrong -> egs init-pose --place places/<p> (waits: matched | no_match)
+no_match, or matched but base still low -> egs session rm <fed id> (plan, --yes), init-pose again
+make sure it is on disk now -> egs checkpoint; what happened to the pose -> egs events
 look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words> [<path>]
 new container, rename, re-parent, delete -> egs fs mkdir | mv | rm -r (bindings move along)
 notes and skills -> egs fs write places/<p>/notes.md --file F (or stdin); egs fs append ...
 
-exit 0 done, 1 refused or plan rejected, 2 bad usage or path, 3 unreachable or outcome unknown
+exit 0 done, 1 refused, rejected or no_match, 2 bad usage or path, 3 unreachable or outcome unknown
 outcome unknown: a change may have happened; check egs status / here / session ls, then retry
 """
 
@@ -134,7 +133,7 @@ def build_parser():
     )
     _json_flag(add("here", commands.cmd_here, "where the robot is: current place, two closest, pose"))
     _json_flag(
-        add("status", commands.cmd_status, "map health: frozen base, alignment, phase, closures")
+        add("status", commands.cmd_status, "map health: frozen base, base link, closures")
     )
     pw = add("pose", pose.cmd_pose, "the robot's pose from the newest scan, for programs")
     pw.add_argument(
@@ -287,11 +286,29 @@ def build_parser():
     )
     _json_flag(v)
 
-    ip = add("init-pose", commands.cmd_init_pose, "tell the process where the robot is")
+    ip = add(
+        "init-pose",
+        commands.cmd_init_pose,
+        "tell the process where the robot is; waits for matched / no_match",
+    )
     ip.add_argument("pose", nargs="*", type=float, metavar="X Y THETA")
     ip.add_argument("--place", help="use the pose saved in <path>/place.yaml (no walk-up)")
+    rl = add("relocalize", commands.cmd_relocalize, "search the whole map for the robot; waits")
+    for sp in (ip, rl):
+        sp.add_argument(
+            "--wait",
+            type=float,
+            default=30.0,
+            metavar="S",
+            help="seconds to wait for the outcome (default 30), then 'outcome unknown'",
+        )
+        sp.add_argument("--no-wait", action="store_true", help="return once the request is queued")
+        _json_flag(sp)
 
-    add("relocalize", commands.cmd_relocalize, "search the whole map for the robot")
+    ev = add("events", commands.cmd_events, "what the process did to the pose and the sessions")
+    ev.add_argument("--since", type=int, default=0, metavar="N", help="from sequence N (default 0)")
+    ev.add_argument("--follow", action="store_true", help="poll every second, one line per event")
+    _json_flag(ev)
     add("checkpoint", commands.cmd_checkpoint, "write the session and anchors to disk now")
 
     ses = sub.add_parser("session", help="management: list, freeze, rotate, remove sessions")

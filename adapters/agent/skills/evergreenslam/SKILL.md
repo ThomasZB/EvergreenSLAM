@@ -42,15 +42,17 @@ Usage layer: call freely.
 | go somewhere | `egs where` → give its `approach` pose to your navigator |
 | the navigator must avoid an area | `egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1` (robot frame: x ahead, y left; within 10 m of the place) |
 | list or delete keep-out zones | `egs zone ls` / `egs zone rm places/<place>/<name>` |
-| is the map healthy, aligned to the base | `egs status` |
+| is the map healthy, linked to the base | `egs status` |
 | a picture | `egs view <preset>` (next table) |
 | export the map as files | `egs snapshot -o <dir>` (copies or downloads them; dir outside `memory/`: exports carry XY) |
-| the robot's pose is wrong | `egs init-pose --place places/<p>` (or `x y theta`), then `egs here`; else `egs relocalize` |
+| the robot's pose is wrong | `egs init-pose --place places/<p>` (or `x y theta`; waits for the outcome); see **Recovery** below |
+| what happened to the pose | `egs events` (`--since N`, `--follow`) |
 | make sure it is on disk now | `egs checkpoint` |
 | new container, rename, re-parent, delete | `egs fs mkdir`, `egs fs mv`, `egs fs rm -r` (a place's binding moves with its directory) |
 | notes and skills | `egs fs write places/<p>/notes.md --file <f>` (or stdin; replaces the file atomically; also `SKILL.md`, `skills/<name>/SKILL.md`); `egs fs append` adds lines |
 
-Management layer: only when a human asks. Every session command prints a plan and changes nothing
+Management layer: only when a human asks; the one exception is the fed-session `rm` in
+**Recovery when the pose is wrong**. Every session command prints a plan and changes nothing
 without `--yes`; show the plan to the human before you add `--yes`. Map commands take no `--yes`:
 they delete nothing.
 
@@ -106,11 +108,42 @@ layers; the first output line of any preset shows its layers, so you learn the n
 8. There is no `egs goto`. `egs` never moves the robot.
 9. Keep-out zones go through `egs zone add`; never write `zone.yaml` by hand.
 
+## After a start, before the first move
+
+1. `egs here`. A first line `linked to base: no` means the pose is not yet tied to the saved map.
+2. Read the localization line: `base` (fit to the saved map) with its `cover`, and
+   `since base match`. Healthy `base`: TBD.
+3. Doubtful (not linked, low `base` at high `cover`, `since base match -`): `egs view here`; the
+   scan should lie on the map's walls. If it does not, go to **Recovery**.
+
+## Recovery when the pose is wrong
+
+1. `egs init-pose --place places/<p>` for the place the robot really stands at (or `x y theta`).
+   It waits up to 30 s (`--wait S`) and prints the outcome:
+   - `matched: corrected D m A°`: applied. `egs here` again: `linked to base yes` and `base`
+     healthy means done. `matched` says the hint was used, not that the pose is now right.
+   - `no_match (0 candidates)`: that place or pose lies outside the saved map; check the place
+     name, or `egs relocalize` to search the whole map.
+   - `no_match (N candidates)`, or `matched` but `base` stays low: the current session holds a
+     wrong constraint that one hint cannot pull back. Go to step 2.
+   - `superseded by request M`: a newer request replaced it; `egs here` shows the newest.
+   - `outcome unknown`: still pending; the `relocalization` line of `egs here` shows it later.
+2. `egs session rm <fed id>` (the `fed` id from `egs session ls`), then the same with `--yes`. You
+   may do this without asking a human, but only for the fed session and only here: it drops the
+   current session, a fresh one is fed, and the pose is lost.
+3. `egs init-pose --place places/<p>` again, then `egs here`.
+
 ## Reading answers
 
-- `egs here` starting with `aligned to base: no`: the robot has not yet been matched to the saved
+- `egs here` starting with `linked to base: no`: the robot has not yet been matched to the saved
   map, so `current` and `closest` are not to be trusted. Wait, drive through an area that is
-  already mapped, or `egs init-pose --place places/<p>` / `egs relocalize`, then ask again.
+  already mapped, or follow **Recovery**, then ask again.
+- `relocalization N <kind> <state>` in `egs here` / `egs status`: the latest `init-pose` or
+  `relocalize` and how it ended (`pending`, `matched: corrected ...`, `no_match`, `superseded`).
+- `egs events`: one line per backend event, oldest first: `relocalization`, `pose_correction` (a
+  re-optimization moved the robot's pose more than 0.3 m or 0.2 rad), `session_frozen`,
+  `session_removed`, `fed_session_dropped`. Resume with `--since <next_seq>`; `events lost` on
+  stderr means older ones fell off the log.
 - The localization line, `base S (cover C%)  since base match Dm  match M (avg A)`:
   - `base`: how well the latest keyframe scan, at its pose, fits the saved (frozen) map, 0..1.
     It is consistency, not proof: moved furniture and people lower it. `cover` is how much of the
@@ -123,7 +156,7 @@ layers; the first output line of any preset shows its layers, so you learn the n
     here`. It only compares the scan with the local map: a high `match` does not mean aligned.
   - A `base` that drops and stays low while `cover` stays high, with `since base match` growing in
     an area that is mapped, means the pose is probably wrong: `egs view here`, then
-    `egs init-pose --place places/<p>` or `egs relocalize`.
+    **Recovery**.
 - `--at` is the robot's sensor clock (its scan stamps), not this computer's: take the photo's time
   on the robot, or read the robot's time now from `egs pose --json` (`stamp_ns`) to calibrate.
   `too_old` (over 10 s ago), `in_future` (ahead of the newest scan: wrong clock) and `gap` (no
@@ -136,17 +169,15 @@ layers; the first output line of any preset shows its layers, so you learn the n
   re-save.
 - Every usage command takes `--json` (`zone ls` and `session rm` too); prefer it over parsing
   text. Under `--json` every pose is `[x, y, theta]`, `robot` from `egs here` included.
-- `not aligned to the base map` from `observe --offset` or `zone add`: the robot pose and the
-  place's anchor are in different frames until `egs status` says aligned; drive through mapped
-  area first, then retry.
+- `not linked to the base map` from `observe --offset` or `zone add`: the robot pose and the
+  place's anchor are in different frames until `egs status` says `linked to base yes`; drive
+  through mapped area first, then retry.
 - `unresolvable ... orphan`: that part of the map is gone. Go there and `egs place save` it again.
 - `frame_mismatch` in `egs zone ls`: the zone's directory moved under another place. `egs zone rm`
   it, stand near the new place and `egs zone add` it again.
-- `egs zone add` refused `not aligned to the base map`: drive where the maps overlap until
-  `egs status` says `aligned to base yes`, then retry.
 - `@solve N` says which optimization the numbers came from; they move when the map re-optimizes.
 - Times are ages (`35s`, `20m`, `6d`). `find` puts things last seen `absent` at the bottom.
-- Exit codes: 0 done (a session plan printed without `--yes` also exits 0: `plan only`), 1 refused
-  or plan rejected, 2 bad usage or path, 3 process unreachable. `outcome unknown`
+- Exit codes: 0 done (a session plan printed without `--yes` also exits 0: `plan only`), 1 refused,
+  plan rejected, `no_match` or `superseded`, 2 bad usage or path, 3 process unreachable. `outcome unknown`
   means a change may or may not have happened: check with `egs status`, `egs here` or
   `egs session ls` before retrying.

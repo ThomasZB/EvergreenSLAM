@@ -103,7 +103,7 @@ class ObserveTest(EgsTestCase):
                 "observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0", *extra
             )
             self.assertEqual(code, 1, out)
-            self.assertIn("not aligned to the base map", out)
+            self.assertIn("not linked to the base map", out)
         self.assertEqual(self.read("places/kitchen/fridge/milk/node.yaml"), before)
         code, out, _ = self.egs(
             "observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0", "--json"

@@ -170,8 +170,8 @@ def cmd_add(ctx, args):
         # the conversion would persist a polygon in the wrong place. --force does not cover this.
         if j.get("has_frozen_base") and j.get("aligned_to_base") is False:
             ctx.print(
-                "refused: not aligned to the base map yet, so the robot pose and %s's anchor are in "
-                "different frames; drive where the maps overlap until `egs status` says aligned to "
+                "refused: not linked to the base map yet, so the robot pose and %s's anchor are in "
+                "different frames; drive where the maps overlap until `egs status` says linked to "
                 "base yes, then retry (or give the points with --frame anchor)" % a_path
             )
             return EXIT_REFUSED

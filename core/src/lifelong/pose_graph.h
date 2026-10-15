@@ -32,8 +32,10 @@
 #include "lifelong/map_manager/map_manager.h"
 #include "lifelong/optimization/optimization.h"
 #include "lifelong/pose_graph_data.h"
+#include "lifelong/pose_graph_events.h"
 #include "lifelong/pose_graph_option.h"
 #include "lifelong/pose_graph_trimmer/pose_graph_trimmer.h"
+#include "lifelong/relocalization_tracker.h"
 #include "lifelong/sessions/session_manager.h"
 #include "lifelong/task_queue.h"
 #include "mapping/grid_mapping/grid_map.h"
@@ -65,8 +67,15 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void AddInsertionResult(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
   void Finish();
 
-  void SetInitialPose(const Eigen::Affine2d& global_pose);
-  void RelocalizeGlobally();
+  RelocalizationId SetInitialPose(const Eigen::Affine2d& global_pose);
+  RelocalizationId RelocalizeGlobally();
+  std::optional<RelocalizationStatus> relocalization(RelocalizationId id) const {
+    return relocalization_.Get(id);
+  }
+  std::optional<RelocalizationStatus> latest_relocalization() const {
+    return relocalization_.Latest();
+  }
+  PoseGraphEvents::Page EventsSince(int64_t seq) const { return events_.Since(seq); }
 
   void WaitUntilQuiescent();
 
@@ -135,6 +144,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
  private:
   class SessionAlignmentObserver;
   struct PendingRelocalization {
+    RelocalizationId id = 0;
     std::optional<Eigen::Affine2d> prior;
   };
 
@@ -147,7 +157,13 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void FinishBatch();
   bool CheckpointDue() const;
   bool CheckpointSessions();
-  void RelocalizeOnTask(const std::optional<Eigen::Affine2d>& prior);
+  void RelocalizeOnTask(RelocalizationId id, const std::optional<Eigen::Affine2d>& prior);
+  void StartRelocalizationRound(RelocalizationId id, const NodeId& node_id,
+                                const std::optional<Eigen::Affine2d>& prior);
+  void OnRelocalizationMatch(RelocalizationId id, bool accepted);
+  void SettleRelocalization();
+  void AppendRelocalizationEvent(const RelocalizationStatus& status);
+  common::Time SensorNow() const;
   bool ReseedOnFirstAnchoring(const Constraint& constraint);
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);
   void EnqueueNodeSearch();
@@ -167,6 +183,9 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
 
   mutable std::mutex active_session_to_global_mutex_;
   std::optional<Eigen::Affine2d> active_session_to_global_;
+  std::optional<SessionId> published_fed_;
+  RelocalizationTracker relocalization_;
+  PoseGraphEvents events_;
 
   bool started_ = false;
   SessionId boot_first_session_;
@@ -178,6 +197,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   std::map<int, std::shared_ptr<const mapping::Submap>> watched_submaps_;
   // Backend-task state.
   std::optional<PendingRelocalization> pending_relocalization_;
+  int solves_before_last_add_ = 0;
   // The only solve trigger; freeze and first-anchoring solves neither reset nor shift it.
   int nodes_since_cadence_ = 0;
   int optimizations_since_trim_ = 0;

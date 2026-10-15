@@ -18,6 +18,7 @@
 
 #include "lifelong/pose_graph.h"
 #include "service/graph/here_tracker.h"
+#include "service/graph/relocalization_report.h"
 #include "service/graph/snapshot_exporter.h"
 #include "service/http/service_hooks.h"
 #include "service/memory/fs_sandbox.h"
@@ -50,6 +51,8 @@ struct ServiceContext {
   std::atomic<bool> stopping{false};
   // Set once switch_map accepted a request; this service is torn down before it would clear.
   std::atomic<bool> switch_pending{false};
+  // Thread safe.
+  RelocalizationRequests relocalizations;
 
   // Serial-executor state: only one handler runs at a time, so none of this is shared.
   HereTracker here;

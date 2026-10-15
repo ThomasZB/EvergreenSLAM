@@ -214,23 +214,26 @@ task; ask `/status`. `ActiveSessionToGlobal()` is republished at solves and grap
 can trail the task-side alignment `/here` uses by one batch.
 
 **GET /status** — task. `→ {ok, at_num_solves, boot_count, fed_session, map (name|null), has_frozen_base,
-aligned_to_base, phase, localization, closures_delta, num_anchors, num_orphans, num_place_files,
-duplicate_anchor_paths: [path]}`. `localization` as in `/here`. `has_frozen_base` = any `graph.sessions()` entry frozen;
+aligned_to_base, phase, localization, relocalization, closures_delta, num_anchors, num_orphans,
+num_place_files, duplicate_anchor_paths: [path]}`. `localization` as in `/here`; `relocalization`
+is the latest request (see *Relocalization outcome*). `egs status` prints neither `phase` nor the
+word "aligned": its text says `linked to base yes|no` for `aligned_to_base` (JSON unchanged). `has_frozen_base` = any `graph.sessions()` entry frozen;
 `aligned_to_base` = `HasFrozenLink(graph, fed)`; `phase` from `expansion().find(fed)`, absent →
 `BOOTSTRAP`; `closures_delta` = `constraint_builder().num_constraints_added()` since the previous
 `/status`. Two `place.yaml` naming one anchor (a `cp -r`) are listed and ignored by `here`.
 
-**GET /here** — task. The service scans `memory/places/**/place.yaml` (skipping `skills/` and
-symlinks), then one task reads `current_frame` and `ResolveAll`.
+**GET /here** — task. `{relocalization?: id}`. The service scans `memory/places/**/place.yaml`
+(skipping `skills/` and symlinks), then one task reads `current_frame` and `ResolveAll`.
 `→ {ok, at_num_solves, robot: pose|null, keyframe_age_s|null, has_frozen_base, aligned_to_base,
 localization: {since_base_match_m|null, base: {score|null, coverage}|null, scan_match: {score,
-avg}|null}, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
-dist_m, state}]}` — `closest` is the
+avg}|null}, relocalization, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
+dist_m, state}]}` — `relocalization` is the request named by the parameter, or the latest without
+it, `null` when there is none or the id is no longer tracked (malformed id → 400). `closest` is the
 top 2 non-orphan referenced anchors by straight-line distance. `current` = nearest within 2.5 m;
 once current, a place stays current until 3.75 m. `keyframe_age_s` = robot stamp − newest node time.
 `has_frozen_base` / `aligned_to_base` as in `/status`, read in the same task: with a frozen base but
 no link to it, the robot pose is in the fed session's own frame and `current` / `closest` compare it
-with frozen anchors in another frame (`egs here` says so on its first line).
+with frozen anchors in another frame (`egs here` says so on its first line, `linked to base: no`).
 
 `localization` (replaces the former top-level `scan_match`) carries three signals,
 read in the same task as `robot`:
@@ -362,9 +365,66 @@ otherwise robot and scan layers drop, noted in the legend), 400 `too_many_layers
 
 **POST /init-pose** — task, mutating. `{x, y, theta}` or `{anchor}` (`egs init-pose --place` reads
 `<path>/place.yaml`, no walk-up). Resolve; orphan → `unresolvable` (no old-XY fallback); then
-`SetInitialPose(pose)`. `→ {ok, reason, at_num_solves, pose}`; not a promise: check with `here`.
+`SetInitialPose(pose)`. `→ {ok, reason, at_num_solves, request_id|null, pose}` (`request_id`
+null on a refusal). The service remembers `kind` `place` (with `anchor`) or `pose` for the id.
 
-**POST /relocalize** — task, mutating. `RelocalizeGlobally()`. `→ {ok, reason, at_num_solves}`.
+**POST /relocalize** — task, mutating. `RelocalizeGlobally()`. `→ {ok, reason, at_num_solves,
+request_id}`, kind `global`.
+
+### Relocalization outcome
+
+`SetInitialPose` / `RelocalizeGlobally` mint the id on the calling thread (counter from 1 per
+process) and return it; the search runs later on the backend task. The object in `/here` and
+`/status`:
+`{id, kind: pose|place|global, anchor|null, state: pending|matched|no_match|superseded, candidates,
+constraints, correction_m|null, correction_rad|null, requested_ns|null, resolved_ns|null,
+superseded_by|null}`.
+- The request's task supersedes every older request still pending (`superseded_by` = its id). A
+  superseded round's matches still land as ordinary constraints but no longer count.
+- With no node in the fed session yet the request stays `pending` (`requested_ns` null) until the
+  first keyframe runs it. Otherwise one candidate round runs against the fed session's newest node
+  (`requested_ns` = that node's sensor time): every finished submap of another session the prior
+  reaches within the relocalization window, or all of them without a prior. `candidates` = pairs
+  selected after sampling. 0 candidates → `no_match` at once (the prior is outside the saved map).
+  Each match, inline or from a worker, reports on the backend task whether
+  `AddConstraintIfEndpointsLive` accepted it; when all have reported: ≥ 1 accepted → `matched`,
+  else `no_match`.
+- `matched`: unless a solve already ran after the last accepted constraint (the first-anchoring
+  reseed solves), one `OptimizeOnTask()`, then `RepublishActiveSessionToGlobal()`. `correction_m` /
+  `correction_rad` = how far the newest node at request time moved (its local pose under the
+  session-to-global before the round vs after the solve). `matched` means applied and republished,
+  not that the pose is right: on a session already linked to the base the round adds only a few
+  Huber-lossed edges, which a session pinned by more wrong closures outvotes (core test
+  `AHintOnASessionPinnedBySixWrongClosuresMatchesButLeavesItWrong`); the recovery is `session rm`
+  of the fed session, then `init-pose`.
+- A fed-session drop marks the open request `superseded` with `superseded_by` null.
+- Times are sensor time (`resolved_ns` = newest node time across sessions at settlement).
+- Core reads `relocalization(id)` / `latest_relocalization()` are thread safe (own mutex; the last 16
+  requests); the service reads them inside its task so they match `robot`.
+
+**GET /events** — no task (the log has its own mutex), 503 before start like task routes.
+`{since: seq = 0}` (negative → 400). `→ {ok, reason, instance_id, first_seq, next_seq, lost, events: [{seq,
+time_ns, kind, ...}]}`: the `PoseGraph` event ring (256, `EventsSince`), events with `seq ≥ since`.
+`lost` = `since < first_seq` (overrun) or `since > next_seq` (a restarted process); then every held
+event is returned; a changed `instance_id` (a map switch or restart) also means start over from 0. `time_ns` is sensor time. Kinds and fields:
+- `relocalization`: `request_id, state, candidates, constraints, correction_m, correction_rad,
+  superseded_by` — on every settlement, `superseded` included.
+- `pose_correction`: `session, correction_m, correction_rad` — a `RepublishActiveSessionToGlobal()`
+  moved the fed session's newest node by more than `lifelong.pose_correction_event_translation`
+  (0.3 m) or `pose_correction_event_rotation` (0.2 rad), comparing the previous and new transform of
+  the same fed session (a rotation or drop to a new fed session never logs one).
+- `session_frozen`, `session_removed`: `session`. A drop logs `session_removed` then
+  `fed_session_dropped` (`session, fed_now`), then `relocalization` for a superseded request.
+
+egs: `init-pose` / `relocalize` poll `/here?relocalization=<id>` every 0.5 s up to `--wait S`
+(default 30; `--no-wait` returns at once). Printed outcome: `matched: corrected D m A°; check egs
+here` (exit 0), `no_match (N candidates): ...` with the next step, `superseded by request M`
+(exit 1 for both); still pending at the deadline, or the id unknown to the process → `outcome
+unknown` (exit 3). `--json` adds the status object as `relocalization` (`ok` false and `reason` the
+state unless matched). `egs here` / `egs status` print a `relocalization ...` line when there is a
+request. `egs events [--since N] [--follow] [--json]`: one line per event and `next_seq N`;
+`--follow` polls every second, one line (with `--json`, one JSON object) per event; `events lost`
+goes to stderr.
 
 **POST /checkpoint** — task, mutating. `CheckpointOnTask()` (one commit: all unfrozen session files, the
 anchors file if changed, the manifest); a failed commit → `not_persisted`. `→ {ok, reason,
@@ -549,6 +609,8 @@ new row); `next_id` stays past the refused id, which is never issued.
   `DropFedSessionOnTask` is the task-side body).
   Anywhere: `FreezeFedSession(std::optional<SessionId> expected = std::nullopt)` → the new
   `SessionManager::FreezeFedSession(expected)`; `Start(..., bool seed_from_previous_boot = true)`.
+- `PoseGraph`, any thread: `RelocalizationId SetInitialPose(pose)`, `RelocalizationId
+  RelocalizeGlobally()`, `relocalization(id)`, `latest_relocalization()`, `EventsSince(seq)`.
 - `AnchorStore::Rebind`. `AssembleGlobalMap(..., std::optional<SessionId>)` already exists.
 - Zones (`service/memory/zone_store.h`), for a host's own backend task, never a host thread waiting on
   one: `std::optional<std::vector<ResolvedZone>> ResolveZones(const PoseGraph&, const ZoneStore&)`

@@ -1,5 +1,5 @@
 """Usage-layer commands: here, status, place save, where, find, observe, snapshot, init-pose,
-relocalize, checkpoint, root."""
+relocalize, events, checkpoint, root."""
 
 import json
 import math
@@ -7,9 +7,10 @@ import os
 import posixpath
 import re
 import shutil
+import time
 
 from . import fmt, jsonout, se2
-from .client import EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EgsError, explain
+from .client import EXIT_OK, EXIT_REFUSED, EXIT_TRANSPORT, EXIT_USAGE, EgsError, explain
 from .memory import ATTACHMENTS, Resolution, UnreadablePlace, match_rank
 from .store import node_path
 from .yamlmini import dumps
@@ -19,6 +20,8 @@ DEFAULT_OFFSET_MAX_M = 10.0
 # The service's request body limit; local copies keep it so both modes accept the same files.
 MAX_ATTACHMENT_BYTES = 8 << 20
 RANK_NAMES = ("name", "alias", "kind", "word", "fuzzy")
+RELOCALIZATION_POLL_S = 0.5
+EVENTS_POLL_S = 1.0
 
 
 def solve(j):
@@ -60,7 +63,7 @@ def cmd_here(ctx, args):
     if not j.get("ok"):
         return ctx.refused(j)
     if j.get("has_frozen_base") and j.get("aligned_to_base") is False:
-        ctx.print("aligned to base: no (positions below are unreliable until aligned)")
+        ctx.print("linked to base: no (positions below are unreliable until linked)")
     cur = j.get("current")
     ctx.print("current " + ("%s %s" % (cur["path"], fmt.meters(cur["dist_m"])) if cur else "-"))
     closest = j.get("closest") or []
@@ -79,6 +82,8 @@ def cmd_here(ctx, args):
         % (fmt.pose(robot), fmt.age_s(j.get("keyframe_age_s")), solve(j))
     )
     ctx.print(fmt.localization(j.get("localization")))
+    if j.get("relocalization"):
+        ctx.print(fmt.relocalization(j["relocalization"]))
     ctx.result(dict(j, robot=jsonout.pose(robot)))
     return EXIT_OK
 
@@ -90,15 +95,16 @@ def cmd_status(ctx, args):
     yn = lambda v: "-" if v is None else ("yes" if v else "no")  # noqa: E731
     ctx.print(
         ("map %s  " % j["map"] if j.get("map") else "")
-        + "boot %s  fed session %s  phase %s"
-        % (j.get("boot_count"), j.get("fed_session"), j.get("phase")),
-        "frozen base %s  aligned to base %s"
+        + "boot %s  fed session %s" % (j.get("boot_count"), j.get("fed_session")),
+        "frozen base %s  linked to base %s"
         % (yn(j.get("has_frozen_base")), yn(j.get("aligned_to_base"))),
         fmt.localization(j.get("localization")),
         "closures +%s since last status" % j.get("closures_delta"),
         "anchors %s (orphans %s)  place.yaml files %s"
         % (j.get("num_anchors"), j.get("num_orphans"), j.get("num_place_files")),
     )
+    if j.get("relocalization"):
+        ctx.print(fmt.relocalization(j["relocalization"]))
     dups = j.get("duplicate_anchor_paths") or []
     if dups:
         ctx.print("duplicate anchor (cp -r?), ignored by here: " + ", ".join(dups))
@@ -434,8 +440,8 @@ def _write_offset(ctx, mem, path, args, observed_at):
         return (
             ctx.refuse(
                 "not_aligned",
-                "not aligned to the base map yet, so the robot pose and %s's anchor are in "
-                "different frames; drive where the maps overlap until `egs status` says aligned "
+                "not linked to the base map yet, so the robot pose and %s's anchor are in "
+                "different frames; drive where the maps overlap until `egs status` says linked "
                 "to base yes, then retry" % a_path,
             ),
             None,
@@ -540,19 +546,100 @@ def cmd_init_pose(ctx, args):
     j = ctx.client.post("/init-pose", params)
     if not j.get("ok"):
         return ctx.refused(j)
-    ctx.print(
-        "initial pose set to %s; not a promise: check with `egs here`  %s"
-        % (fmt.pose(se2.from_json(j.get("pose"))), solve(j))
-    )
-    return EXIT_OK
+    queued = "initial pose %s sent" % fmt.pose(se2.from_json(j.get("pose")))
+    return _await_relocalization(ctx, args, j, queued)
 
 
 def cmd_relocalize(ctx, args):
     j = ctx.client.post("/relocalize")
     if not j.get("ok"):
         return ctx.refused(j)
-    ctx.print("global relocalization queued; check with `egs here`  %s" % solve(j))
-    return EXIT_OK
+    return _await_relocalization(ctx, args, j, "global relocalization sent")
+
+
+def _await_relocalization(ctx, args, j, queued):
+    rid = j.get("request_id")
+    if args.no_wait or rid is None:
+        ctx.print(
+            "%s%s; not a promise: check with `egs here`  %s"
+            % (queued, "" if rid is None else " as request %s" % rid, solve(j))
+        )
+        ctx.result(j)
+        return EXIT_OK
+    deadline = time.monotonic() + max(0.0, args.wait)
+    while True:
+        h = ctx.client.get("/here", {"relocalization": rid})
+        r = h.get("relocalization") if h.get("ok") else None
+        if r is None or r.get("id") != rid:
+            raise EgsError(
+                "outcome unknown: the process no longer tracks request %s (restarted?); "
+                "check with `egs here`" % rid,
+                EXIT_TRANSPORT,
+                "outcome_unknown",
+            )
+        if r.get("state") != "pending":
+            break
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise EgsError(
+                "outcome unknown: request %s still pending after %gs and may yet apply; "
+                "check with `egs here`" % (rid, args.wait),
+                EXIT_TRANSPORT,
+                "outcome_unknown",
+            )
+        time.sleep(min(RELOCALIZATION_POLL_S, left))
+    ctx.print(_relocalization_outcome(r))
+    if r["state"] == "matched":
+        ctx.result(dict(j, relocalization=r))
+        return EXIT_OK
+    ctx.result(dict(j, ok=False, reason=r["state"], relocalization=r))
+    return EXIT_REFUSED
+
+
+def _relocalization_outcome(r):
+    state = r.get("state")
+    if state == "matched":
+        return "matched: corrected %s; check egs here" % fmt.correction(r)
+    if state == "superseded":
+        if r.get("superseded_by") is None:
+            return "superseded: the fed session was dropped; send it again"
+        return "superseded by request %s" % r["superseded_by"]
+    n = r.get("candidates") or 0
+    if n == 0:
+        return (
+            "no_match (0 candidates): nothing saved lies around that pose; the place or pose is "
+            "outside the saved map"
+        )
+    return (
+        "no_match (%d candidates): the scan fits none of them; if the robot really is there, the "
+        "fed session holds a wrong constraint: egs session rm <fed id> (plan, then --yes), then "
+        "send it again" % n
+    )
+
+
+def cmd_events(ctx, args):
+    since = args.since
+    while True:
+        j = ctx.client.get("/events", {"since": since})
+        if not j.get("ok"):
+            return ctx.refused(j)
+        if j.get("lost"):
+            ctx.warn(
+                "events lost: the log no longer holds %s (overrun or restarted); from %s on"
+                % (since, j.get("first_seq"))
+            )
+        if not args.follow:
+            for e in j.get("events") or []:
+                ctx.print(fmt.event(e))
+            ctx.print("next_seq %s" % j.get("next_seq"))
+            ctx.result(j)
+            return EXIT_OK
+        for e in j.get("events") or []:
+            line = json.dumps(e, ensure_ascii=False) if ctx.json else fmt.event(e)
+            ctx.out.write(line + "\n")
+            ctx.out.flush()
+        since = j.get("next_seq", since)
+        time.sleep(EVENTS_POLL_S)
 
 
 def cmd_checkpoint(ctx, args):

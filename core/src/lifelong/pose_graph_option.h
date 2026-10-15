@@ -38,6 +38,8 @@ struct PoseGraphOption {
   // Sensor time; Finish, freeze and rotation write regardless.
   common::Duration checkpoint_min_interval = common::FromSeconds(30.0);
   int gc_unfrozen_after_n_boots = 5;
+  double pose_correction_event_translation = 0.3;
+  double pose_correction_event_rotation = 0.2;
 
   friend std::ostream& operator<<(std::ostream& os, const PoseGraphOption& option) {
     os << "PoseGraphOption:" << std::endl;
@@ -46,6 +48,10 @@ struct PoseGraphOption {
     os << "  checkpoint_min_interval: " << common::ToSeconds(option.checkpoint_min_interval)
        << std::endl;
     os << "  gc_unfrozen_after_n_boots: " << option.gc_unfrozen_after_n_boots << std::endl;
+    os << "  pose_correction_event_translation: " << option.pose_correction_event_translation
+       << std::endl;
+    os << "  pose_correction_event_rotation: " << option.pose_correction_event_rotation
+       << std::endl;
     os << option.optimization;
     os << option.constraint_weight;
     os << option.session_manager;

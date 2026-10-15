@@ -113,6 +113,20 @@ class FakeState:
                 "last_node_ns": time.time_ns(),
             },
         ]
+        # A relocalization request answers pending to this many /here?relocalization polls, then
+        # settles as relocalization_outcome says.
+        self.relocalizations = {}
+        self.next_relocalization = 1
+        self.relocalization_pending_polls = 0
+        self.relocalization_outcome = {
+            "state": "matched",
+            "candidates": 3,
+            "constraints": 2,
+            "correction_m": 1.1,
+            "correction_rad": 2.86,
+        }
+        self.events = []  # dicts without seq; seq = events_first_seq + index
+        self.events_first_seq = 0
         self.freeze_rejection = None
         self.freeze_visible_after = 1  # /sessions polls before the frozen role shows
         self.mutate_before_apply = False  # makes apply see a different plan
@@ -130,6 +144,45 @@ class FakeState:
             "submap_id": [0, aid],
             "saved_at_ns": saved_at_ns or time.time_ns() - 6 * 86400 * 10**9,
         }
+
+    def relocalization_request(self, kind, anchor=None):
+        with self.lock:
+            rid = self.next_relocalization
+            self.next_relocalization += 1
+            self.relocalizations[rid] = {
+                "id": rid,
+                "kind": kind,
+                "anchor": anchor,
+                "state": "pending",
+                "candidates": 0,
+                "constraints": 0,
+                "correction_m": None,
+                "correction_rad": None,
+                "requested_ns": None,
+                "resolved_ns": None,
+                "superseded_by": None,
+                "_polls": self.relocalization_pending_polls,
+            }
+        return rid
+
+    def relocalization_poll(self, rid):
+        with self.lock:
+            r = self.relocalizations.get(rid)
+            if r is None:
+                return None
+            if r["state"] == "pending":
+                if r["_polls"] > 0:
+                    r["_polls"] -= 1
+                else:
+                    r.update(self.relocalization_outcome, resolved_ns=time.time_ns())
+            return {k: v for k, v in r.items() if not k.startswith("_")}
+
+    def latest_relocalization(self):
+        with self.lock:
+            if not self.relocalizations:
+                return None
+            r = self.relocalizations[max(self.relocalizations)]
+            return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def paths_of(self, method, path):
         return [r for r in self.requests if r[0] == method and r[1] == path]
@@ -279,6 +332,7 @@ class _Handler(BaseHTTPRequestHandler):
             aligned_to_base=self.st.aligned_to_base,
             phase="LOCKED",
             localization=self.st.localization,
+            relocalization=self.st.latest_relocalization(),
             closures_delta=2,
             num_anchors=len(self.st.anchors),
             num_orphans=sum(1 for a in self.st.anchors.values() if a["state"] == "orphan"),
@@ -287,12 +341,17 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def here(self, q, body):
+        if "relocalization" in q:
+            relocalization = self.st.relocalization_poll(int(q["relocalization"]))
+        else:
+            relocalization = self.st.latest_relocalization()
         self.ok(
             robot=self.st.robot,
             keyframe_age_s=1.5,
             has_frozen_base=self.st.has_frozen_base,
             aligned_to_base=self.st.aligned_to_base,
             localization=self.st.localization,
+            relocalization=relocalization,
             current={"path": "places/dock", "anchor": 1, "dist_m": 0.4},
             closest=[
                 {"path": "places/dock", "anchor": 1, "dist_m": 0.4, "state": "frozen"},
@@ -503,12 +562,27 @@ class _Handler(BaseHTTPRequestHandler):
             if a is None:
                 return self.refuse("unknown_anchor")
             if a["pose"] is None:
-                return self.refuse("unresolvable")
-            return self.ok(pose=a["pose"])
-        self.ok(pose=pose(float(q["x"]), float(q["y"]), float(q["theta"])))
+                return self.refuse("unresolvable", request_id=None)
+            rid = self.st.relocalization_request("place", a["anchor"])
+            return self.ok(pose=a["pose"], request_id=rid)
+        rid = self.st.relocalization_request("pose")
+        self.ok(pose=pose(float(q["x"]), float(q["y"]), float(q["theta"])), request_id=rid)
 
     def relocalize(self, q, body):
-        self.ok()
+        self.ok(request_id=self.st.relocalization_request("global"))
+
+    def events(self, q, body):
+        st = self.st
+        since = int(q.get("since", 0))
+        if since < 0:
+            return self.refuse("bad_param", 400, detail="'since' is 0 or more")
+        with st.lock:
+            first = st.events_first_seq
+            nxt = first + len(st.events)
+            lost = since < first or since > nxt
+            start = first if lost else since
+            events = [dict(e, seq=first + i) for i, e in enumerate(st.events) if first + i >= start]
+        self.ok(first_seq=first, next_seq=nxt, lost=lost, events=events)
 
     def checkpoint(self, q, body):
         self.ok(num_checkpoints_written=4)
@@ -798,6 +872,7 @@ ROUTES = {
     "GET /zones": _Handler.zones,
     "POST /init-pose": _Handler.init_pose,
     "POST /relocalize": _Handler.relocalize,
+    "GET /events": _Handler.events,
     "POST /checkpoint": _Handler.checkpoint,
     "GET /sessions": _Handler.sessions,
     "POST /sessions/freeze/plan": _Handler.freeze_plan,

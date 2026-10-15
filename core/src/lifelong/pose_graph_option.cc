@@ -26,7 +26,8 @@ const utils::config::Schema& LifelongSchema() {
       {"",
        {"optimization", "constraint_weight", "session_manager", "constraint_builder", "trimmer",
         "trim", "trim_every_n_optimizations", "checkpoint_min_interval",
-        "gc_unfrozen_after_n_boots"}},
+        "gc_unfrozen_after_n_boots", "pose_correction_event_translation",
+        "pose_correction_event_rotation"}},
       {"optimization", {"optimize_every_n_nodes", "max_num_iterations", "num_threads"}},
       {"constraint_weight",
        {"odometry_translation_stddev", "odometry_rotation_stddev",
@@ -88,6 +89,10 @@ PoseGraphOption LoadPoseGraphOption(const YAML::Node& root) {
       node, "checkpoint_min_interval", common::ToSeconds(option.checkpoint_min_interval)));
   option.gc_unfrozen_after_n_boots =
       LoadOption(node, "gc_unfrozen_after_n_boots", option.gc_unfrozen_after_n_boots);
+  option.pose_correction_event_translation = LoadOption(node, "pose_correction_event_translation",
+                                                        option.pose_correction_event_translation);
+  option.pose_correction_event_rotation =
+      LoadOption(node, "pose_correction_event_rotation", option.pose_correction_event_rotation);
   CHECK_GE(option.trimmer.min_recovered_stddev,
            option.constraint_weight.odometry_translation_stddev)
       << "a recovered constraint may not be tighter than the raw measurements it summarizes";

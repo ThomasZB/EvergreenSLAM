@@ -108,7 +108,7 @@ class ZoneTest(EgsTestCase):
                 "zone", "add", "places/kitchen/slope", "--rect", "1", "-1", "3", "1", *extra
             )
             self.assertEqual(code, 1, out)
-            self.assertIn("not aligned to the base map", out)
+            self.assertIn("not linked to the base map", out)
             self.assertFalse(os.path.exists(os.path.join(self.mem, "places/kitchen/slope")))
         code, out, _ = self.egs(
             "zone", "add", "places/kitchen/slope", "--rect", "1", "-1", "3", "1", "--frame", "anchor"

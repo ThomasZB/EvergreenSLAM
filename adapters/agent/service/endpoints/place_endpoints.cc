@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "service/graph/graph_reads.h"
+#include "service/graph/relocalization_report.h"
 #include "service/http/backend_task.h"
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"
@@ -90,19 +91,28 @@ void WriteResolvedAnchor(JsonWriter& writer, const lifelong::ResolvedAnchor& anc
   WritePose(writer, "pose", anchor.global_pose);
 }
 
-void HandleHere(ServiceContext& context, httplib::Response& response) {
+void HandleHere(ServiceContext& context, const httplib::Request& request,
+                httplib::Response& response) {
+  const std::optional<std::string> relocalization_param = OptionalParam(request, "relocalization");
+  const std::optional<int64_t> relocalization_id =
+      relocalization_param.has_value()
+          ? std::optional<int64_t>(ParseInt("relocalization", *relocalization_param))
+          : std::nullopt;
   const std::vector<PlaceFile> places = context.places.Scan().Unique();
   struct Reading {
     RobotReading robot;
     std::vector<lifelong::ResolvedAnchor> resolved;
     BaseAlignment alignment;
     int num_solves = 0;
+    std::optional<lifelong::RelocalizationStatus> relocalization;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
     return Reading{ReadRobotOnTask(pose_graph, context.hooks),
                    pose_graph.anchors().ResolveAll(pose_graph.graph()),
-                   ReadBaseAlignmentOnTask(pose_graph), NumSolves(pose_graph)};
+                   ReadBaseAlignmentOnTask(pose_graph), NumSolves(pose_graph),
+                   relocalization_id.has_value() ? pose_graph.relocalization(*relocalization_id)
+                                                 : pose_graph.latest_relocalization()};
   });
 
   struct Candidate {
@@ -137,6 +147,7 @@ void HandleHere(ServiceContext& context, httplib::Response& response) {
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base);
   WriteLocalization(writer, reading.robot);
+  WriteRelocalization(writer, reading.relocalization, context.relocalizations);
   writer.Key("current");
   if (current.has_value()) {
     const Candidate& place = candidates[*current];
@@ -353,6 +364,7 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
   struct Outcome {
     std::optional<std::string> refusal;
     std::optional<Eigen::Affine2d> pose;
+    std::optional<lifelong::RelocalizationId> request_id;
     int num_solves = 0;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
@@ -374,12 +386,19 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
     } else {
       result.pose = given;
     }
-    pose_graph.SetInitialPose(*result.pose);
+    result.request_id = pose_graph.SetInitialPose(*result.pose);
+    context.relocalizations.Remember(
+        *result.request_id, RelocalizationRequest{anchor.has_value() ? "place" : "pose", anchor});
     return result;
   });
 
   JsonWriter writer = BeginReceipt(outcome.refusal);
   writer.Field("at_num_solves", outcome.num_solves);
+  if (outcome.request_id.has_value()) {
+    writer.Field("request_id", static_cast<int64_t>(*outcome.request_id));
+  } else {
+    writer.NullField("request_id");
+  }
   WritePose(writer, "pose", outcome.pose);
   writer.EndObject();
   SendJson(response, writer);
@@ -388,9 +407,9 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
 }  // namespace
 
 void RegisterPlaceEndpoints(Routes& server, ServiceContext& context) {
-  server.Get("/here",
-             TaskRoute(context, [&context](const httplib::Request&, httplib::Response& response) {
-               HandleHere(context, response);
+  server.Get("/here", TaskRoute(context, [&context](const httplib::Request& request,
+                                                    httplib::Response& response) {
+               HandleHere(context, request, response);
              }));
   server.Post("/place/save", TaskRoute(context, [&context](const httplib::Request& request,
                                                            httplib::Response& response) {

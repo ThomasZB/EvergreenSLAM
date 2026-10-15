@@ -194,6 +194,20 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("removed places/dock/ramp/zone.yaml", self.ok("zone", "rm", "places/dock/ramp"))
         self.assertEqual(self.ok("zone", "ls").splitlines()[0], "no zones")
 
+        # One session and no other to match against: the request settles with nothing to try.
+        code, out, _ = self.egs("init-pose", "--place", "places/dock")
+        self.assertEqual(code, 1, out)
+        self.assertIn("no_match (0 candidates)", out)
+        self.assertRegex(self.ok("here"), r"(?m)^relocalization 1 place \(anchor \d+\) no_match")
+        events = self.ok("events")
+        self.assertRegex(events, r"(?m)^\d+ relocalization request 1 no_match \(0 candidates\)$")
+        page = json.loads(self.ok("events", "--json"))
+        self.assertFalse(page["lost"])
+        self.assertEqual(
+            self.ok("events", "--since", str(page["next_seq"])).splitlines(),
+            ["next_seq %d" % page["next_seq"]],
+        )
+
         self._fs()
 
         ls = self.ok("session", "ls")

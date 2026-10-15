@@ -47,6 +47,47 @@ def meters(d):
     return "-" if d is None else "%.1fm" % d
 
 
+def correction(r):
+    m, rad = r.get("correction_m"), r.get("correction_rad")
+    if m is None or rad is None:
+        return "-"
+    return "%.2f m %d°" % (m, round(math.degrees(rad)))
+
+
+def relocalization(r):
+    head = "relocalization %s %s%s %s" % (
+        r.get("id"),
+        r.get("kind"),
+        "" if r.get("anchor") is None else " (anchor %s)" % r["anchor"],
+        r.get("state"),
+    )
+    return head + _outcome_tail(r)
+
+
+def _outcome_tail(r):
+    state = r.get("state")
+    if state == "matched":
+        return ": corrected " + correction(r)
+    if state == "no_match":
+        return " (%s candidates)" % r.get("candidates")
+    if state == "superseded":
+        by = r.get("superseded_by")
+        return " (fed session dropped)" if by is None else " by %s" % by
+    return ""
+
+
+def event(e):
+    kind = e.get("kind")
+    head = "%s %s" % (e.get("seq"), kind)
+    if kind == "relocalization":
+        return "%s request %s %s%s" % (head, e.get("request_id"), e.get("state"), _outcome_tail(e))
+    if kind == "pose_correction":
+        return "%s session %s moved %s" % (head, e.get("session"), correction(e))
+    if kind == "fed_session_dropped":
+        return "%s session %s, fed now %s" % (head, e.get("session"), e.get("fed_now"))
+    return "%s session %s" % (head, e.get("session"))
+
+
 def clock_hour(robot, p):
     """Bearing of p seen from the robot as a clock hour: 12 ahead, 3 right, 9 left."""
     if robot is None or p is None:

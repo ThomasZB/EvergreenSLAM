@@ -137,6 +137,7 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   RegisterPoseEndpoints(routes, impl_->context);
   RegisterPlaceEndpoints(routes, impl_->context);
   RegisterSessionEndpoints(routes, impl_->context);
+  RegisterEventsEndpoints(routes, impl_->context, impl_->instance_id);
   RegisterViewEndpoints(routes, impl_->context);
   RegisterFsEndpoints(routes, impl_->context);
   RegisterMapsEndpoints(routes, impl_->context);

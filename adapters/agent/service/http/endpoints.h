@@ -23,6 +23,9 @@ void RegisterPlaceEndpoints(Routes& server, ServiceContext& context);
 void RegisterSessionEndpoints(Routes& server, ServiceContext& context);
 // /snapshot, /snapshots/file, and /view when the renderer is built.
 void RegisterViewEndpoints(Routes& server, ServiceContext& context);
+// /events.
+void RegisterEventsEndpoints(Routes& server, ServiceContext& context,
+                             const std::string& instance_id);
 // /fs/ls, tree, cat, grep, write, append, mkdir, mv, rm.
 void RegisterFsEndpoints(Routes& server, ServiceContext& context);
 // /maps, /maps/new, /maps/open.

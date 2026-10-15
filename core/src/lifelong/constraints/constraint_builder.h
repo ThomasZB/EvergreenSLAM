@@ -15,6 +15,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <atomic>
+#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -40,6 +41,8 @@ namespace evergreenslam::lifelong {
 // stateless per-pair match chain fans out to workers.
 class ConstraintBuilder {
  public:
+  using MatchObserver = std::function<void(bool accepted)>;
+
   explicit ConstraintBuilder(ConstraintHandle& handle,
                              const ConstraintBuilderOption& option = ConstraintBuilderOption(),
                              const ConstraintWeightOption& weight = ConstraintWeightOption());
@@ -52,8 +55,9 @@ class ConstraintBuilder {
   // Operator relocalization, so no attempted_pairs_ or drift gate: a resent pose retries pairs.
   // With a prior, finished submaps of other sessions whose footprint reaches it within the
   // relocalization window are matched from the prior; without one, whole grids over every heading.
-  void SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
-                                 int budget = -1);
+  // Returns the number of candidates selected; inline matches report before it returns.
+  int SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
+                                int budget = -1, MatchObserver observer = nullptr);
 
   // Results already enqueued still need a queue drain; WaitUntilQuiescent alternates the two.
   void WaitForMatches() const;
@@ -104,16 +108,17 @@ class ConstraintBuilder {
                                             const SubmapRecord& record) const;
   bool IsEligiblePair(const NodeId& node_id, const SubmapId& submap_id,
                       const SubmapRecord& record) const;
-  void RunRound(std::vector<LoopCandidate> candidates, int budget,
-                PriorSource source = PriorSource::GRAPH,
-                const Eigen::Affine2d& external_prior = Eigen::Affine2d::Identity());
+  int RunRound(std::vector<LoopCandidate> candidates, int budget,
+               PriorSource source = PriorSource::GRAPH,
+               const Eigen::Affine2d& external_prior = Eigen::Affine2d::Identity(),
+               const MatchObserver& observer = nullptr);
   std::optional<MatchInput> PrepareMatch(const LoopCandidate& candidate, PriorSource source,
                                          const Eigen::Affine2d& external_prior);
   std::shared_ptr<const utils::scan_matching::PrecomputationGridStack> PrecomputationFor(
       const SubmapId& submap_id, const std::shared_ptr<const mapping::Submap>& submap);
   // Thread safe: reads only the input and the stateless coarse matcher.
   std::optional<Constraint> RunMatch(const MatchInput& input) const;
-  void ApplyMatchResult(const std::optional<Constraint>& constraint);
+  bool ApplyMatchResult(const std::optional<Constraint>& constraint);
 
   ConstraintHandle& handle_;
   ConstraintBuilderOption option_;

@@ -20,6 +20,7 @@
 #include "lifelong/sessions/frozen_links.h"
 #include "service/graph/graph_reads.h"
 #include "service/graph/plan_report.h"
+#include "service/graph/relocalization_report.h"
 #include "service/http/backend_task.h"
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"
@@ -137,6 +138,7 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
     int num_orphans = 0;
     int num_solves = 0;
     RobotReading robot;
+    std::optional<lifelong::RelocalizationStatus> relocalization;
   };
   PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
@@ -154,6 +156,7 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
       result.num_orphans += anchor.state == lifelong::AnchorState::ORPHAN ? 1 : 0;
     }
     result.num_solves = NumSolves(pose_graph);
+    result.relocalization = pose_graph.latest_relocalization();
     return result;
   });
   const int closures_delta = reading.closures - context.closures_baseline;
@@ -169,6 +172,7 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
       .Field("aligned_to_base", reading.alignment.aligned_to_base)
       .Field("phase", reading.phase);
   WriteLocalization(writer, reading.robot);
+  WriteRelocalization(writer, reading.relocalization, context.relocalizations);
   writer.Field("closures_delta", closures_delta)
       .Field("num_anchors", reading.num_anchors)
       .Field("num_orphans", reading.num_orphans)
@@ -378,12 +382,19 @@ void HandleRemoveApply(ServiceContext& context, const httplib::Request& request,
 
 void HandleRelocalize(ServiceContext& context, httplib::Response& response) {
   PoseGraph& pose_graph = context.pose_graph;
-  const int num_solves = RunOnBackend(pose_graph, [&] {
-    pose_graph.RelocalizeGlobally();
-    return NumSolves(pose_graph);
+  struct Outcome {
+    lifelong::RelocalizationId request_id = 0;
+    int num_solves = 0;
+  };
+  const Outcome outcome = RunOnBackend(pose_graph, [&] {
+    const lifelong::RelocalizationId id = pose_graph.RelocalizeGlobally();
+    context.relocalizations.Remember(id, RelocalizationRequest{"global", std::nullopt});
+    return Outcome{id, NumSolves(pose_graph)};
   });
   JsonWriter writer = BeginReceipt(std::nullopt);
-  writer.Field("at_num_solves", num_solves).EndObject();
+  writer.Field("at_num_solves", outcome.num_solves)
+      .Field("request_id", static_cast<int64_t>(outcome.request_id))
+      .EndObject();
   SendJson(response, writer);
 }
 

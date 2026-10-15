@@ -119,18 +119,18 @@ void ConstraintBuilder::SearchForSubmapOnTask(const SubmapId& submap_id, int bud
   RunRound(CandidatesForSubmap(submap_id), budget);
 }
 
-void ConstraintBuilder::SearchForNodeAroundOnTask(const NodeId& node_id,
-                                                  const std::optional<Eigen::Affine2d>& prior,
-                                                  int budget) {
+int ConstraintBuilder::SearchForNodeAroundOnTask(const NodeId& node_id,
+                                                 const std::optional<Eigen::Affine2d>& prior,
+                                                 int budget, MatchObserver observer) {
   if (!handle_.graph().HasNode(node_id)) {
-    return;
+    return 0;
   }
   if (prior.has_value()) {
-    RunRound(CandidatesAround(node_id, prior), budget, PriorSource::EXTERNAL, *prior);
-    return;
+    return RunRound(CandidatesAround(node_id, prior), budget, PriorSource::EXTERNAL, *prior,
+                    observer);
   }
-  RunRound(CandidatesAround(node_id, std::nullopt), std::numeric_limits<int>::max(),
-           PriorSource::NONE);
+  return RunRound(CandidatesAround(node_id, std::nullopt), std::numeric_limits<int>::max(),
+                  PriorSource::NONE, Eigen::Affine2d::Identity(), observer);
 }
 
 void ConstraintBuilder::WaitForMatches() const {
@@ -253,26 +253,39 @@ bool ConstraintBuilder::IsEligiblePair(const NodeId& node_id, const SubmapId& su
   return attempted_pairs_.count({node_id, submap_id}) == 0;
 }
 
-void ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budget,
-                                 PriorSource source, const Eigen::Affine2d& external_prior) {
+int ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budget,
+                                PriorSource source, const Eigen::Affine2d& external_prior,
+                                const MatchObserver& observer) {
   const std::vector<LoopCandidate> selected = sampler_.Select(std::move(candidates), budget);
   for (const LoopCandidate& candidate : selected) {
     attempted_pairs_.insert({candidate.node_id, candidate.submap_id});
     num_matches_attempted_.fetch_add(1);
     std::optional<MatchInput> input = PrepareMatch(candidate, source, external_prior);
     if (!input.has_value()) {
+      if (observer) {
+        observer(false);
+      }
       continue;
     }
     if (pool_ == nullptr) {
-      ApplyMatchResult(RunMatch(*input));
+      const bool accepted = ApplyMatchResult(RunMatch(*input));
+      if (observer) {
+        observer(accepted);
+      }
       continue;
     }
-    pool_->Submit([this, input = std::move(*input)] {
+    pool_->Submit([this, input = std::move(*input), observer] {
       const std::optional<Constraint> constraint = RunMatch(input);
       // Graph writes happen on the backend task, never on a worker.
-      handle_.Enqueue([this, constraint] { ApplyMatchResult(constraint); });
+      handle_.Enqueue([this, constraint, observer] {
+        const bool accepted = ApplyMatchResult(constraint);
+        if (observer) {
+          observer(accepted);
+        }
+      });
     });
   }
+  return static_cast<int>(selected.size());
 }
 
 std::optional<ConstraintBuilder::MatchInput> ConstraintBuilder::PrepareMatch(
@@ -424,16 +437,17 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
   return constraint;
 }
 
-void ConstraintBuilder::ApplyMatchResult(const std::optional<Constraint>& constraint) {
+bool ConstraintBuilder::ApplyMatchResult(const std::optional<Constraint>& constraint) {
   if (!constraint.has_value()) {
-    return;
+    return false;
   }
   if (!handle_.AddConstraintIfEndpointsLive(*constraint)) {
     num_constraints_dropped_.fetch_add(1);
-    return;
+    return false;
   }
   num_constraints_added_.fetch_add(1);
   drift_.NoteClosure(handle_.graph(), constraint->to->node_id(), constraint->from.submap_id());
+  return true;
 }
 
 }  // namespace evergreenslam::lifelong

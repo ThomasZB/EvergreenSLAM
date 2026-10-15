@@ -58,7 +58,7 @@ class CommandTest(EgsTestCase):
         self.assertEqual(code, 0)
         lines = out.splitlines()
         self.assertEqual(
-            lines[0], "aligned to base: no (positions below are unreliable until aligned)"
+            lines[0], "linked to base: no (positions below are unreliable until linked)"
         )
         self.assertEqual(lines[1], "current places/dock 0.4m")
         self.assertTrue(lines[2].startswith("closest places/dock"))
@@ -71,7 +71,8 @@ class CommandTest(EgsTestCase):
         self.write("index.tsv", "#path anchor state x y theta num_solves\nplaces/dock\t1\n")
         code, out, _ = self.egs("status")
         self.assertEqual(code, 0)
-        self.assertIn("frozen base yes  aligned to base yes", out)
+        self.assertIn("frozen base yes  linked to base yes", out)
+        self.assertNotIn("phase", out)
         self.assertIn("closures +2", out)
         self.assertIn(
             "base 0.72 (cover 85%)  since base match 3.2m  match 0.82 (avg 0.80)", out.splitlines()
@@ -172,9 +173,9 @@ class CommandTest(EgsTestCase):
             self.assertTrue(f.read().startswith(b"\x89PNG"))
 
     def test_init_pose(self):
-        code, out, _ = self.egs("init-pose", "1.5", "-2", "0.3")
+        code, out, _ = self.egs("init-pose", "1.5", "-2", "0.3", "--no-wait")
         self.assertEqual(code, 0)
-        self.assertIn("initial pose set to 1.50,-2.00,0.30", out)
+        self.assertIn("initial pose 1.50,-2.00,0.30 sent as request 1", out)
         code, out, _ = self.egs("init-pose", "--place", "places/dock")
         self.assertEqual(code, 0)
         self.assertEqual(self.requests("POST", "/init-pose")[1][2], {"anchor": "1"})

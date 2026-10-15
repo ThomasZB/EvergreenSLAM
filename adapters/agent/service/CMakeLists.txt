@@ -12,6 +12,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 add_library(evergreenslam_agent STATIC
             agent_service.cc
+            endpoints/events_endpoints.cc
             endpoints/fs_endpoints.cc
             endpoints/maps_endpoints.cc
             endpoints/place_endpoints.cc
@@ -25,6 +26,7 @@ add_library(evergreenslam_agent STATIC
             graph/match_score_average.cc
             graph/plan_report.cc
             graph/pose_history.cc
+            graph/relocalization_report.cc
             graph/snapshot_exporter.cc
             http/http_reply.cc
             http/json_writer.cc
