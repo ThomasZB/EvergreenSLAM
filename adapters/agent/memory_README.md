@@ -124,6 +124,8 @@ One JSON object per line, appended, never rewritten:
 ```
 
 - `recorded_at`: Unix ns, strictly increasing within a file; also the line's id.
+- `observed_at`: optional, Unix ns on the robot's sensor clock: when it was seen, if earlier than
+  the write (`egs observe --offset ... --at`, e.g. a photo's time). Not an id.
 - `source`: `agent` or `human`.
 - `result`: `seen` (it is there), `not_observed` (could not check: occluded, not looked),
   `absent` (checked, not there). One `not_observed` is not `absent`.

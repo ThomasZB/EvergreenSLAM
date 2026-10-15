@@ -13,6 +13,7 @@
 #define EVERGREENSLAM_ADAPTERS_AGENT_SERVICE_HTTP_SERVICE_CONTEXT_H_
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 
 #include "lifelong/pose_graph.h"
@@ -34,6 +35,9 @@ struct ServiceContext {
   std::string views_dir() const;
 
   lifelong::PoseGraph& pose_graph;
+  // Odd while `hooks.drop_session` runs (it is wrapped to advance this): /pose pairs a host sample
+  // with ActiveSessionToGlobal() only between two equal even reads (API.md, "Epoch pairing").
+  std::atomic<uint64_t> drop_seqlock{0};
   const AgentServiceHooks hooks;
   const PlaceStore places;
   const FsSandbox sandbox;
@@ -47,7 +51,7 @@ struct ServiceContext {
   // Set once switch_map accepted a request; this service is torn down before it would clear.
   std::atomic<bool> switch_pending{false};
 
-  // Worker-thread state: httplib runs one worker, so none of this is shared.
+  // Serial-executor state: only one handler runs at a time, so none of this is shared.
   HereTracker here;
   int closures_baseline = 0;
   SnapshotExporter snapshots;

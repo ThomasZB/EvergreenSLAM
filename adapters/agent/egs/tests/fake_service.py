@@ -59,6 +59,14 @@ class FakeState:
         self.view_dropped = None  # e.g. "robot,scan": legend's dropped= item
         self.solves = 100
         self.robot = pose(0.0, 0.0, 0.0)
+        # /anchors/{id}?at=: the robot then, or why not (too_old, in_future, gap, no_robot_pose).
+        self.robot_at = pose(0.0, 0.0, 0.0)
+        self.at_refusal = None
+        # GET /pose: seq advances every pose_seq_every polls; the drop_pose_polls get no answer.
+        self.pose = pose(1.0, 2.0, 0.5)
+        self.pose_seq_every = 1
+        self.pose_polls = 0
+        self.drop_pose_polls = ()
         self.anchors = {}
         self.next_id = 50
         self.keyframe = True
@@ -328,11 +336,38 @@ class _Handler(BaseHTTPRequestHandler):
         if a is None:
             return self.refuse("unknown_anchor")
         fields = dict(a)
-        if q.get("robot") == "1":
+        if q.get("robot") == "1" or "at" in q:
             fields["robot"] = self.st.robot
             fields["has_frozen_base"] = self.st.has_frozen_base
             fields["aligned_to_base"] = self.st.aligned_to_base
+        if "at" in q:
+            fields["at_ns"] = int(q["at"])
+            if self.st.at_refusal:
+                return self.refuse(self.st.at_refusal, **dict(fields, robot=None))
+            fields["robot"] = self.st.robot_at
         self.ok(**fields)
+
+    def pose(self, q, body):
+        st = self.st
+        with st.lock:
+            st.pose_polls += 1
+            polls = st.pose_polls
+        if polls in st.drop_pose_polls:
+            self.close_connection = True
+            return
+        seq = (polls + st.pose_seq_every - 1) // st.pose_seq_every
+        self._send(
+            200,
+            {
+                "ok": True,
+                "reason": None,
+                "seq": seq,
+                "stamp_ns": 1785000000000000000 + seq * 10**8,
+                "age_s": 0.04,
+                "pose": st.pose,
+                "velocity": {"vx": 0.3, "vy": 0.0, "omega": 0.1},
+            },
+        )
 
     def anchors_all(self, q, body):
         fields = {
@@ -755,6 +790,7 @@ ROUTES = {
     "POST /maps/new": _Handler.maps_new,
     "POST /maps/open": _Handler.maps_open,
     "GET /here": _Handler.here,
+    "GET /pose": _Handler.pose,
     "POST /place/save": _Handler.place_save,
     "GET /anchors": _Handler.anchors_all,
     "POST /snapshot": _Handler.snapshot,

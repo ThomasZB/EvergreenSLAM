@@ -56,7 +56,8 @@ AgentHost::AgentHost(const AgentHostOption& option, lifelong::PoseGraph& pose_gr
 AgentHost::~AgentHost() { Stop(); }
 
 void AgentHost::Update(common::Time time, const Eigen::Affine2d& local_pose,
-                       const sensor::TimedPointCloud& scan, double match_score) {
+                       const Eigen::Vector3d& velocity, const sensor::TimedPointCloud& scan,
+                       double match_score) {
   sensor::PointCloud cloud;
   cloud.points().reserve(scan.size());
   for (const sensor::TimedPoint2d& point : scan) {
@@ -65,6 +66,7 @@ void AgentHost::Update(common::Time time, const Eigen::Affine2d& local_pose,
   std::lock_guard<std::mutex> lock(mutex_);
   frame_ = agent::HostFrame{agent::StampedPose{time, local_pose}, std::move(cloud), match_score,
                             match_score_average_.Add(time, match_score)};
+  pose_history_.Add(time, local_pose, velocity);
 }
 
 void AgentHost::OnBackendStarted() { service_->OnBackendStarted(); }
@@ -72,6 +74,7 @@ void AgentHost::OnBackendStarted() { service_->OnBackendStarted(); }
 void AgentHost::OnFedSessionDropped() {
   std::lock_guard<std::mutex> lock(mutex_);
   frame_.reset();
+  pose_history_.Reset();
   match_score_average_ = agent::MatchScoreAverage();
 }
 
@@ -84,6 +87,14 @@ agent::AgentServiceHooks AgentHost::Hooks(MapSwitchHook switch_map, SessionDropH
   hooks.current_frame = [this]() -> std::optional<agent::HostFrame> {
     std::lock_guard<std::mutex> lock(mutex_);
     return frame_;
+  };
+  hooks.current_pose = [this]() -> std::optional<agent::HostPose> {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pose_history_.Latest();
+  };
+  hooks.pose_at = [this](common::Time time) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pose_history_.At(time);
   };
   return hooks;
 }

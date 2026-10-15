@@ -145,6 +145,11 @@ class IntegrationTest(unittest.TestCase):
         cup = json.loads(self.ok("where", "places/dock/shelf/cup", "--json"))
         self.assertEqual((cup["precision"], cup["place"]), ("offset", "places/dock"))
         self.assertEqual(len(json.loads(self.ok("--json", "here"))["robot"]), 3)
+        now = json.loads(self.ok("pose", "--json"))
+        self.assertEqual(len(now["pose"]), 3)
+        stamp = str(now["stamp_ns"])
+        then = self.ok("observe", "places/dock/shelf/cup", "--offset", "0.5", "0", "0", "--at", stamp)
+        self.assertIn("written to places/dock/shelf/cup/node.yaml", then)
         photo = os.path.join(self.tmp, "cup.PNG")
         with open(photo, "wb") as f:
             f.write(PNG_SIGNATURE + bytes(range(256)))

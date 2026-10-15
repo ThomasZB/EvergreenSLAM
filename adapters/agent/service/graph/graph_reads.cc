@@ -59,6 +59,38 @@ RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentS
   return reading;
 }
 
+RobotAtReading ReadRobotAtOnTask(const lifelong::PoseGraph& pose_graph,
+                                 const AgentServiceHooks& hooks, common::Time time) {
+  RobotAtReading reading;
+  const std::optional<lifelong::SessionId> fed = pose_graph.session_manager().fed_session();
+  if (!fed.has_value() || !pose_graph.graph().HasSession(*fed) || !hooks.pose_at) {
+    reading.refusal = "no_robot_pose";
+    return reading;
+  }
+  const PoseAt at = hooks.pose_at(time);
+  switch (at.refusal) {
+    case PoseAt::Refusal::NONE:
+      break;
+    case PoseAt::Refusal::NO_SAMPLE:
+      reading.refusal = "no_robot_pose";
+      return reading;
+    case PoseAt::Refusal::TOO_OLD:
+      reading.refusal = "too_old";
+      return reading;
+    case PoseAt::Refusal::IN_FUTURE:
+      reading.refusal = "in_future";
+      return reading;
+    case PoseAt::Refusal::GAP:
+      reading.refusal = "gap";
+      return reading;
+  }
+  const lifelong::PoseGraphData& graph = pose_graph.graph();
+  const Eigen::Affine2d session_to_global =
+      graph.ComputeSessionToGlobal(*fed).value_or(graph.session(*fed).local_to_global);
+  reading.pose = Eigen::Affine2d(session_to_global * *at.local_pose);
+  return reading;
+}
+
 std::optional<common::Time> NewestNodeTime(const lifelong::PoseGraphData& graph) {
   std::optional<common::Time> newest;
   for (const auto& [id, session] : graph.sessions()) {

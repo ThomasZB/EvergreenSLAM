@@ -12,23 +12,25 @@
 #ifndef EVERGREENSLAM_ADAPTERS_AGENT_SERVICE_HTTP_ENDPOINTS_H_
 #define EVERGREENSLAM_ADAPTERS_AGENT_SERVICE_HTTP_ENDPOINTS_H_
 
-#include "service/http/httplib_include.h"
+#include "service/http/routes.h"
 #include "service/http/service_context.h"
 
 namespace evergreenslam::agent {
 
 // /here, /place/save, /anchors, /anchors/{id}, /init-pose.
-void RegisterPlaceEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterPlaceEndpoints(Routes& server, ServiceContext& context);
 // /status, /sessions/**, /relocalize, /checkpoint.
-void RegisterSessionEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterSessionEndpoints(Routes& server, ServiceContext& context);
 // /snapshot, /snapshots/file, and /view when the renderer is built.
-void RegisterViewEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterViewEndpoints(Routes& server, ServiceContext& context);
 // /fs/ls, tree, cat, grep, write, append, mkdir, mv, rm.
-void RegisterFsEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterFsEndpoints(Routes& server, ServiceContext& context);
 // /maps, /maps/new, /maps/open.
-void RegisterMapsEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterMapsEndpoints(Routes& server, ServiceContext& context);
 // /zones.
-void RegisterZonesEndpoints(httplib::Server& server, ServiceContext& context);
+void RegisterZonesEndpoints(Routes& server, ServiceContext& context);
+// /pose, concurrent with the serial handlers.
+void RegisterPoseEndpoints(Routes& server, ServiceContext& context);
 
 }  // namespace evergreenslam::agent
 

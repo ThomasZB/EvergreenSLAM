@@ -254,23 +254,39 @@ void HandlePlaceSave(ServiceContext& context, const httplib::Request& request,
 void HandleAnchor(ServiceContext& context, const httplib::Request& request,
                   httplib::Response& response) {
   const lifelong::AnchorId id = ParseAnchorId(request.matches[1]);
-  const bool with_robot = BoolParam(request, "robot", false);
+  const std::optional<std::string> at_param = OptionalParam(request, "at");
+  const std::optional<common::Time> at =
+      at_param.has_value()
+          ? std::optional<common::Time>(common::FromUnixNanos(ParseInt("at", *at_param)))
+          : std::nullopt;
+  const bool with_robot = at.has_value() || BoolParam(request, "robot", false);
   struct Reading {
     std::optional<lifelong::ResolvedAnchor> resolved;
-    RobotReading robot;
+    std::optional<Eigen::Affine2d> robot;
+    std::optional<std::string> robot_refusal;
     BaseAlignment alignment;
     int num_solves = 0;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
-    return Reading{pose_graph.anchors().Resolve(pose_graph.graph(), id),
-                   with_robot ? ReadRobotOnTask(pose_graph, context.hooks) : RobotReading{},
-                   with_robot ? ReadBaseAlignmentOnTask(pose_graph) : BaseAlignment{},
-                   NumSolves(pose_graph)};
+    Reading result{pose_graph.anchors().Resolve(pose_graph.graph(), id), std::nullopt, std::nullopt,
+                   BaseAlignment{}, NumSolves(pose_graph)};
+    if (at.has_value()) {
+      RobotAtReading robot = ReadRobotAtOnTask(pose_graph, context.hooks, *at);
+      result.robot = robot.pose;
+      result.robot_refusal = std::move(robot.refusal);
+    } else if (with_robot) {
+      result.robot = ReadRobotOnTask(pose_graph, context.hooks).pose;
+    }
+    if (with_robot) {
+      result.alignment = ReadBaseAlignmentOnTask(pose_graph);
+    }
+    return result;
   });
 
-  JsonWriter writer = BeginReceipt(
-      reading.resolved.has_value() ? std::nullopt : std::optional<std::string>("unknown_anchor"));
+  JsonWriter writer =
+      BeginReceipt(!reading.resolved.has_value() ? std::optional<std::string>("unknown_anchor")
+                                                 : reading.robot_refusal);
   writer.Field("at_num_solves", reading.num_solves);
   if (reading.resolved.has_value()) {
     WriteResolvedAnchor(writer, *reading.resolved);
@@ -280,9 +296,12 @@ void HandleAnchor(ServiceContext& context, const httplib::Request& request,
     writer.Field("anchor", id);
   }
   if (with_robot) {
-    WritePose(writer, "robot", reading.robot.pose);
+    WritePose(writer, "robot", reading.robot);
     writer.Field("has_frozen_base", reading.alignment.has_frozen_base)
         .Field("aligned_to_base", reading.alignment.aligned_to_base);
+  }
+  if (at.has_value()) {
+    writer.Field("at_ns", common::ToUnixNanos(*at));
   }
   writer.EndObject();
   SendJson(response, writer);
@@ -368,7 +387,7 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
 
 }  // namespace
 
-void RegisterPlaceEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterPlaceEndpoints(Routes& server, ServiceContext& context) {
   server.Get("/here",
              TaskRoute(context, [&context](const httplib::Request&, httplib::Response& response) {
                HandleHere(context, response);

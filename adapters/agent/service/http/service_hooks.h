@@ -15,6 +15,8 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -42,6 +44,27 @@ struct HostFrame {
   double match_score_avg = 0.0;
 };
 
+// The newest frontend pose the host took, without a scan.
+struct HostPose {
+  StampedPose pose;
+  // Robot frame: [vx, vy, omega].
+  Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
+  // Counts every sample the host took, across fed-session drops.
+  uint64_t seq = 0;
+  // +1 per fed-session drop: a new frontend, a new local frame.
+  uint64_t epoch = 0;
+  // Host steady clock when the sample arrived.
+  std::chrono::steady_clock::time_point received;
+};
+
+// The frontend's local pose at a past time, interpolated in the host's pose history.
+struct PoseAt {
+  enum class Refusal { NONE, NO_SAMPLE, TOO_OLD, IN_FUTURE, GAP };
+  // Set exactly when refusal == NONE.
+  std::optional<Eigen::Affine2d> local_pose;
+  Refusal refusal = Refusal::NONE;
+};
+
 struct MapSwitchRequest {
   std::string name;
   bool create = false;
@@ -52,16 +75,20 @@ struct SessionDropRequest {
   lifelong::SessionId id;
 };
 
-// `current_frame` runs inside a backend task and may take only the host's own mutex: never
-// enqueue on or wait for the PoseGraph from it. Pose and scan are read under one lock, or a
-// scan-thread update between two reads would draw scan k+1 at pose k.
-// `switch_map` runs on the service's worker thread, never inside a task: it records the request
-// and returns at once; the host then stops this service, finishes the graph and boots the named
-// map, so the port disappears and comes back. Empty: the host cannot switch.
-// `drop_session` runs on the worker thread outside any task; the host blocks its frontend, calls
-// PoseGraph::DropFedSession, replaces the frontend, and returns the result. Empty: cannot drop.
+// `current_frame`, `current_pose` and `pose_at` run inside a backend task or on any pool thread
+// and may take only the host's own mutex: never enqueue on or wait for the PoseGraph from them.
+// Pose and scan are read under one lock, or a scan-thread update between two reads would draw
+// scan k+1 at pose k.
+// `switch_map` runs on the serial executor, never inside a task: it records the request and
+// returns at once; the host then stops this service, finishes the graph and boots the named map,
+// so the port disappears and comes back. Empty: the host cannot switch.
+// `drop_session` runs on the serial executor outside any task; the host blocks its frontend,
+// calls PoseGraph::DropFedSession, replaces the frontend, resets its pose history, and returns
+// the result. It is the only way the fed session may change frames. Empty: cannot drop.
 struct AgentServiceHooks {
   std::function<std::optional<HostFrame>()> current_frame;
+  std::function<std::optional<HostPose>()> current_pose;
+  std::function<PoseAt(common::Time)> pose_at;
   std::function<bool(const MapSwitchRequest&)> switch_map;
   std::function<lifelong::PoseGraph::DropFedSessionResult(const SessionDropRequest&)> drop_session;
 };

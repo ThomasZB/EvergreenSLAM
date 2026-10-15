@@ -24,6 +24,8 @@
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"
 #include "service/http/httplib_include.h"
+#include "service/http/routes.h"
+#include "service/http/serial_executor.h"
 #include "service/http/service_context.h"
 
 namespace evergreenslam::agent {
@@ -43,6 +45,10 @@ std::string NewInstanceId() {
   return id;
 }
 
+constexpr int kPoolThreads = 8;
+// At most 1 + 4 pool threads ever sit in serial handlers, so /pose always finds a free one.
+constexpr int kMaxSerialWaiting = 4;
+
 }  // namespace
 
 struct AgentService::Impl {
@@ -53,6 +59,7 @@ struct AgentService::Impl {
 
   ServiceContext context;
   const std::string instance_id = NewInstanceId();
+  SerialExecutor serial{kMaxSerialWaiting};
   httplib::Server server;
   std::thread listener;
   int port = -1;
@@ -79,9 +86,9 @@ void WriteInstanceFile(const ServiceContext& context, const std::string& instanc
   }
 }
 
-void RegisterRootEndpoint(httplib::Server& server, const ServiceContext& context,
+void RegisterRootEndpoint(Routes& server, const ServiceContext& context,
                           const std::string& instance_id) {
-  server.Get(
+  server.ConcurrentGet(
       "/root",
       Guarded([&context, &instance_id](const httplib::Request&, httplib::Response& response) {
         std::error_code error;
@@ -112,8 +119,9 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   const std::string& bind = option.bind;
   const int port = option.port;
   httplib::Server& server = impl_->server;
-  // One worker: the service-side state is single-threaded, and one connection must not pin it.
-  server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+  // Service-side state stays single-threaded on the serial executor; one request per connection,
+  // so an idle client never pins a pool thread.
+  server.new_task_queue = [] { return new httplib::ThreadPool(kPoolThreads); };
   server.set_keep_alive_max_count(1);
   server.set_payload_max_length(kMaxRequestBytes);
   server.set_error_handler([](const httplib::Request& request, httplib::Response& response) {
@@ -124,13 +132,15 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   });
 
   WriteInstanceFile(impl_->context, impl_->instance_id);
-  RegisterRootEndpoint(server, impl_->context, impl_->instance_id);
-  RegisterPlaceEndpoints(server, impl_->context);
-  RegisterSessionEndpoints(server, impl_->context);
-  RegisterViewEndpoints(server, impl_->context);
-  RegisterFsEndpoints(server, impl_->context);
-  RegisterMapsEndpoints(server, impl_->context);
-  RegisterZonesEndpoints(server, impl_->context);
+  Routes routes(server, impl_->serial);
+  RegisterRootEndpoint(routes, impl_->context, impl_->instance_id);
+  RegisterPoseEndpoints(routes, impl_->context);
+  RegisterPlaceEndpoints(routes, impl_->context);
+  RegisterSessionEndpoints(routes, impl_->context);
+  RegisterViewEndpoints(routes, impl_->context);
+  RegisterFsEndpoints(routes, impl_->context);
+  RegisterMapsEndpoints(routes, impl_->context);
+  RegisterZonesEndpoints(routes, impl_->context);
 
   impl_->port =
       port == 0 ? server.bind_to_any_port(bind) : (server.bind_to_port(bind, port) ? port : -1);

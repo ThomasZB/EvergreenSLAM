@@ -45,6 +45,12 @@ struct RobotReading {
   std::optional<double> since_base_match_m;
 };
 
+struct RobotAtReading {
+  std::optional<Eigen::Affine2d> pose;
+  // too_old, in_future, gap or no_robot_pose; empty exactly when `pose` is set.
+  std::optional<std::string> refusal;
+};
+
 struct BaseAlignment {
   bool has_frozen_base = false;
   // HasFrozenLink(graph, fed): the robot pose and the frozen anchors share one frame.
@@ -57,6 +63,10 @@ struct BaseAlignment {
 // given, receives the scan of that same host frame, empty whenever the pose is.
 RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentServiceHooks& hooks,
                              std::optional<sensor::PointCloud>* scan = nullptr);
+// The host's local pose at `time`, interpolated, times the fed session's current alignment, as
+// ReadRobotOnTask composes it.
+RobotAtReading ReadRobotAtOnTask(const lifelong::PoseGraph& pose_graph,
+                                 const AgentServiceHooks& hooks, common::Time time);
 std::optional<common::Time> NewestNodeTime(const lifelong::PoseGraphData& graph);
 // expansion() entry, BOOTSTRAP when absent.
 const char* SessionPhase(const lifelong::PoseGraph& pose_graph, lifelong::SessionId id);

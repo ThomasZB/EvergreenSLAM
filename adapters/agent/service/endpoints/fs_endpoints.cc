@@ -341,7 +341,7 @@ void HandleRemove(const ServiceContext& context, const httplib::Request& request
 
 }  // namespace
 
-void RegisterFsEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterFsEndpoints(Routes& server, ServiceContext& context) {
   const auto route = [&context](auto handler) {
     return Guarded(
         [&context, handler](const httplib::Request& request, httplib::Response& response) {

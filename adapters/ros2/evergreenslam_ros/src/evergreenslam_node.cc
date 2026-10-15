@@ -361,8 +361,8 @@ class EvergreenSlamNode : public rclcpp::Node {
     }
 #ifdef EVERGREENSLAM_WITH_AGENT
     if (agent_host_ != nullptr && matching != nullptr) {
-      agent_host_->Update(matching->time, matching->local_pose, timed_scan.point_cloud,
-                          matching->match_score);
+      agent_host_->Update(matching->time, matching->local_pose, matching->velocity,
+                          timed_scan.point_cloud, matching->match_score);
     }
 #endif
     Publish(ToRosTime(timed_scan.time), builder_->local_pose(),

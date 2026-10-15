@@ -37,6 +37,8 @@ Usage layer: call freely.
 | I saw it / looked and it is not there | `egs observe places/<path>` / `--result absent` (`--note ...`) |
 | keep a photo or file with what I saw | `egs observe places/<path> --attach <file>` (≤ 8 MiB; `egs fs cat <f> -o <file>` reads it back) |
 | it is 0.8 m ahead, 0.3 m left of the robot | `egs observe places/<path> --offset 0.8 0.3 0` (only within 10 m of its place) |
+| it was in a photo taken a moment ago | `egs observe places/<path> --offset 0.8 0.3 0 --at <stamp_ns>` (the robot's pose when the photo was taken, ≤ 10 s ago) |
+| robot pose for a program, at high rate | `egs pose --watch 10 --json` (one JSON line per new scan; Ctrl-C stops) |
 | go somewhere | `egs where` → give its `approach` pose to your navigator |
 | the navigator must avoid an area | `egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1` (robot frame: x ahead, y left; within 10 m of the place) |
 | list or delete keep-out zones | `egs zone ls` / `egs zone rm places/<place>/<name>` |
@@ -122,6 +124,10 @@ layers; the first output line of any preset shows its layers, so you learn the n
   - A `base` that drops and stays low while `cover` stays high, with `since base match` growing in
     an area that is mapped, means the pose is probably wrong: `egs view here`, then
     `egs init-pose --place places/<p>` or `egs relocalize`.
+- `--at` is the robot's sensor clock (its scan stamps), not this computer's: take the photo's time
+  on the robot, or read the robot's time now from `egs pose --json` (`stamp_ns`) to calibrate.
+  `too_old` (over 10 s ago), `in_future` (ahead of the newest scan: wrong clock) and `gap` (no
+  scans around then) write nothing.
 - `where` precision: `own` (its own place), `offset` (measured from the place above), `inherited`
   (the position of the place or offset above; not observed), `none` (no bound ancestor). Navigate
   to `approach`, never to `xy`.

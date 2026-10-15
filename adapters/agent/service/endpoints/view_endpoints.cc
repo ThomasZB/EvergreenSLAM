@@ -373,7 +373,7 @@ void HandleView(ServiceContext& context, const httplib::Request& request,
 
 }  // namespace
 
-void RegisterViewEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterViewEndpoints(Routes& server, ServiceContext& context) {
   server.Post("/snapshot",
               TaskRoute(context, [&context](const httplib::Request&, httplib::Response& response) {
                 HandleSnapshot(context, response);

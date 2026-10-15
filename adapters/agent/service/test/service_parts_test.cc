@@ -1,8 +1,8 @@
 /**
  * @file service_parts_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief The service's pure parts: JSON writer, plan token, place yaml, here hysteresis, snapshot
- *        pixels and trajectory decimation, sandbox rules.
+ * @brief The service's pure parts: JSON writer, plan token, place yaml, here hysteresis, pose
+ *        history, serial executor, snapshot pixels and trajectory decimation, sandbox rules.
  * @version 0.1
  * @date 2026-09-24
  *
@@ -13,18 +13,27 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "mapping/grid_mapping/probability_values.h"
 #include "service/graph/here_tracker.h"
 #include "service/graph/match_score_average.h"
 #include "service/graph/plan_report.h"
+#include "service/graph/pose_history.h"
 #include "service/graph/snapshot_exporter.h"
 #include "service/http/json_writer.h"
 #include "service/http/request_error.h"
+#include "service/http/serial_executor.h"
 #include "service/memory/fs_sandbox.h"
 #include "service/memory/place_store.h"
 #include "utils/transform/transform.h"
@@ -159,6 +168,121 @@ TEST(MatchScoreAverageTest, SeedsWithTheFirstSampleAndForgetsOverSecondsNotScans
   EXPECT_NEAR(slow_average, 0.8 * std::exp(-1.0), 1e-9);
   // A stamp that goes backwards changes nothing rather than extrapolating.
   EXPECT_DOUBLE_EQ(slow.Add(start, 1.0), slow_average);
+}
+
+TEST(PoseHistoryTest, InterpolatesAcrossTheAngleWrapAndRefusesOutsideItsSamples) {
+  using Refusal = PoseAt::Refusal;
+  const common::Time start = common::FromUnixSeconds(1785000000.0);
+  PoseHistory history;
+  EXPECT_EQ(history.At(start).refusal, Refusal::NO_SAMPLE);
+  history.Add(start, utils::transform::FromXYTheta(0.0, 0.0, 3.0), Eigen::Vector3d::Zero());
+  history.Add(start + common::FromSeconds(0.1), utils::transform::FromXYTheta(1.0, 2.0, -3.0),
+              Eigen::Vector3d::Zero());
+  history.Add(start + common::FromSeconds(0.9), utils::transform::FromXYTheta(5.0, 2.0, 0.0),
+              Eigen::Vector3d::Zero());
+
+  // Shortest arc: 3.0 to -3.0 passes through pi, not through 0.
+  const PoseAt mid = history.At(start + common::FromSeconds(0.025));
+  ASSERT_EQ(mid.refusal, Refusal::NONE);
+  EXPECT_NEAR(mid.local_pose->translation().x(), 0.25, 1e-9);
+  EXPECT_NEAR(mid.local_pose->translation().y(), 0.5, 1e-9);
+  EXPECT_NEAR(utils::transform::GetYaw(*mid.local_pose), 3.0 + 0.25 * (2.0 * M_PI - 6.0), 1e-9);
+  const PoseAt exact = history.At(start + common::FromSeconds(0.1));
+  ASSERT_EQ(exact.refusal, Refusal::NONE);
+  EXPECT_NEAR(exact.local_pose->translation().x(), 1.0, 1e-12);
+
+  EXPECT_EQ(history.At(start - common::FromSeconds(0.001)).refusal, Refusal::TOO_OLD);
+  EXPECT_EQ(history.At(start + common::FromSeconds(0.5)).refusal, Refusal::GAP);
+  const PoseAt ahead = history.At(start + common::FromSeconds(1.1));
+  ASSERT_EQ(ahead.refusal, Refusal::NONE);
+  EXPECT_NEAR(ahead.local_pose->translation().x(), 5.0, 1e-12);
+  EXPECT_EQ(history.At(start + common::FromSeconds(1.11)).refusal, Refusal::IN_FUTURE);
+}
+
+TEST(PoseHistoryTest, KeepsTenSecondsAndCountsSamplesAcrossResets) {
+  const common::Time start = common::FromUnixSeconds(1785000000.0);
+  PoseHistory history;
+  EXPECT_FALSE(history.Latest().has_value());
+  for (int i = 0; i <= 120; ++i) {
+    history.Add(start + common::FromSeconds(0.1 * i), utils::transform::FromXYTheta(i, 0.0, 0.0),
+                Eigen::Vector3d::Zero());
+  }
+  EXPECT_EQ(history.At(start + common::FromSeconds(1.95)).refusal, PoseAt::Refusal::TOO_OLD);
+  EXPECT_EQ(history.At(start + common::FromSeconds(2.0)).refusal, PoseAt::Refusal::NONE);
+
+  // Velocity in the robot frame: facing +y, moving +y in the local frame is moving forward.
+  history.Add(start + common::FromSeconds(12.1), utils::transform::FromXYTheta(0.0, 0.0, M_PI / 2),
+              Eigen::Vector3d(0.0, 1.0, 0.3));
+  std::optional<HostPose> latest = history.Latest();
+  ASSERT_TRUE(latest.has_value());
+  EXPECT_EQ(latest->seq, 122u);
+  EXPECT_EQ(latest->epoch, 0u);
+  EXPECT_NEAR(latest->velocity.x(), 1.0, 1e-12);
+  EXPECT_NEAR(latest->velocity.y(), 0.0, 1e-12);
+  EXPECT_NEAR(latest->velocity.z(), 0.3, 1e-12);
+
+  history.Reset();
+  EXPECT_FALSE(history.Latest().has_value());
+  EXPECT_EQ(history.At(start + common::FromSeconds(12.1)).refusal, PoseAt::Refusal::NO_SAMPLE);
+  history.Add(start, Eigen::Affine2d::Identity(), Eigen::Vector3d::Zero());
+  EXPECT_EQ(history.Latest()->seq, 123u);
+  EXPECT_EQ(history.Latest()->epoch, 1u);
+  // A stamp that goes back restarts the samples.
+  history.Add(start - common::FromSeconds(5.0), Eigen::Affine2d::Identity(),
+              Eigen::Vector3d::Zero());
+  EXPECT_EQ(history.At(start).refusal, PoseAt::Refusal::IN_FUTURE);
+}
+
+TEST(SerialExecutorTest, RunsOneAtATimeAndRefusesPastTheWaitLine) {
+  SerialExecutor executor(4);
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool entered = false;
+  bool release = false;
+  std::atomic<int> running{0};
+  std::atomic<int> max_running{0};
+  std::atomic<int> num_ran{0};
+  const auto body = [&] {
+    const int now = ++running;
+    max_running = std::max(max_running.load(), now);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ++num_ran;
+    --running;
+  };
+
+  std::thread held([&] {
+    EXPECT_TRUE(executor.Run([&] {
+      std::unique_lock<std::mutex> lock(mutex);
+      entered = true;
+      changed.notify_all();
+      changed.wait(lock, [&] { return release; });
+    }));
+  });
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    changed.wait(lock, [&] { return entered; });
+  }
+  std::vector<std::thread> waiting;
+  for (int i = 0; i < 4; ++i) {
+    waiting.emplace_back([&] { EXPECT_TRUE(executor.Run(body)); });
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  EXPECT_FALSE(executor.Run(body));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    release = true;
+  }
+  changed.notify_all();
+  held.join();
+  for (std::thread& thread : waiting) {
+    thread.join();
+  }
+  EXPECT_EQ(num_ran.load(), 4);
+  EXPECT_EQ(max_running.load(), 1);
+
+  // A function that throws still hands the turn on.
+  EXPECT_THROW(executor.Run([] { throw std::runtime_error("handler"); }), std::runtime_error);
+  EXPECT_TRUE(executor.Run(body));
 }
 
 TEST(SnapshotExporterTest, TrinaryPixels) {

@@ -127,7 +127,7 @@ void HandleOpen(ServiceContext& context, const httplib::Request& request,
 
 }  // namespace
 
-void RegisterMapsEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterMapsEndpoints(Routes& server, ServiceContext& context) {
   server.Get("/maps", Guarded([&context](const httplib::Request&, httplib::Response& response) {
                HandleList(context, response);
              }));

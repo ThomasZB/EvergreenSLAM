@@ -318,18 +318,39 @@ def _read_attachment(path):
     return data, ext if re.fullmatch(r"[a-z0-9]+", ext) else "bin"
 
 
+def _parse_stamp(text):
+    """Unix ns, or Unix seconds with a decimal point; exact either way (no float rounding)."""
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    if re.fullmatch(r"\d+\.\d*", text):
+        whole, frac = text.split(".")
+        return int(whole) * 10**9 + int((frac + "0" * 9)[:9])
+    raise EgsError(
+        "--at takes Unix ns (e.g. 1785000000123456789) or Unix seconds with a decimal point: %s"
+        % text,
+        EXIT_USAGE,
+        "bad_param",
+    )
+
+
 def cmd_observe(ctx, args):
+    if args.at is not None and args.offset is None:
+        raise EgsError("--at only goes with --offset", EXIT_USAGE)
+    observed_at = _parse_stamp(args.at) if args.at is not None else None
     path, mem = _existing_node(ctx, args.path)
     attachment = _read_attachment(args.attach) if args.attach else None
     result = args.result or (None if args.invalidates is not None else "seen")
     obs_rel = posixpath.join(path, "observations.jsonl")
     offset = None
     if args.offset is not None:
-        code, offset = _write_offset(ctx, mem, path, args)
+        code, offset = _write_offset(ctx, mem, path, args, observed_at)
         if code != EXIT_OK:
             return code
     last = max((o["recorded_at"] for o in mem.observations(path)), default=0)
-    line = {"recorded_at": max(fmt.now_ns(), last + 1), "source": args.source}
+    line = {"recorded_at": max(fmt.now_ns(), last + 1)}
+    if observed_at is not None:
+        line["observed_at"] = observed_at
+    line["source"] = args.source
     if result:
         line["result"] = result
     if args.invalidates is not None:
@@ -366,7 +387,7 @@ def cmd_observe(ctx, args):
     return EXIT_OK
 
 
-def _write_offset(ctx, mem, path, args):
+def _write_offset(ctx, mem, path, args, observed_at):
     found = mem.nearest_place(path)
     if found is None:
         return (
@@ -395,7 +416,10 @@ def _write_offset(ctx, mem, path, args):
             ),
             None,
         )
-    j = ctx.client.get("/anchors/%d" % aid, {"robot": 1})
+    params = {"robot": 1}
+    if observed_at is not None:
+        params["at"] = observed_at
+    j = ctx.client.get("/anchors/%d" % aid, params)
     if not j.get("ok"):
         return ctx.refused(j), None
     a_pose, robot = se2.from_json(j.get("pose")), se2.from_json(j.get("robot"))

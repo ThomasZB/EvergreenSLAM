@@ -26,6 +26,11 @@ HINTS = {
     "unresolvable": "the binding is orphaned: go there and `egs place save` it again",
     "no_binding": "the target has no place.yaml of its own",
     "no_robot_pose": "the process has no robot pose yet",
+    "too_old": "--at is older than the 10 s of poses the process keeps: observe sooner",
+    "in_future": "--at is ahead of the newest scan: it must be the robot's sensor clock "
+    "(egs pose --json stamp_ns), not this computer's",
+    "gap": "the scans around --at are more than 0.5 s apart: no pose to interpolate there",
+    "busy": "the service is answering other requests: retry in a moment",
     "fs_error": "the process could not write the file",
     "unknown_session": "no such session: see `egs session ls`",
     "freezing": "a freeze is in progress: retry in a few seconds",

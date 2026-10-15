@@ -15,6 +15,7 @@ add_library(evergreenslam_agent STATIC
             endpoints/fs_endpoints.cc
             endpoints/maps_endpoints.cc
             endpoints/place_endpoints.cc
+            endpoints/pose_endpoints.cc
             endpoints/session_endpoints.cc
             endpoints/view_endpoints.cc
             endpoints/zones_endpoints.cc
@@ -23,9 +24,12 @@ add_library(evergreenslam_agent STATIC
             graph/here_tracker.cc
             graph/match_score_average.cc
             graph/plan_report.cc
+            graph/pose_history.cc
             graph/snapshot_exporter.cc
             http/http_reply.cc
             http/json_writer.cc
+            http/routes.cc
+            http/serial_executor.cc
             http/service_context.cc
             memory/fs_grep.cc
             memory/fs_sandbox.cc

@@ -144,6 +144,68 @@ class ObserveTest(EgsTestCase):
         node = loads(self.read("places/kitchen/fridge/milk/node.yaml"))
         self.assertAlmostEqual(node["offset"][0], 101.0, places=3)
 
+    def test_offset_at_uses_the_robot_pose_then_and_records_observed_at(self):
+        # The robot was at (1, 1, 0) then and has turned since; the thing was 0.5 m ahead then.
+        self.state.anchor(3, pose(1.0, 0.0, math.pi / 2))
+        self.state.robot = pose(1.0, 1.0, math.pi / 2)
+        self.state.robot_at = pose(1.0, 1.0, 0.0)
+        stamp = 1785000000123456789
+        code, out, _ = self.egs(
+            "observe", "places/kitchen/fridge/milk", "--offset", "0.5", "0", "0", "--at", str(stamp)
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.requests("GET", "/anchors/3")[0][2], {"robot": "1", "at": str(stamp)})
+        dx, dy, _ = loads(self.read("places/kitchen/fridge/milk/node.yaml"))["offset"]
+        self.assertAlmostEqual(dx, 1.0, places=3)
+        self.assertAlmostEqual(dy, -0.5, places=3)
+        line = self.lines("places/kitchen/fridge/milk/observations.jsonl")[-1]
+        self.assertEqual(list(line)[:3], ["recorded_at", "observed_at", "source"])
+        self.assertEqual(line["observed_at"], stamp)
+        self.assertGreater(line["recorded_at"], 0)
+
+        code, _, _ = self.egs(
+            "observe",
+            "places/kitchen/fridge/milk",
+            "--offset",
+            "0.5",
+            "0",
+            "0",
+            "--at",
+            "1785000000.5",
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(self.requests("GET", "/anchors/3")[1][2]["at"], "1785000000500000000")
+
+    def test_at_refusals(self):
+        rel = "places/kitchen/fridge/milk/observations.jsonl"
+        code, _, err = self.egs("observe", "places/kitchen/fridge/milk", "--at", "1785000000")
+        self.assertEqual(code, 2)
+        self.assertIn("--at only goes with --offset", err)
+        code, _, err = self.egs(
+            "observe", "places/kitchen/fridge/milk", "--offset", "0", "0", "0", "--at", "soon"
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("Unix ns", err)
+        before = self.read("places/kitchen/fridge/milk/node.yaml")
+        for reason in ("too_old", "in_future", "gap"):
+            self.state.at_refusal = reason
+            code, out, _ = self.egs(
+                "observe",
+                "places/kitchen/fridge/milk",
+                "--offset",
+                "1",
+                "0",
+                "0",
+                "--at",
+                "1785000000000000000",
+            )
+            self.assertEqual(code, 1, out)
+            self.assertIn(reason, out)
+            if reason == "in_future":
+                self.assertIn("sensor clock", out)
+        self.assertEqual(self.read("places/kitchen/fridge/milk/node.yaml"), before)
+        self.assertFalse(os.path.exists(os.path.join(self.mem, rel)))
+
     def test_missing_node(self):
         code, _, err = self.egs("observe", "places/kitchen/toaster")
         self.assertEqual(code, 2)

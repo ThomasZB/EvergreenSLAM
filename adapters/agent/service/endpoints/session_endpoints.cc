@@ -409,7 +409,7 @@ void HandleCheckpoint(ServiceContext& context, httplib::Response& response) {
 
 }  // namespace
 
-void RegisterSessionEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterSessionEndpoints(Routes& server, ServiceContext& context) {
   const auto route = [&context](auto handler) {
     return TaskRoute(
         context, [&context, handler](const httplib::Request& request, httplib::Response& response) {

@@ -26,6 +26,7 @@
 #include "sensor/timed_point_cloud.h"
 #include "service/agent_service.h"
 #include "service/graph/match_score_average.h"
+#include "service/graph/pose_history.h"
 #include "service/memory/zone_store.h"
 
 namespace evergreenslam::ros2 {
@@ -62,12 +63,13 @@ class AgentHost {
   AgentHost& operator=(const AgentHost&) = delete;
 
   // `scan` is in the robot frame at `local_pose`; a scan the builder dropped must not reach here.
-  void Update(common::Time time, const Eigen::Affine2d& local_pose,
+  // `velocity` is MatchingResult::velocity, local frame.
+  void Update(common::Time time, const Eigen::Affine2d& local_pose, const Eigen::Vector3d& velocity,
               const sensor::TimedPointCloud& scan, double match_score);
   // Right after PoseGraph::Start.
   void OnBackendStarted();
-  // After a landed drop, before the new frontend's first Update: the old frame's pose is in the
-  // discarded frontend's local frame.
+  // After a landed drop, before the new frontend's first Update: the old frame and pose history
+  // are in the discarded frontend's local frame.
   void OnFedSessionDropped();
   // Before PoseGraph::Finish, or before the PoseGraph is destroyed. Idempotent.
   void Stop();
@@ -82,6 +84,7 @@ class AgentHost {
 
   std::mutex mutex_;
   std::optional<agent::HostFrame> frame_;
+  agent::PoseHistory pose_history_;
   agent::MatchScoreAverage match_score_average_;
   const agent::ZoneStore zones_;
   // Last: its worker calls the hooks above until Stop() joins it.

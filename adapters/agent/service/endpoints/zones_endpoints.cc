@@ -76,7 +76,7 @@ void HandleZones(ServiceContext& context, httplib::Response& response) {
 
 }  // namespace
 
-void RegisterZonesEndpoints(httplib::Server& server, ServiceContext& context) {
+void RegisterZonesEndpoints(Routes& server, ServiceContext& context) {
   server.Get("/zones",
              TaskRoute(context, [&context](const httplib::Request&, httplib::Response& response) {
                HandleZones(context, response);

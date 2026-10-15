@@ -22,6 +22,7 @@
 #include "lifelong/anchors/anchor_scenario.h"
 #include "service/agent_service.h"
 #include "service/graph/match_score_average.h"
+#include "service/graph/pose_history.h"
 #include "service/http/httplib_include.h"
 
 namespace evergreenslam::agent::testing {
@@ -140,10 +141,18 @@ inline std::string JsonRaw(const std::string& body, const std::string& path) {
 class SimulatedHost {
  public:
   void Update(common::Time time, const Eigen::Affine2d& local_pose, const sensor::PointCloud& scan,
-              double match_score = 0.0) {
+              double match_score = 0.0, const Eigen::Vector3d& velocity = Eigen::Vector3d::Zero()) {
     std::lock_guard<std::mutex> lock(mutex_);
     frame_ = HostFrame{StampedPose{time, local_pose}, scan, match_score,
                        average_.Add(time, match_score)};
+    history_.Add(time, local_pose, velocity);
+  }
+
+  void OnFedSessionDropped() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    frame_.reset();
+    history_.Reset();
+    average_ = MatchScoreAverage();
   }
 
   AgentServiceHooks Hooks() {
@@ -152,12 +161,21 @@ class SimulatedHost {
       std::lock_guard<std::mutex> lock(mutex_);
       return frame_;
     };
+    hooks.current_pose = [this]() -> std::optional<HostPose> {
+      std::lock_guard<std::mutex> lock(mutex_);
+      return history_.Latest();
+    };
+    hooks.pose_at = [this](common::Time time) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      return history_.At(time);
+    };
     return hooks;
   }
 
  private:
   std::mutex mutex_;
   std::optional<HostFrame> frame_;
+  PoseHistory history_;
   MatchScoreAverage average_;
 };
 

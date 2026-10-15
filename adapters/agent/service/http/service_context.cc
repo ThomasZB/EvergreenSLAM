@@ -15,11 +15,27 @@
 #include <utility>
 
 namespace evergreenslam::agent {
+namespace {
+
+AgentServiceHooks WithDropSeqlock(AgentServiceHooks hooks, std::atomic<uint64_t>& seqlock) {
+  if (hooks.drop_session) {
+    hooks.drop_session = [drop = std::move(hooks.drop_session),
+                          &seqlock](const SessionDropRequest& request) {
+      ++seqlock;
+      const lifelong::PoseGraph::DropFedSessionResult result = drop(request);
+      ++seqlock;
+      return result;
+    };
+  }
+  return hooks;
+}
+
+}  // namespace
 
 ServiceContext::ServiceContext(lifelong::PoseGraph& pose_graph, AgentServiceHooks hooks,
                                PlaceStore places, std::string map_root, std::string map_name)
     : pose_graph(pose_graph),
-      hooks(std::move(hooks)),
+      hooks(WithDropSeqlock(std::move(hooks), drop_seqlock)),
       places(std::move(places)),
       sandbox(this->places.memory_dir()),
       zones(this->places.memory_dir()),

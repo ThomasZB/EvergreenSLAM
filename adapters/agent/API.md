@@ -31,7 +31,7 @@ another computer reaches it through an SSH tunnel to the robot's loopback (`egs/
 - Exactly one `PoseGraph::Enqueue` + promise/future per request; everything the answer needs is read
   in that task. The service waits without a timeout; `egs` gives up after 30 s ("outcome unknown").
   One exception: `rm/apply` of the fed session runs its plan task, then the host's drop (one more
-  task, waited on from the worker thread), then a read-only task for `at_num_solves`.
+  task, waited on from the serial executor), then a read-only task for `at_num_solves`.
 - Inside a task: only the free `lifelong::AssembleGlobalMap(graph, 0.0, /*only_finished=*/true[,
   session])`, never the blocking member (it would wait on its own queue); unfinished submaps are
   being written by the frontend thread.
@@ -49,8 +49,10 @@ another computer reaches it through an SSH tunnel to the robot's loopback (`egs/
 | 400 | missing / malformed parameter, path rule broken | `{ok: false, reason, detail}` |
 | 404 | unknown route (`not_found`); `GET /fs/cat` of a missing path; `GET /snapshots/file` of anything it does not serve | same, `reason: "not_found"` |
 | 503 | task endpoint before `OnBackendStarted()` (an atomic), or after `Stop()` began | same, `reason: "not_started"` |
+| 503 | four requests already wait on the serial executor (Host injection, "Threads") | same, `reason: "busy"`: nothing was done, retry |
 
 Refusal codes: `unknown_anchor`, `unresolvable` (orphan anchor), `no_keyframe`, `node_gone`,
+`too_old`, `in_future`, `gap` (`/anchors/{id}?at=`),
 `not_persisted` (the commit did not reach disk; nothing was saved), `offset_too_far`,
 `offset_not_free`,
 `fs_error`, `no_binding`, `no_robot_pose`, `unknown_session`, `freezing`, `frozen_session`,
@@ -76,10 +78,24 @@ struct HostFrame {
   double match_score = 0.0;      // MatchingResult::match_score of that scan
   double match_score_avg = 0.0;  // MatchScoreAverage over the host's scans
 };
+struct HostPose {                 // the newest sample, no scan copy
+  StampedPose pose;               // MatchingResult::time, ::local_pose
+  Eigen::Vector3d velocity;       // [vx, vy, omega], robot frame (MatchingResult::velocity rotated)
+  uint64_t seq;                   // +1 per sample, never reset by a drop
+  uint64_t epoch;                 // +1 per fed-session drop
+  std::chrono::steady_clock::time_point received;  // host steady clock at Update
+};
+struct PoseAt {                   // the local pose at a past time
+  enum class Refusal { NONE, NO_SAMPLE, TOO_OLD, IN_FUTURE, GAP };
+  std::optional<Eigen::Affine2d> local_pose;  // set exactly when NONE
+  Refusal refusal;
+};
 struct MapSwitchRequest { std::string name; bool create = false; };
 struct SessionDropRequest { lifelong::SessionId id; };             // always the fed session
 struct AgentServiceHooks {
   std::function<std::optional<HostFrame>()> current_frame;         // pose and scan under one lock
+  std::function<std::optional<HostPose>()> current_pose;           // PoseHistory::Latest
+  std::function<PoseAt(common::Time)> pose_at;                     // PoseHistory::At
   std::function<bool(const MapSwitchRequest&)> switch_map;         // empty: cannot switch
   // empty: cannot drop the fed one
   std::function<PoseGraph::DropFedSessionResult(const SessionDropRequest&)> drop_session;
@@ -101,17 +117,29 @@ void Stop();              // stops the server and joins its threads
   each start) and listens; task endpoints answer 503 until the host calls `OnBackendStarted()`
   after `PoseGraph::Start`. The host calls `Stop()` **before** `PoseGraph::Finish()`. The host may
   rebuild the service after `switch_map`: the port closes and reopens.
-- **One worker**: `new_task_queue = [] { return new httplib::ThreadPool(1); }`, so service-side
-  state (`here` hysteresis, `closures_delta` baseline, sequence numbers) is single-threaded.
-- **Two hook kinds.** `switch_map` runs on the worker thread, never inside a task: it records the
+- **Threads**: `new_task_queue` is a `ThreadPool(8)`; every connection serves one request
+  (`set_keep_alive_max_count(1)`), so an idle client never pins a pool thread. Every route runs its
+  handler through one `SerialExecutor` (`service/http/serial_executor.h`, registered through
+  `service/http/routes.h`): a FIFO ticket lock taken on the pool thread itself, so the service-side
+  state (`here` hysteresis, `closures_delta` baseline, sequence numbers, the `switch_map` and
+  `drop_session` calls) stays as single-threaded as with one worker. The line is bounded: with
+  one handler running and **four waiting**, a request is answered `503 busy` at once, so serial
+  handlers occupy at most five pool threads and never starve the concurrent routes. Only `/pose`
+  and `/root` (const fields) are concurrent (`Routes::ConcurrentGet`). `Stop()` closes the
+  listener, then the pool joins after its queued requests: waiting handlers still get their turn
+  (task routes answer `not_started` once stopping), and backend tasks drain since the host calls
+  `Stop()` before `PoseGraph::Finish()`, so no handler blocks forever.
+- **Two hook kinds.** `switch_map` runs on the serial executor, never inside a task: it records the
   request and returns at once (`false` = refused, reported as `not_supported`). The host then, on
   its own thread, stops this service, finishes the graph, and boots the named map with a new
   frontend, `PoseGraph`, graph publisher and service, and clears the webui's graph, submap
   textures and trajectory (open pages reload). The laser extrinsic and tf state carry over.
-  `drop_session` is the other kind: it runs on the worker thread outside any task and answers
+  `drop_session` is the other kind: it runs on the serial executor outside any task and answers
   synchronously. The host blocks its frontend (no scan reaches the builder or the graph), calls
   `PoseGraph::DropFedSession(id)`, and on success replaces the `LocalTrajectoryBuilder` with a
-  fresh one (and clears the webui) before unblocking; it returns the `DropFedSessionResult`. The
+  fresh one, resets its pose history (`AgentHost::OnFedSessionDropped`: epoch + 1) and clears the
+  webui before unblocking; it returns the `DropFedSessionResult`. It is the only way the fed
+  session's local frame changes (the freeze rotation keeps the frontend's frame). The
   process, the port and this service stay. `DropFedSession` runs one backend task: refusals
   `NOT_FED` (another session is fed) and `FREEZING` (a freeze sequence is queued) change nothing;
   otherwise a fresh fed session is minted (id = dropped + 1, identity alignment, no submaps, not
@@ -123,9 +151,10 @@ void Stop();              // stops the server and joins its threads
   names a node of the dropped session until that keyframe overwrites it; a boot ignores a last pose
   whose session is gone. After a drop the next boot seeds from the newest idle session with
   nodes, exactly as any boot does.
-- **`current_frame`** runs **inside the task** and takes only the host's own mutex. Both ways:
-  `current_frame` and `switch_map` never enqueue or wait on the `PoseGraph` (`drop_session` waits,
-  from the worker thread outside any task), and the host never holds its pose/scan mutex across any
+- **`current_frame`** runs **inside the task** and takes only the host's own mutex;
+  `current_pose` and `pose_at` likewise, from a task or straight from a pool thread. Both ways:
+  these and `switch_map` never enqueue or wait on the `PoseGraph` (`drop_session` waits, from the
+  serial executor outside any task), and the host never holds its pose/scan mutex across any
   `PoseGraph` call (it updates by copy under the lock). Empty hook or nullopt → the fields are `null`.
   Pose and scan come from one call: two calls could straddle a scan-thread update and draw scan
   k+1 at pose k.
@@ -135,12 +164,32 @@ void Stop();              // stops the server and joins its threads
   (`service/graph/match_score_average.h`), sampled per scan under its own mutex, not per request:
   `avg += (1 - exp(-dt / 2 s)) * (score - avg)`, seeded by the first scan.
 - Robot pose = `ComputeSessionToGlobal(fed)` (nullopt → `graph.session(fed).local_to_global`, as
-  `pose_graph.cc` does) `* local_pose`, in the same task, never via `ActiveSessionToGlobal()`.
+  `pose_graph.cc` does) `* local_pose`, in the same task, never via `ActiveSessionToGlobal()`;
+  only `/pose`, which has no task, uses `ActiveSessionToGlobal()` (below).
+- **Pose history** (`service/graph/pose_history.h`, under the host's mutex): every `Update` adds
+  `{time, local_pose, velocity}`; samples older than the newest − 10 s go, and a stamp not after
+  the newest restarts the history. `pose_at(t)`: no sample → `NO_SAMPLE`; `t` before the oldest →
+  `TOO_OLD`; up to 0.2 s past the newest → the newest, beyond → `IN_FUTURE`; on a sample → that
+  sample; else the two bracketing samples, `GAP` when they are more than 0.5 s apart, otherwise
+  `utils::transform::Interpolate` (linear translation, shortest-arc angle). `OnFedSessionDropped`
+  clears it and advances `epoch`; `seq` keeps counting.
+- **Epoch pairing for `/pose`.** A host sample is in one frontend's local frame and
+  `ActiveSessionToGlobal()` in one fed session's; a drop changes both, in two steps (the backend
+  republishes the new session's alignment, then the host resets its history) with a window in
+  between. The service wraps `drop_session` in a seqlock (`ServiceContext::drop_seqlock`, seq_cst,
+  odd while the hook runs); `/pose` reads it, then `current_pose`, then `ActiveSessionToGlobal()`,
+  then the seqlock again, and composes only when both reads are the same even value, else
+  `pose: null`. Race-free: the republish and the reset both happen after the opening increment and
+  before the closing one, and both reach `/pose` through a mutex it then takes, so a `/pose` that
+  saw either change sees at least the opening increment in its second read, and one whose first
+  read saw the closing increment sees both changes. Every drop goes through `drop_session` on the
+  serial executor, so `/anchors/{id}?at=`, also serial, never overlaps one: the `pose_at` samples
+  and the fed session its task reads are always one frontend's.
 
 ## Endpoints
 
-`here`, `status`, `where`, `snapshot`, `view`, `zones`, `session ls` read; everything else
-mutates.
+`here`, `pose`, `status`, `where`, `snapshot`, `view`, `zones`, `session ls` read; everything
+else mutates.
 
 **GET /root** — no task. `→ {ok, api_version, instance_id, map_dir, memory_dir, map_root, map}`
 (absolute paths; `memory_dir` is the realpath); `map_root` and `map` are `null` when the host named
@@ -151,6 +200,18 @@ directly only when `EGS_MEMORY` / config `memory` names a directory, or when
 `<dirname(memory_dir)>/agent_instance` exists on its own machine and holds this `instance_id`;
 everything else goes through `/fs` and `/snapshots/file`, so a same-named directory on the agent's
 computer is never read or written.
+
+**GET /pose** — no task, concurrent (never `busy`; answers before `OnBackendStarted()` too).
+For programs polling at ~10 Hz (`egs pose --watch`); `/here` scans `memory/` and queues behind
+loop closure. `→ {ok, seq|null, stamp_ns|null, age_s|null, pose|null, velocity: {vx, vy,
+omega}|null}`: `seq` the host's sample counter (a new value = a new scan; restarts with the host
+on a map switch), `stamp_ns` the scan's sensor time, `age_s` the robot-side steady-clock age of
+the sample (it grows while the scan stream is stopped), `velocity` in the robot frame (m/s,
+rad/s) whenever there is a sample. `pose` = `ActiveSessionToGlobal() * local_pose` under the
+epoch pairing above; `null` before the first scan, before the fed session's first keyframe (also
+right after a drop), or while a drop runs. No `linked_to_base`: it needs a graph read, hence a
+task; ask `/status`. `ActiveSessionToGlobal()` is republished at solves and graph changes, so it
+can trail the task-side alignment `/here` uses by one batch.
 
 **GET /status** — task. `→ {ok, at_num_solves, boot_count, fed_session, map (name|null), has_frozen_base,
 aligned_to_base, phase, localization, closures_delta, num_anchors, num_orphans, num_place_files,
@@ -219,11 +280,18 @@ kill there too leaves an unreferenced anchor, never a dangling file). `→ {ok, 
 at_num_solves, anchor, submap_id, state, keyframe_age_s, rebound_existing: bool, offset: [dx, dy,
 dtheta]|null}`.
 
-**GET /anchors/{id}[?robot=1]** — task; `egs where` (walk-up, `offset_from`, `precision`,
-`approach` are the CLI's job). `anchors().Resolve(graph, id)` `→ {ok, reason (unknown_anchor),
-at_num_solves, anchor, state, orphan_reason|null, pose|null, submap_id, saved_at_ns, robot?:
-pose|null, has_frozen_base?, aligned_to_base?}`; `robot=1` adds the robot pose and the two
-alignment flags (as in `/status`) from the same solve (`egs observe --offset`, `egs zone add`).
+**GET /anchors/{id}[?robot=1][&at=<ns>]** — task; `egs where` (walk-up, `offset_from`,
+`precision`, `approach` are the CLI's job). `anchors().Resolve(graph, id)` `→ {ok, reason
+(unknown_anchor), at_num_solves, anchor, state, orphan_reason|null, pose|null, submap_id,
+saved_at_ns, robot?: pose|null, has_frozen_base?, aligned_to_base?, at_ns?}`; `robot=1` adds the
+robot pose and the two alignment flags (as in `/status`) from the same solve (`egs observe
+--offset`, `egs zone add`). `at=<Unix ns>` (implies `robot=1`; malformed → 400 `bad_param`)
+makes `robot` the pose at that sensor time: `pose_at(at)` times the fed session's current
+alignment, composed as above, in the same task as the resolve (`egs observe --offset --at`).
+Refusals (`ok: false`, anchor fields still there, `robot: null`): `too_old`, `in_future`, `gap`
+as in "Pose history", `no_robot_pose` (no sample, no fed session, or no `pose_at` hook);
+`unknown_anchor` wins over them. `at` is the robot's sensor clock (scan stamps), not the agent
+computer's: `/pose` `stamp_ns` is the robot's time now.
 
 **GET /anchors[?robot=1]** — task. `→ {ok, at_num_solves, robot?, anchors: [{anchor, state,
 orphan_reason, pose|null}]}`. **find** and **observe** are CLI only, on these two endpoints.

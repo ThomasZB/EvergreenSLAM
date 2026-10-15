@@ -479,8 +479,8 @@ int main(int argc, char** argv) {
     last_estimate = estimate;
 #ifdef EVERGREENSLAM_WITH_AGENT
     if (agent_host != nullptr && matching != nullptr) {
-      agent_host->Update(matching->time, matching->local_pose, timed_scan.point_cloud,
-                         matching->match_score);
+      agent_host->Update(matching->time, matching->local_pose, matching->velocity,
+                         timed_scan.point_cloud, matching->match_score);
     }
 #endif
 

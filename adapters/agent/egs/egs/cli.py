@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from . import commands, fscmd, maps, sessions, skill, view, zones
+from . import commands, fscmd, maps, pose, sessions, skill, view, zones
 from .client import EXIT_OK, EXIT_REFUSED, EXIT_TRANSPORT, EXIT_USAGE, EgsError
 from .context import Ctx
 
@@ -64,6 +64,7 @@ find a thing by name, alias or kind -> egs find <words>
 remember the spot the robot stands at -> egs place save places/<path> [--offset DX DY 0, <= 3 m]
 I saw it / it is not there -> egs observe places/<path> [--result absent] [--note ..] [--attach F]
 it is DX ahead, DY left of the robot -> egs observe places/<path> --offset DX DY 0 (within 10 m)
+...in a photo taken a moment ago -> add --at <stamp_ns> (robot sensor clock, see egs pose --json)
 go somewhere -> egs where places/<path>, give its approach pose to your navigator
 the navigator must avoid an area -> egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1 (ls | rm)
 is the map healthy, aligned to the base -> egs status
@@ -135,6 +136,17 @@ def build_parser():
     _json_flag(
         add("status", commands.cmd_status, "map health: frozen base, alignment, phase, closures")
     )
+    pw = add("pose", pose.cmd_pose, "the robot's pose from the newest scan, for programs")
+    pw.add_argument(
+        "--watch",
+        nargs="?",
+        type=float,
+        const=pose.DEFAULT_HZ,
+        metavar="HZ",
+        help="poll at HZ (default 10, at most 30) and print one line per new scan "
+        "(one JSON object per line with --json) until Ctrl-C",
+    )
+    _json_flag(pw)
 
     place = sub.add_parser("place", help="save the place the robot stands at")
     psub = place.add_subparsers(dest="sub", metavar="<save>", parser_class=_Parser)
@@ -179,7 +191,13 @@ def build_parser():
         nargs=3,
         type=float,
         metavar=("DX", "DY", "DTHETA"),
-        help="where the thing is in the robot's current frame (x forward, y left; m, rad)",
+        help="where the thing is in the robot's frame, now or at --at (x forward, y left; m, rad)",
+    )
+    o.add_argument(
+        "--at",
+        metavar="STAMP",
+        help="with --offset: the offset was measured at this robot sensor time (Unix ns, as "
+        "`egs pose --json` stamp_ns, or Unix seconds with a decimal point), not now",
     )
     o.add_argument("--kind", help="node.yaml kind when writing an offset (default: from the name)")
     o.add_argument(
