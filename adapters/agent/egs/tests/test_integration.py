@@ -42,7 +42,11 @@ class IntegrationTest(unittest.TestCase):
         if not m:
             self._stop_host()
             self.fail("fake host did not start: %r\n%s" % (line, self._host_log()))
-        self.env = {"EGS_URL": "http://127.0.0.1:%s" % m.group(1), "EGS_POLL_S": "2"}
+        self.env = {
+            "EGS_URL": "http://127.0.0.1:%s" % m.group(1),
+            "EGS_POLL_S": "2",
+            "XDG_CONFIG_HOME": os.path.join(self.tmp, "config"),
+        }
 
     def tearDown(self):
         self._stop_host()
@@ -87,10 +91,15 @@ class IntegrationTest(unittest.TestCase):
     def _scenario(self):
         remote = "EGS_MEMORY" in self.env
         memory = os.path.realpath(os.path.join(self.map_dir, "memory"))
-        code, root, err = self.egs("root")
+        code, root, err = self.egs("root", "--json")
         self.assertEqual(code, 0, err)
-        self.assertEqual(root.strip(), self.env["EGS_MEMORY"] if remote else memory)
-        self.assertEqual("not readable here" in err, remote, err)
+        root = json.loads(root)
+        self.assertEqual(root["mode"], "remote" if remote else "local")
+        self.assertEqual(root["memory_dir"], memory)
+        with open(os.path.join(self.map_dir, "agent_instance")) as f:
+            self.assertEqual(f.read(), root["instance_id"] + "\n")
+        text = self.ok("root").splitlines()[0]
+        self.assertEqual(text, "remote %s  map map" % self.env["EGS_URL"] if remote else memory)
         self.assertTrue(self.ok("status").startswith("map map  boot"))
         self.assertIn("* map", self.ok("map", "ls").splitlines())
         code, out, _ = self.egs("map", "new", "other")
@@ -156,15 +165,23 @@ class IntegrationTest(unittest.TestCase):
         self.assertIsNotNone(m, snapshot)
         self.assertTrue(os.path.isfile(os.path.join(m.group(1), "map.pgm")))
         self.assertTrue(os.path.isfile(os.path.join(memory, "index.tsv")))
+        export = os.path.join(self.tmp, "export")
+        copied = json.loads(self.ok("snapshot", "-o", export, "--json"))
+        self.assertEqual(copied["local_dir"] is None, remote)
+        for name in copied["files"]:
+            with open(os.path.join(copied["dir"], name), "rb") as a:
+                with open(os.path.join(export, name), "rb") as b:
+                    self.assertEqual(a.read(), b.read(), name)
+        self.assertEqual(len(self.ok("snapshot", "-o", export).splitlines()), 4)
 
         lines = self.ok("view", "here").splitlines()
         self.assertTrue(lines[0].startswith("layers=map,robot,scan"), lines)
         self.assertEqual([l for l in lines if l.startswith("layers=")], [lines[0]], lines)
         png = lines[-1]
-        self.assertEqual(
-            os.path.realpath(os.path.dirname(png)),
-            os.path.join(os.path.realpath(self.map_dir), "views"),
-        )
+        views = os.path.join(os.path.dirname(memory), "views")
+        if remote:
+            views = os.path.join(tempfile.gettempdir(), "egs-views", root["instance_id"])
+        self.assertEqual(os.path.realpath(os.path.dirname(png)), os.path.realpath(views))
         with open(png, "rb") as f:
             self.assertEqual(f.read(len(PNG_SIGNATURE)), PNG_SIGNATURE)
         self.assertRegex(self.ok("view", "map"), r"(?m)^1 places/dock \d")
@@ -198,6 +215,12 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("cannot read places/dock/missing.md", out)
         self.assertIn("places/", self.ok("fs", "ls", ".").splitlines())
+        self.assertEqual(
+            self.ok("fs", "grep", "BLUE", "places"),
+            "places/dock/notes.md:1:blue mug\nplaces/dock/notes.md:2:blue mug\n",
+        )
+        grep = json.loads(self.ok("fs", "grep", "mug", "--include", "*.txt", "--json"))
+        self.assertEqual((grep["matches"], grep["truncated"]), ([], False))
         self.assertIn("dock", self.ok("fs", "tree", ".", "-L", "3"))
         self.ok("fs", "mv", "places/dock/notes.md", "places/dock/shelf/notes.md")
         self.assertIn("notes.md  18", self.ok("fs", "ls", "places/dock/shelf"))

@@ -69,7 +69,11 @@ class EgsTestCase(unittest.TestCase):
         self.state.anchor(4, pose(-3.0, 4.0, math.pi / 2))
         self.state.anchor(5, None, state="orphan", orphan_reason="session_removed")
         self.service = FakeService(self.state)
-        self.env = {"EGS_URL": self.service.url, "EGS_POLL_S": "2"}
+        self.env = {
+            "EGS_URL": self.service.url,
+            "EGS_POLL_S": "2",
+            "XDG_CONFIG_HOME": os.path.join(self.tmp, "config"),
+        }
 
     def tearDown(self):
         self.service.close()

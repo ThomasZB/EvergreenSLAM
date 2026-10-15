@@ -1,6 +1,6 @@
 ---
 name: evergreenslam
-description: Spatial memory of a robot running EvergreenSLAM. Use when you need to know where the robot is, where a place or thing is, remember a place or an object, look at the map, or manage mapping sessions. memory/ is a directory tree you work in with the shell; `egs` answers what only the live SLAM process knows.
+description: Spatial memory of a robot running EvergreenSLAM. Use when you need to know where the robot is, where a place or thing is, remember a place or an object, look at the map, or manage mapping sessions. memory/ is a directory tree of places and things on the robot that you work in with `egs fs`; `egs` also answers what only the live SLAM process knows.
 ---
 
 # EvergreenSLAM spatial memory
@@ -9,15 +9,18 @@ description: Spatial memory of a robot running EvergreenSLAM. Use when you need 
 
 `egs help agent` prints the rules and command table in 30 lines; read the rest of this file once.
 
-1. `cd "$(egs root)"`. `memory/` is your workspace: directories are places and things, the path is
-   containment (`places/kitchen/table/apple`). Work in it with `ls`, `find`, `grep`, `cat`, `mv`.
-   If `egs root` says the directory is not readable here, use `egs fs ls|tree|cat|write|append|mkdir|mv|rm`
-   with the same paths instead of the shell (`tree` shows 3 levels, `-L 6` for all; `…` marks a
-   cut-off directory).
-2. Read `memory/README.md` before you change anything. The process rewrites it at every start.
-3. Before acting at a place, read its `SKILL.md` chain: `places/SKILL.md`, then each directory down
+1. `egs root`. It checks the connection and says where `memory/` lives: usually
+   `remote http://127.0.0.1:8643  map <name>` (the robot, through an SSH tunnel). If it cannot
+   connect, it prints the URL it tried; ask the human to open the tunnel or set `EGS_URL`.
+2. `memory/` is your workspace: directories are places and things, the path is containment
+   (`places/kitchen/table/apple`). Work in it with `egs fs ls|tree|cat|grep|write|append|mkdir|mv|rm`,
+   paths relative to `memory/` (`egs fs tree places`; `-L 6` for all levels; `…` marks a cut-off
+   directory). Only if `egs root` printed a local path may you also use the shell there.
+3. Read `memory/README.md` (`egs fs cat README.md`) before you change anything. The process
+   rewrites it at every start.
+4. Before acting at a place, read its `SKILL.md` chain: `places/SKILL.md`, then each directory down
    to the place. Skills under those directories apply; the closest wins; the user beats them all.
-4. Where the robot is comes only from `egs here`. Your shell stays in `memory/`.
+5. Where the robot is comes only from `egs here`.
 
 ## Problem → command
 
@@ -27,7 +30,8 @@ Usage layer: call freely.
 |---|---|
 | where am I | `egs here` |
 | where is a place or a thing | `egs where places/<path>` |
-| find a thing by name, alias or kind | `egs find <words>` (never `grep` observation logs) |
+| find a thing by name, alias or kind | `egs find <words>` |
+| search notes, skills and node.yaml | `egs fs grep <words> [places/<p>]` (fixed text, any case; never the observation logs) |
 | remember the spot the robot stands at | `egs place save places/<path>` (saving again updates it) |
 | remember a spot 1 m ahead without driving there | `egs place save places/<path> --offset 1 0 0` (≤ 3 m, free space) |
 | I saw it / looked and it is not there | `egs observe places/<path>` / `--result absent` (`--note ...`) |
@@ -38,11 +42,11 @@ Usage layer: call freely.
 | list or delete keep-out zones | `egs zone ls` / `egs zone rm places/<place>/<name>` |
 | is the map healthy, aligned to the base | `egs status` |
 | a picture | `egs view <preset>` (next table) |
-| export the map as files | `egs snapshot [-o dir]` (dir outside `memory/`: exports carry XY) |
+| export the map as files | `egs snapshot -o <dir>` (copies or downloads them; dir outside `memory/`: exports carry XY) |
 | the robot's pose is wrong | `egs init-pose --place places/<p>` (or `x y theta`), then `egs here`; else `egs relocalize` |
 | make sure it is on disk now | `egs checkpoint` |
-| new container, rename, re-parent, delete | `mkdir`, `mv`, `rm -r` (a place's binding moves with its directory) |
-| notes and skills | `cat > f.tmp` then `mv f.tmp notes.md` (or `SKILL.md`, `skills/<name>/SKILL.md`) |
+| new container, rename, re-parent, delete | `egs fs mkdir`, `egs fs mv`, `egs fs rm -r` (a place's binding moves with its directory) |
+| notes and skills | `egs fs write places/<p>/notes.md --file <f>` (or stdin; replaces the file atomically; also `SKILL.md`, `skills/<name>/SKILL.md`); `egs fs append` adds lines |
 
 Management layer: only when a human asks. Every session command prints a plan and changes nothing
 without `--yes`; show the plan to the human before you add `--yes`. Map commands take no `--yes`:
@@ -59,7 +63,7 @@ they delete nothing.
 | delete an idle session | `egs session rm <id>`, then `egs session rm <id> --yes` |
 | the last stretch of mapping is broken (a fall, a carried robot) | `egs session rm <fed id>`, then `--yes`: the whole current session goes at once and a fresh one is fed; the robot's pose is lost, so then `egs init-pose --place places/<p>` or `egs relocalize` |
 
-After `egs map new` / `egs map open` the workspace changes: run `egs root` and `cd` there again.
+After `egs map new` / `egs map open` the workspace changes: run `egs root` again.
 The other map's places are not visible from the new one, and the odometry frame restarts.
 `switching`: a map switch is still in progress; wait for it, then `egs map ls`.
 `session_changed`: a freeze replaced the fed session between plan and apply; `egs session ls`, then
@@ -83,7 +87,8 @@ nothing to add; the fresh fed session carries on as usual.
 Prefer presets; use `egs view custom --layers a,b,...` only when no preset can answer (at most 4
 layers; the first output line of any preset shows its layers, so you learn the names there).
 `--ego [R]` crops any preset to R m (default 7.5) around the robot; `view here` does so unless
-`--ego 0` or `--full`. One image per task. The last output line is the PNG path.
+`--ego 0` or `--full`. One image per task. The last output line is the PNG path on this machine;
+`-o <file>` saves it elsewhere, `-o -` writes the PNG bytes to stdout.
 
 ## Dead rules
 
@@ -92,7 +97,7 @@ layers; the first output line of any preset shows its layers, so you learn the n
    Save places standing at them, or within 3 m in free space you can see (`--offset`).
 3. Things you can stand in front of (table, fridge, door) are places; small movable things are
    plain directories with a `node.yaml` (`kind`, `aliases`, `labels`) and no `place.yaml`.
-4. `grep -r` always takes `--include=node.yaml`; to find an object use `egs find`.
+4. To find an object use `egs find`; to search text use `egs fs grep`, never the observation logs.
 5. `egs` paths are relative to `memory/` and start with `places/`.
 6. `skills` and `attachments` are reserved names, never a place or a thing. No symbolic links.
 7. `observations.jsonl` is append-only; retract a line with `egs observe <path> --invalidates <id>`.

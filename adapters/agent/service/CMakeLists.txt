@@ -27,6 +27,7 @@ add_library(evergreenslam_agent STATIC
             http/http_reply.cc
             http/json_writer.cc
             http/service_context.cc
+            memory/fs_grep.cc
             memory/fs_sandbox.cc
             memory/place_store.cc
             memory/zone_store.cc

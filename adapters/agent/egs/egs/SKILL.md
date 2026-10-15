@@ -1,0 +1,1 @@
+../../skills/evergreenslam/SKILL.md

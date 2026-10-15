@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shutil
+import secrets
 import threading
 import time
 import urllib.parse
@@ -35,6 +36,10 @@ class FakeState:
         self.map_dir = map_dir  # where snapshots and views land
         self.root_memory_dir = memory_dir  # what /root reports
         self.root_map_dir = map_dir  # what /root and /snapshot report
+        self.instance_id = secrets.token_hex(16)
+        os.makedirs(map_dir, exist_ok=True)
+        with open(os.path.join(map_dir, "agent_instance"), "w") as f:
+            f.write(self.instance_id + "\n")
         self.map_root = os.path.dirname(map_dir)  # None: the host has no map root
         self.map_name = os.path.basename(map_dir)
         self.maps = [self.map_name]
@@ -199,6 +204,8 @@ class _Handler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "reason": None,
+                "api_version": "0.3",
+                "instance_id": st.instance_id,
                 "map_dir": st.root_map_dir,
                 "memory_dir": st.root_memory_dir,
                 "map_root": st.map_root,
@@ -346,6 +353,14 @@ class _Handler(BaseHTTPRequestHandler):
             with open(os.path.join(d, f), "wb") as fh:
                 fh.write(b"x")
         self.ok(seq=1, dir=os.path.join(self.st.root_map_dir, "snapshots", "000001"), files=files)
+
+    def snapshot_file(self, q, body):
+        name = q.get("name", "")
+        path = os.path.join(self.st.map_dir, "snapshots", "%06d" % int(q.get("seq", 0)), name)
+        if "/" in name or not os.path.isfile(path):
+            return self.refuse("not_found", 404, detail=name)
+        with open(path, "rb") as f:
+            self._send(200, f.read(), "application/octet-stream")
 
     def view(self, q, body):
         layers = {
@@ -653,6 +668,18 @@ class _Handler(BaseHTTPRequestHandler):
         with open(p, "rb") as f:
             self._send(200, f.read(), "application/octet-stream")
 
+    def fs_grep(self, q, body):
+        from egs.store import LocalStore
+
+        if not q.get("pattern"):
+            return self.refuse("bad_param", 400, detail="missing parameter 'pattern'")
+        if self._fs(q.get("path", ".")) is None:
+            return
+        matches, truncated = LocalStore(self.st.memory_dir).grep(
+            q.get("path", "."), q["pattern"], q.get("include")
+        )
+        self._send(200, {"ok": True, "reason": None, "matches": matches, "truncated": truncated})
+
     def _fs_done(self):
         self._send(200, {"ok": True, "reason": None})
 
@@ -744,6 +771,8 @@ ROUTES = {
     "GET /fs/ls": _Handler.fs_ls,
     "GET /fs/tree": _Handler.fs_tree,
     "GET /fs/cat": _Handler.fs_cat,
+    "GET /fs/grep": _Handler.fs_grep,
+    "GET /snapshots/file": _Handler.snapshot_file,
     "POST /fs/write": _Handler.fs_write,
     "POST /fs/append": _Handler.fs_append,
     "POST /fs/mkdir": _Handler.fs_mkdir,

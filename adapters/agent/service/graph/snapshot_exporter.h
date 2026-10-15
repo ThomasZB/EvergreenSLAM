@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "common/time.h"
@@ -66,6 +67,8 @@ class SnapshotExporter {
   // Written into NNNNNN.tmp and renamed; empty when any write fails.
   std::optional<SnapshotResult> Export(const SnapshotInput& input);
 
+  const std::string& snapshots_dir() const { return snapshots_dir_; }
+
  private:
   std::string snapshots_dir_;
   int next_seq_ = 1;
@@ -79,6 +82,8 @@ std::vector<SnapshotNode> DecimateTrajectory(std::vector<SnapshotNode> nodes, do
 // One past the highest leading 6-digit number among the entries of `dir`, at least 1.
 int NextSequenceNumber(const std::string& dir);
 std::string SequenceName(int seq);
+// The names Export can write; GET /snapshots/file serves nothing else.
+bool IsSnapshotFileName(std::string_view name);
 
 }  // namespace evergreenslam::agent
 

@@ -242,10 +242,11 @@ egs where places/kitchen/door      # 位姿、精度，以及接近它的位姿
 egs view here                      # 扫描叠在地图上，机器人周围
 ```
 
-`egs` 是 Python 3.9+，不依赖任何第三方库。给 agent 装 skill：把 `adapters/agent/skills/evergreenslam/`
-拷到它的 skills 目录；skill 的第一节就是上手步骤（`cd "$(egs root)"`，读 `memory/README.md`，
-读到该地点为止的 `SKILL.md` 链）。服务只绑 `127.0.0.1`；agent 在另一台机器上时，改节点的
-`agent_bind` 参数（走 `ros2 run`，pixi 任务没留口子）或者把端口隧道过去，再把 `EGS_URL` 指过去。
+`egs` 是 Python 3.9+，不依赖任何第三方库；`pipx install ./adapters/agent/egs` 可装在没有 ROS 的机器上，
+`egs skill install <skills 目录>` 给 agent 装 skill。skill 的第一节就是上手步骤（`egs root`，用 `egs fs cat`
+读 `memory/README.md`，读到该地点为止的 `SKILL.md` 链）。服务只绑 `127.0.0.1`；agent 在另一台机器上时
+经 SSH 隧道访问（`ssh -NT -L 127.0.0.1:8643:127.0.0.1:8643 user@robot`），连接设置写在
+`~/.config/egs/config`（见 [`adapters/agent/egs/README.md`](../adapters/agent/egs/README.md)）。
 HTTP 契约见 [`adapters/agent/API.md`](../adapters/agent/API.md)，skill 是
 [`adapters/agent/skills/evergreenslam/SKILL.md`](../adapters/agent/skills/evergreenslam/SKILL.md)。
 

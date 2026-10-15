@@ -2,7 +2,8 @@
 
 This directory is the robot's spatial memory. Directories are places and things; the path is
 containment (`places/kitchen/table/apple` = the apple on the kitchen table). You work here with
-plain shell (`ls`, `find`, `grep`, `cat`, `mv`, `rm`). Use `egs` only for what the running SLAM
+`egs fs ls|tree|cat|grep|write|append|mkdir|mv|rm` (paths relative to this directory), or with the
+plain shell when `egs root` prints a local path. The rest of `egs` is for what the running SLAM
 process alone knows: coordinates, saving a place, maps, sessions.
 
 Read this file before you change anything here. The SLAM process installs it and overwrites it at
@@ -32,7 +33,7 @@ memory/
 ```
 
 Directory names are ASCII slugs, `[a-z0-9][a-z0-9_-]*`. Names in other languages go into
-`node.yaml: aliases`, which `grep` finds. File names are free (no `/`, no NUL).
+`node.yaml: aliases`, which `egs find` and `egs fs grep` find. File names are free (no `/`, no NUL).
 
 ## Who writes what
 
@@ -41,10 +42,10 @@ Directory names are ASCII slugs, `[a-z0-9][a-z0-9_-]*`. Names in other languages
 | `place.yaml` | SLAM process, via `egs place save <path>` | atomic replace; never edit it |
 | `index.tsv` | SLAM process, via `egs snapshot` | atomic replace; never edit it |
 | `README.md` | SLAM process, at start | never edit it |
-| `node.yaml` | you or a human; `egs observe --offset` | `cat > f.tmp` then `mv f.tmp node.yaml` |
-| `notes.md` | you or a human | `cat > f.tmp` then `mv` |
-| `SKILL.md`, `skills/**` | you or a human | `cat > f.tmp` then `mv` |
-| `observations.jsonl` | you, or `egs observe` | append one line per write (`>>`); never edit |
+| `node.yaml` | you or a human; `egs observe --offset` | `egs fs write` (atomic replace) |
+| `notes.md` | you or a human | `egs fs write`, `egs fs append` |
+| `SKILL.md`, `skills/**` | you or a human | `egs fs write` |
+| `observations.jsonl` | you, or `egs observe` | append one line per write (`egs fs append`); never edit |
 | `attachments/` | you, via `egs observe --attach <file>` | copied before the line that names it; never edit |
 | `zone.yaml` | you, via `egs zone add` | relative to the nearest place's anchor; `egs zone rm` deletes it |
 
@@ -65,12 +66,11 @@ humans), so nothing is locked.
    Small movable things are plain subdirectories with a `node.yaml`, never a `place.yaml`. An
    object's position is inherited from its nearest ancestor with a `place.yaml`, or given by
    `node.yaml: offset` + `offset_from` (below).
-4. **`grep -r` always takes `--include=node.yaml`**, or it drowns in observation logs. To find an
-   object, use `egs find <query>` only: it ranks by name, alias, kind, and sinks things last seen
-   absent.
+4. **Search text with `egs fs grep`**, which skips observation logs (a local `grep -r` always
+   takes `--include=node.yaml`). To find an object, use `egs find <query>` only: it ranks by name,
+   alias, kind, and sinks things last seen absent.
 5. **`egs` paths are relative to `memory/` and start with `places/`**, exactly as `find places ...`
-   prints them. Your shell stays in `memory/`; it does not follow the robot. Where the robot is
-   comes only from `egs here`.
+   prints them. Nothing here follows the robot: where the robot is comes only from `egs here`.
 6. **`skills` and `attachments` are reserved names**: never a place or a thing, and never contain
    `place.yaml`.
 7. **No symbolic links.** `find`, `tree` and `grep` disagree about them and `egs` refuses them. A

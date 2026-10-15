@@ -26,12 +26,32 @@ def solve(j):
 
 
 def cmd_root(ctx, args):
-    d = ctx.memory_dir()
-    ctx.print(d)
-    readable = ctx.local_ok()
-    if not readable:
-        ctx.warn("note: %s is not readable here; use `egs fs ...` (paths relative to memory/)" % d)
-    ctx.result({"ok": True, "reason": None, "memory_dir": d, "readable": readable})
+    root = ctx.root()
+    local = ctx.is_local()
+    url = ctx.client.base_url
+    name = root.get("map") or os.path.basename(os.path.normpath(root.get("map_dir") or "-"))
+    local_dir = ctx.memory_dir() if local else None
+    if local:
+        ctx.print(local_dir)
+    else:
+        ctx.print(
+            "remote %s  map %s" % (url, name),
+            "memory/ is on the robot: work in it with egs fs ls|tree|cat|grep|write|append|"
+            "mkdir|mv|rm (paths relative to memory/)",
+        )
+    ctx.result(
+        {
+            "ok": True,
+            "reason": None,
+            "mode": "local" if local else "remote",
+            "url": url,
+            "map": name,
+            "instance_id": root.get("instance_id"),
+            "memory_dir": root.get("memory_dir"),
+            "local_dir": local_dir,
+            "readable": local,
+        }
+    )
     return EXIT_OK
 
 
@@ -439,35 +459,44 @@ def cmd_snapshot(ctx, args):
     j = ctx.client.post("/snapshot")
     if not j.get("ok"):
         return ctx.refused(j)
-    files = j.get("files") or []
-    src = _local_snapshot_dir(ctx, j.get("dir") or "")
-    ctx.print("snapshot %s  %s" % (j.get("seq"), src), "files: " + ", ".join(files), solve(j))
+    files, seq = j.get("files") or [], j.get("seq")
+    local = _local_snapshot_dir(ctx, j.get("dir") or "")
+    ctx.print(
+        "snapshot %s  %s" % (seq, local or j.get("dir")), "files: " + ", ".join(files), solve(j)
+    )
+    if local is None and not args.output:
+        ctx.print("the files are on the robot: -o DIR downloads them")
     copied = None
     if args.output:
-        if not os.path.isdir(src):
-            return ctx.refuse(
-                "not_readable",
-                "%s is not readable here; -o needs the map directory on this machine "
-                "(the fs passthrough covers memory/ only)" % src,
-                seq=j.get("seq"),
-                local_dir=src,
-            )
         os.makedirs(args.output, exist_ok=True)
         for name in files:
-            shutil.copy2(os.path.join(src, name), os.path.join(args.output, name))
+            dest = os.path.join(args.output, name)
+            if local is not None and os.path.isdir(local):
+                shutil.copy2(os.path.join(local, name), dest)
+            else:
+                with open(dest, "wb") as f:
+                    f.write(_snapshot_file(ctx, seq, name))
         copied = os.path.abspath(args.output)
         ctx.print("copied %d files to %s" % (len(files), copied))
-    ctx.result(dict(j, local_dir=src, copied_to=copied))
+    ctx.result(dict(j, local_dir=local, copied_to=copied))
     return EXIT_OK
 
 
 def _local_snapshot_dir(ctx, served):
     """The service's dir may be container-absolute or relative to its cwd; the layout under
-    map_dir is fixed, so rebuild it on the local map_dir when EGS_MEMORY gives one."""
+    map_dir is fixed, so rebuild it on the local map_dir. None: the files are remote."""
     local = ctx.local_map_dir()
     if not served or local is None:
-        return served
+        return None
     return os.path.join(local, "snapshots", posixpath.basename(served.rstrip("/")))
+
+
+def _snapshot_file(ctx, seq, name):
+    resp = ctx.client.request("GET", "/snapshots/file", {"seq": seq, "name": name})
+    if resp.status == 200 and not resp.is_json:
+        return resp.body
+    ctx.client.check(resp)
+    raise EgsError("unexpected answer for snapshot file %s" % name, EXIT_REFUSED)
 
 
 def cmd_init_pose(ctx, args):

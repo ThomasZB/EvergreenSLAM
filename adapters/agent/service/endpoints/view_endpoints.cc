@@ -1,7 +1,8 @@
 /**
  * @file view_endpoints.cc
  * @author hang chen (chen@hang.plus)
- * @brief /snapshot and /view: one task copies out everything drawn or written, then files.
+ * @brief /snapshot and /view: one task copies out everything drawn or written, then files;
+ *        /snapshots/file serves a written snapshot's files.
  * @version 0.1
  * @date 2026-09-24
  *
@@ -88,6 +89,32 @@ void HandleSnapshot(ServiceContext& context, httplib::Response& response) {
   }
   writer.EndObject();
   SendJson(response, writer);
+}
+
+void HandleSnapshotFile(const ServiceContext& context, const httplib::Request& request,
+                        httplib::Response& response) {
+  const int64_t seq = ParseInt("seq", RequiredParam(request, "seq"));
+  const std::string name = RequiredParam(request, "name");
+  if (seq < 1 || seq > 999999) {
+    throw RequestError("bad_param", "seq is 1 to 999999");
+  }
+  const std::string sequence = SequenceName(static_cast<int>(seq));
+  const std::filesystem::path directory =
+      std::filesystem::path(context.snapshots.snapshots_dir()) / sequence;
+  const std::filesystem::path file = directory / name;
+  std::error_code error;
+  if (!IsSnapshotFileName(name) ||
+      !std::filesystem::is_directory(std::filesystem::symlink_status(directory, error)) ||
+      !std::filesystem::is_regular_file(std::filesystem::symlink_status(file, error))) {
+    SendError(response, 404, "not_found", "no snapshot file " + sequence + "/" + name);
+    return;
+  }
+  const std::optional<std::string> contents = common::ReadFile(file.string());
+  if (!contents.has_value()) {
+    SendError(response, 404, "not_found", "cannot read " + sequence + "/" + name);
+    return;
+  }
+  response.set_content(*contents, "application/octet-stream");
 }
 
 #ifdef EVERGREENSLAM_AGENT_WITH_RENDERER
@@ -351,6 +378,10 @@ void RegisterViewEndpoints(httplib::Server& server, ServiceContext& context) {
               TaskRoute(context, [&context](const httplib::Request&, httplib::Response& response) {
                 HandleSnapshot(context, response);
               }));
+  server.Get("/snapshots/file",
+             Guarded([&context](const httplib::Request& request, httplib::Response& response) {
+               HandleSnapshotFile(context, request, response);
+             }));
 #ifdef EVERGREENSLAM_AGENT_WITH_RENDERER
   server.Get("/view", TaskRoute(context, [&context](const httplib::Request& request,
                                                     httplib::Response& response) {

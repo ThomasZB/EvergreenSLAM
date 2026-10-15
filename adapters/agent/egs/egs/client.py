@@ -44,7 +44,7 @@ HINTS = {
     "owned_by_process": "place.yaml, index.tsv and README.md belong to the SLAM process",
     "too_many_layers": "at most 4 layers: split into two views",
     "unknown_layer": "unknown layer",
-    "too_large": "file over 1 MiB",
+    "too_large": "file over 8 MiB",
     "not_found": "no such file",
     "unknown_map": "no such map: see `egs map ls`",
     "not_supported": "this host cannot switch maps or drop the fed session: "
@@ -86,7 +86,7 @@ class Response:
 
     def json(self):
         try:
-            return json.loads(self.body.decode("utf-8"))
+            return json.loads(self.body.decode("utf-8", "replace"))
         except ValueError:
             raise EgsError("service sent malformed JSON", EXIT_TRANSPORT)
 
@@ -101,9 +101,14 @@ def _encode(params):
 
 
 class Client:
-    def __init__(self, base_url=DEFAULT_URL, timeout=DEFAULT_TIMEOUT_S):
+    def __init__(self, base_url=DEFAULT_URL, timeout=DEFAULT_TIMEOUT_S, use_proxy=False):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.use_proxy = use_proxy
+        # macOS urllib picks up system proxies (Clash and the like), which answer 502 for a tunnel.
+        self._opener = urllib.request.build_opener(
+            *([] if use_proxy else [urllib.request.ProxyHandler({})])
+        )
 
     def request(self, method, path, params=None, body=None, mutating=False):
         """GET params go in the query; POST params go in a form body unless raw `body` is given."""
@@ -120,7 +125,7 @@ class Client:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with self._opener.open(req, timeout=self.timeout) as r:
                 return Response(r.status, r.headers, r.read())
         except urllib.error.HTTPError as e:
             with e:
@@ -136,17 +141,25 @@ class Client:
                     "outcome_unknown",
                 )
             raise EgsError(
-                "connection to %s dropped (%s)" % (self.base_url, e), EXIT_TRANSPORT, "unreachable"
+                "connection to %s dropped (%s); through an SSH tunnel this means nothing listens "
+                "on the robot's side: is the SLAM process running with its agent service?"
+                % (self.base_url, e),
+                EXIT_TRANSPORT,
+                "unreachable",
             )
         except urllib.error.URLError as e:
             if isinstance(e.reason, (socket.timeout, TimeoutError)):
                 raise self._timeout(mutating)
-            raise EgsError(
-                "cannot reach the SLAM process at %s (%s); is it running with --agent_port? "
-                "set EGS_URL otherwise" % (self.base_url, e.reason),
-                EXIT_TRANSPORT,
-                "unreachable",
-            )
+            raise EgsError(self._unreachable(e.reason), EXIT_TRANSPORT, "unreachable")
+
+    def _unreachable(self, reason):
+        port = urllib.parse.urlsplit(self.base_url).port or 8643
+        return (
+            "cannot reach the SLAM process at %s (%s). If it runs on the robot, open the tunnel "
+            "first: ssh -NT -o ExitOnForwardFailure=yes -L 127.0.0.1:%d:127.0.0.1:8643 user@robot; "
+            "else point egs at it with EGS_URL or --robot NAME (~/.config/egs/config)"
+            % (self.base_url, reason, port)
+        )
 
     def _timeout(self, mutating):
         if mutating:

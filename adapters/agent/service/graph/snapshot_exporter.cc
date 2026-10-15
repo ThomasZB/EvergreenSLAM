@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <utility>
@@ -277,6 +278,12 @@ int NextSequenceNumber(const std::string& dir) {
   return highest + 1;
 }
 
+bool IsSnapshotFileName(std::string_view name) {
+  constexpr std::string_view kNames[] = {"map.pgm",        "map.yaml",    "map.png",    "map.json",
+                                         "trajectory.csv", "places.json", "summary.txt"};
+  return std::find(std::begin(kNames), std::end(kNames), name) != std::end(kNames);
+}
+
 std::string SequenceName(int seq) {
   char name[16];
   std::snprintf(name, sizeof(name), "%06d", seq);
@@ -323,6 +330,7 @@ std::optional<SnapshotResult> SnapshotExporter::Export(const SnapshotInput& inpu
   files.emplace_back("summary.txt", Summary(input, result.seq));
 
   for (const auto& [name, bytes] : files) {
+    DCHECK(IsSnapshotFileName(name)) << name;
     if (!WriteBytes(temp_dir / name, bytes)) {
       return std::nullopt;
     }

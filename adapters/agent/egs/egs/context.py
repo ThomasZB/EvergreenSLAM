@@ -4,9 +4,8 @@ import json
 import os
 import sys
 
+from . import config
 from .client import (
-    DEFAULT_TIMEOUT_S,
-    DEFAULT_URL,
     EXIT_REFUSED,
     EXIT_USAGE,
     Client,
@@ -22,14 +21,27 @@ class Ctx:
         self.env = os.environ if env is None else env
         self.out = out or sys.stdout
         self.err = err or sys.stderr
-        timeout = float(self.env.get("EGS_TIMEOUT") or DEFAULT_TIMEOUT_S)
-        self.client = Client(self.env.get("EGS_URL") or DEFAULT_URL, timeout)
+        self.robot = None
         self.poll_s = float(self.env.get("EGS_POLL_S") or 10.0)
+        self._settings = None
+        self._client = None
         self._root = None
-        self._memory_dir = None
+        self._local = None
         self._store = None
         self.json = False
         self.emitted = False
+
+    def settings(self):
+        if self._settings is None:
+            self._settings = config.load(self.env, self.robot)
+        return self._settings
+
+    @property
+    def client(self):
+        if self._client is None:
+            s = self.settings()
+            self._client = Client(s.url, s.timeout, self.env.get("EGS_USE_PROXY") == "1")
+        return self._client
 
     def print(self, *lines):
         """Text output; dropped under --json, where `result` prints the one object instead."""
@@ -55,22 +67,24 @@ class Ctx:
         return self._root
 
     def memory_dir(self):
-        if self._memory_dir is None:
-            self._memory_dir = self.env.get("EGS_MEMORY") or self.root()["memory_dir"]
-        return self._memory_dir
+        return self.settings().memory or self.root()["memory_dir"]
+
+    def instance_id(self):
+        return self.root().get("instance_id") or "unknown"
 
     def map_dir(self):
         return self.local_map_dir() or self.root().get("map_dir")
 
     def local_map_dir(self):
-        """memory/ is always <map_dir>/memory, so a readable EGS_MEMORY names map_dir here."""
-        mem = self.env.get("EGS_MEMORY")
-        if not mem or not self.local_ok():
+        """memory/ is always <map_dir>/memory."""
+        if not self.is_local():
             return None
-        return os.path.dirname(os.path.normpath(os.path.abspath(mem)))
+        return os.path.dirname(os.path.normpath(os.path.abspath(self.memory_dir())))
 
     def refuse_inside_memory(self, path):
         """Exports carry map-frame XY, which memory/ never holds (memory/README.md dead rule 1)."""
+        if path == "-":
+            return
         real = os.path.realpath(path)
         mem = os.path.realpath(self.memory_dir())
         if real == mem or real.startswith(mem + os.sep):
@@ -81,16 +95,41 @@ class Ctx:
                 "inside_memory",
             )
 
-    def local_ok(self):
-        d = self.memory_dir()
-        return os.path.isdir(d) and os.access(d, os.R_OK | os.X_OK)
+    def is_local(self):
+        if self._local is None:
+            explicit = self.settings().memory
+            self._local = _readable(explicit) if explicit else self._same_instance()
+        return self._local
+
+    def _same_instance(self):
+        root = self.root()
+        mem, instance = root.get("memory_dir"), root.get("instance_id")
+        if not mem or not instance:
+            return False
+        marker = os.path.join(os.path.dirname(os.path.normpath(mem)), "agent_instance")
+        try:
+            with open(marker, encoding="utf-8") as f:
+                if f.read().strip() != instance:
+                    return False
+        except (OSError, ValueError):
+            return False
+        return _readable(mem)
 
     def store(self):
         if self._store is None:
             self._store = (
-                LocalStore(self.memory_dir()) if self.local_ok() else RemoteStore(self.client)
+                LocalStore(self.memory_dir()) if self.is_local() else RemoteStore(self.client)
             )
         return self._store
+
+    def write_bytes(self, data):
+        buf = getattr(self.out, "buffer", None)
+        if buf is not None:
+            self.out.flush()
+            buf.write(data)
+            buf.flush()
+        else:
+            self.out.write(data.decode("utf-8", "replace"))
 
     def memory(self):
         return Memory(self.store())
@@ -105,3 +144,7 @@ class Ctx:
         self.print("refused: " + text)
         self.result(dict({"ok": False, "reason": reason, "detail": text}, **fields))
         return EXIT_REFUSED
+
+
+def _readable(d):
+    return os.path.isdir(d) and os.access(d, os.R_OK | os.X_OK)

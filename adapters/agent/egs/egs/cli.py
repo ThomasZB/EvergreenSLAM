@@ -3,28 +3,36 @@
 import argparse
 import sys
 
-from . import commands, fscmd, maps, sessions, view, zones
+from . import commands, fscmd, maps, sessions, skill, view, zones
 from .client import EXIT_OK, EXIT_REFUSED, EXIT_TRANSPORT, EXIT_USAGE, EgsError
 from .context import Ctx
 
 DESCRIPTION = """\
-egs is the bridge from your shell to the running SLAM process. memory/ is a plain directory
-tree you work in with ls/find/grep/cat/mv; egs only answers what the live process alone knows:
-coordinates, saving a place, maps and sessions. Read memory/README.md before changing memory/.
+egs is the bridge from your shell to the running SLAM process, usually on a robot reached through
+an SSH tunnel. Start with `egs root`: it checks the connection and says where memory/ lives.
+memory/ is a directory tree of places and things; work in it with `egs fs` (ls, tree, cat, grep,
+write, append, mkdir, mv, rm). egs also answers what the live process alone knows: coordinates,
+saving a place, maps and sessions. Read memory/README.md before changing memory/.
 All paths are relative to memory/ and start with places/."""
 
 EPILOG = """\
-environment:
+connection (command line > environment > config file > defaults):
+  --robot NAME / EGS_ROBOT  use [robot.NAME] of ~/.config/egs/config ($XDG_CONFIG_HOME/egs/config):
+               url = http://127.0.0.1:8643, timeout = 30, memory = <dir>; [default] fills gaps
   EGS_URL      service address (default http://127.0.0.1:8643)
-  EGS_MEMORY   memory/ directory; default: ask the process (GET /root). When readable, its
-               parent is the map directory view and snapshot print paths in
   EGS_TIMEOUT  seconds per request (default 30)
+  EGS_MEMORY   a memory/ directory on this machine to work in directly (a mounted map directory)
+  EGS_USE_PROXY=1  go through the system/environment HTTP proxy (default: never)
   EGS_OFFSET_MAX_M  observe --offset and zone add refuse beyond this robot-to-place distance
                (default 10)
+  The robot's service listens on 127.0.0.1:8643. From another machine open a tunnel first:
+    ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \\
+        -L 127.0.0.1:8643:127.0.0.1:8643 user@robot
 
-memory/ access: when the memory directory is not readable on this machine, every tree read and
-write egs does (where, find, observe, fs, ...) goes through the process's /fs endpoints instead,
-transparently and with the same rules. `egs fs` is the shell stand-in for that case.
+memory/ access: egs reads and writes files directly only when EGS_MEMORY (or config memory) names
+them, or when this machine runs the SLAM process itself (`egs root` prints a path). Otherwise every
+tree access (where, find, observe, fs, ...) goes through the process's /fs endpoints with the same
+rules, and `egs root` prints `remote <url>  map <name>`.
 
 node.yaml must stay in the flat YAML subset of memory/README.md (key: value, flow lists [a, b],
 numbers, strings); egs refuses to rewrite anything else, and rewriting drops comments.
@@ -41,14 +49,15 @@ There is no goto: egs never moves the robot; hand `approach` from `egs where` to
 
 AGENT_HELP = """\
 1. no map-frame XY in any file you write; ask `egs where` for a current position
-2. place.yaml belongs to the process: never write, edit or cp -r it; stand there, `egs place save`
+2. place.yaml belongs to the process: never write, edit or copy it; stand there, `egs place save`
 3. things you can stand in front of are places; small movable things: node.yaml, no place.yaml
-4. grep -r always takes --include=node.yaml; to find an object use `egs find`
+4. to find a thing use `egs find`; to search notes and skills `egs fs grep <words> [places/<p>]`
 5. egs paths are relative to memory/ and start with places/
 6. skills and attachments are reserved names, never a place or a thing; no symbolic links
 7. observations.jsonl is append-only; retract a line with `egs observe <path> --invalidates <id>`
 8. there is no egs goto: egs never moves the robot
 
+first -> egs root: checks the connection; memory/ is on the robot, so work in it with egs fs
 where am I -> egs here
 where is a place or a thing -> egs where places/<path>
 find a thing by name, alias or kind -> egs find <words>
@@ -59,12 +68,13 @@ go somewhere -> egs where places/<path>, give its approach pose to your navigato
 the navigator must avoid an area -> egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1 (ls | rm)
 is the map healthy, aligned to the base -> egs status
 a picture -> egs view map | here | route places/<p> | trail | session [id]
-export the map as files -> egs snapshot [-o DIR] (DIR outside memory/)
+export the map as files -> egs snapshot -o DIR (DIR outside memory/)
 the robot's pose is wrong -> egs init-pose --place places/<p>, then egs here; else egs relocalize
 make sure it is on disk now -> egs checkpoint
 a broken session (a fall) -> egs session rm <fed id> --yes: drops it in process; pose lost
-new container, rename, re-parent, delete -> mkdir, mv, rm -r (bindings move with directories)
-notes and skills -> cat > f.tmp then mv f.tmp notes.md (or SKILL.md)
+look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words> [<path>]
+new container, rename, re-parent, delete -> egs fs mkdir | mv | rm -r (bindings move along)
+notes and skills -> egs fs write places/<p>/notes.md --file F (or stdin); egs fs append ...
 
 exit 0 done, 1 refused or plan rejected, 2 bad usage or path, 3 unreachable or outcome unknown
 outcome unknown: a change may have happened; check egs status / here / session ls, then retry
@@ -105,6 +115,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--json", action="store_true", default=False, help=JSON_HELP)
+    p.add_argument("--robot", metavar="NAME", help="connect as [robot.NAME] of the config file")
     sub = p.add_subparsers(dest="cmd", metavar="<command>", parser_class=_Parser)
     sub.required = True
 
@@ -113,7 +124,13 @@ def build_parser():
         sp.set_defaults(fn=fn)
         return sp
 
-    _json_flag(add("root", commands.cmd_root, "print the absolute path of memory/"))
+    _json_flag(
+        add(
+            "root",
+            commands.cmd_root,
+            "check the connection; print memory/'s path, or `remote <url>  map <name>`",
+        )
+    )
     _json_flag(add("here", commands.cmd_here, "where the robot is: current place, two closest, pose"))
     _json_flag(
         add("status", commands.cmd_status, "map health: frozen base, alignment, phase, closures")
@@ -218,7 +235,9 @@ def build_parser():
     zr.set_defaults(fn=zones.cmd_rm)
 
     s = add("snapshot", commands.cmd_snapshot, "export map, trajectory, places; refresh index.tsv")
-    s.add_argument("-o", "--output", metavar="DIR", help="also copy the files to DIR")
+    s.add_argument(
+        "-o", "--output", metavar="DIR", help="also copy the files to DIR (downloads when remote)"
+    )
     _json_flag(s)
 
     v = add(
@@ -245,7 +264,9 @@ def build_parser():
     v.add_argument("--full", action="store_true", help="no crop (same as --ego 0)")
     v.add_argument("--target", help="route target (same as the positional)")
     v.add_argument("--session", help="session id (same as the positional)")
-    v.add_argument("-o", "--output", metavar="FILE", help="write the PNG to FILE")
+    v.add_argument(
+        "-o", "--output", metavar="FILE", help="write the PNG to FILE; - writes it to stdout"
+    )
     _json_flag(v)
 
     ip = add("init-pose", commands.cmd_init_pose, "tell the process where the robot is")
@@ -291,9 +312,9 @@ def build_parser():
         sp.add_argument("name", help="[a-z0-9][a-z0-9_-]*")
         sp.set_defaults(fn=fn)
 
-    fs = sub.add_parser("fs", help="memory/ file operations when you cannot reach the directory")
+    fs = sub.add_parser("fs", help="memory/ file operations, on the robot or here")
     fsub = fs.add_subparsers(
-        dest="sub", metavar="<ls|tree|cat|write|append|mkdir|mv|rm>", parser_class=_Parser
+        dest="sub", metavar="<ls|tree|cat|grep|write|append|mkdir|mv|rm>", parser_class=_Parser
     )
     fsub.required = True
     for name, fn, help_ in (
@@ -308,9 +329,25 @@ def build_parser():
     sp = fsub.add_parser("cat", help="print a file")
     sp.add_argument("path")
     sp.add_argument(
-        "-o", "--output", metavar="FILE", help="write the raw bytes to FILE, print its path"
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="write the raw bytes to FILE, print its path (- is stdout)",
     )
     sp.set_defaults(fn=fscmd.cmd_cat)
+    sp = fsub.add_parser(
+        "grep",
+        help="print path:line:text for lines holding PATTERN (fixed string, any case); "
+        "skips observations.jsonl and attachments/; at most 200",
+    )
+    sp.add_argument("pattern")
+    sp.add_argument("path", nargs="?", default=".")
+    sp.add_argument(
+        "--include",
+        metavar="GLOBS",
+        help="comma-separated file-name globs (default node.yaml,notes.md,SKILL.md,*.md,*.yaml)",
+    )
+    _json_flag(sp).set_defaults(fn=fscmd.cmd_grep)
     for name, fn, help_ in (
         ("write", fscmd.cmd_write, "replace a file atomically with stdin"),
         ("append", fscmd.cmd_append, "append stdin to a file in one write"),
@@ -331,6 +368,14 @@ def build_parser():
     sp.add_argument("-r", "--recursive", action="store_true")
     sp.set_defaults(fn=fscmd.cmd_rm)
 
+    sk = sub.add_parser("skill", help="the Agent Skill shipped with egs")
+    sksub = sk.add_subparsers(dest="sub", metavar="<show|install>", parser_class=_Parser)
+    sksub.required = True
+    sksub.add_parser("show", help="print SKILL.md").set_defaults(fn=skill.cmd_show)
+    si = sksub.add_parser("install", help="write <dir>/evergreenslam/SKILL.md")
+    si.add_argument("dir", help="the agent's skills directory, e.g. ~/.claude/skills")
+    si.set_defaults(fn=skill.cmd_install)
+
     h = add("help", None, "`egs help agent`: the rules and command table in 30 lines")
     h.add_argument("topic", nargs="?", choices=("agent",))
     h.set_defaults(fn=_cmd_help(p))
@@ -345,6 +390,7 @@ def main(argv=None, env=None, out=None, err=None):
     try:
         args = build_parser().parse_args(argv)
         ctx.json = bool(args.json)
+        ctx.robot = args.robot
         if ctx.json and not getattr(args, "json_ok", False):
             raise EgsError("--json is not supported by this command", EXIT_USAGE)
         return args.fn(ctx, args)

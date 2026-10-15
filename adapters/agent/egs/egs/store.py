@@ -4,6 +4,7 @@ Both stores take paths relative to memory/ ('.' is memory/ itself) and apply the
 service's fs passthrough (API.md "fs passthrough"), so `egs fs` behaves the same either way.
 """
 
+import fnmatch
 import os
 import posixpath
 import re
@@ -16,6 +17,9 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 PROCESS_OWNED_ROOT = ("index.tsv", "readme.md")
 NODE_FILES = ("place.yaml", "node.yaml")
 RESERVED_NAMES = ("skills", "attachments")
+GREP_GLOBS = ("node.yaml", "notes.md", "SKILL.md", "*.md", "*.yaml")
+MAX_GREP_MATCHES = 200
+MAX_GREP_FILE_BYTES = 1 << 20
 
 
 def norm(path, memory_dir=None):
@@ -65,6 +69,64 @@ def _holds_node_files(path):
             if n in NODE_FILES and not os.path.islink(os.path.join(dirpath, n)):
                 return True
     return False
+
+
+def grep_globs(include):
+    globs = [g.strip(" ") for g in (include or "").split(",")]
+    return [g for g in globs if g] or list(GREP_GLOBS)
+
+
+class _Grep:
+    """The service's GET /fs/grep on a local tree: same order, skips and limits."""
+
+    def __init__(self, pattern, include):
+        self.needle = pattern.encode("utf-8").lower()
+        self.globs = grep_globs(include)
+        self.matches = []
+
+    def walk(self, path, rel):
+        try:
+            names = sorted(os.listdir(path))
+        except OSError:
+            return True
+        for name in names:
+            child, child_rel = os.path.join(path, name), name if rel == "." else rel + "/" + name
+            try:
+                st = os.lstat(child)
+            except OSError:
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                if name != "attachments" and not self.walk(child, child_rel):
+                    return False
+            elif (
+                stat.S_ISREG(st.st_mode)
+                and any(fnmatch.fnmatchcase(name, g) for g in self.globs)
+                and not self.file(child, child_rel, st.st_size)
+            ):
+                return False
+        return True
+
+    def file(self, path, rel, size):
+        if posixpath.basename(rel) == "observations.jsonl" or size > MAX_GREP_FILE_BYTES:
+            return True
+        try:
+            with open(path, "rb") as f:
+                lines = f.read().split(b"\n")
+        except OSError:
+            return True
+        if lines[-1] == b"":
+            lines.pop()
+        for number, line in enumerate(lines, 1):
+            if line.endswith(b"\r"):
+                line = line[:-1]
+            if self.needle not in line.lower():
+                continue
+            if len(self.matches) == MAX_GREP_MATCHES:
+                return False
+            self.matches.append(
+                {"path": rel, "line": number, "text": line.decode("utf-8", "replace")}
+            )
+        return True
 
 
 def _refuse(reason, detail):
@@ -221,6 +283,20 @@ class LocalStore:
         except OSError as e:
             _refuse("fs_error", str(e))
 
+    def grep(self, rel, pattern, include=None):
+        path = self._check(rel)
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError:
+            _refuse("fs_error", "no such file or directory: " + rel)
+        grep = _Grep(pattern, include)
+        complete = True
+        if stat.S_ISDIR(mode):
+            complete = grep.walk(path, rel)
+        elif stat.S_ISREG(mode):
+            complete = grep.file(path, rel, os.lstat(path).st_size)
+        return grep.matches, not complete
+
     def tree(self, rel, depth):
         path = self._check(rel)
         if not os.path.isdir(path):
@@ -333,6 +409,16 @@ class RemoteStore:
 
     def rm(self, rel, recursive=False):
         self._post("/fs/rm", {"path": rel, "recursive": 1 if recursive else 0})
+
+    def grep(self, rel, pattern, include=None):
+        resp = self.client.request(
+            "GET", "/fs/grep", {"path": rel, "pattern": pattern, "include": include or None}
+        )
+        if resp.status == 200 and resp.is_json:
+            j = resp.json()
+            if j.get("ok"):
+                return j.get("matches") or [], bool(j.get("truncated"))
+        self._fail(resp)
 
     def tree(self, rel, depth):
         resp = self.client.request("GET", "/fs/tree", {"path": rel, "depth": depth})

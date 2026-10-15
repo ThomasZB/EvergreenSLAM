@@ -35,9 +35,8 @@ class MapsTest(EgsTestCase):
         self.state.switch_after_polls = 4
         code, out, err = self.egs("map", "new", "fresh")
         self.assertEqual(code, 0, out + err)
-        memory = "%s/fresh/memory" % self.state.map_root
-        self.assertIn("map fresh open; memory/ is now %s" % memory, out)
-        self.assertIn("cd %s again" % memory, out)
+        self.assertIn("map fresh open\n", out)
+        self.assertIn("run egs root again", out)
         self.assertNotIn("init-pose", out)
         self.assertEqual(self.requests("POST", "/maps/new")[0][2], {"name": "fresh"})
         self.assertEqual(len(self.requests("GET", "/root")), 5)

@@ -13,11 +13,14 @@
 
 #include <glog/logging.h>
 
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <utility>
 
+#include "common/file.h"
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"
 #include "service/http/httplib_include.h"
@@ -27,6 +30,18 @@ namespace evergreenslam::agent {
 namespace {
 
 constexpr size_t kMaxRequestBytes = 8 << 20;
+constexpr char kApiVersion[] = "0.3";
+
+std::string NewInstanceId() {
+  std::random_device device;
+  std::string id;
+  for (int i = 0; i < 4; ++i) {
+    char word[9];
+    std::snprintf(word, sizeof(word), "%08x", static_cast<unsigned>(device()));
+    id += word;
+  }
+  return id;
+}
 
 }  // namespace
 
@@ -37,6 +52,7 @@ struct AgentService::Impl {
   }
 
   ServiceContext context;
+  const std::string instance_id = NewInstanceId();
   httplib::Server server;
   std::thread listener;
   int port = -1;
@@ -55,14 +71,27 @@ PlaceStore InstalledPlaceStore(const lifelong::PoseGraph& pose_graph) {
   return places;
 }
 
-void RegisterRootEndpoint(httplib::Server& server, const ServiceContext& context) {
+void WriteInstanceFile(const ServiceContext& context, const std::string& instance_id) {
+  const std::string path =
+      (std::filesystem::path(context.places.map_dir()) / "agent_instance").string();
+  if (!common::WriteFileAtomically(path, instance_id + "\n")) {
+    LOG(ERROR) << "could not write " << path << ": egs on this machine falls back to /fs";
+  }
+}
+
+void RegisterRootEndpoint(httplib::Server& server, const ServiceContext& context,
+                          const std::string& instance_id) {
   server.Get(
-      "/root", Guarded([&context](const httplib::Request&, httplib::Response& response) {
+      "/root",
+      Guarded([&context, &instance_id](const httplib::Request&, httplib::Response& response) {
         std::error_code error;
         const std::string map_dir =
             std::filesystem::absolute(context.places.map_dir(), error).string();
         JsonWriter writer = BeginReceipt(std::nullopt);
-        writer.Field("map_dir", map_dir).Field("memory_dir", context.sandbox.root().string());
+        writer.Field("api_version", kApiVersion)
+            .Field("instance_id", instance_id)
+            .Field("map_dir", map_dir)
+            .Field("memory_dir", context.sandbox.root().string());
         if (context.map_root.empty()) {
           writer.NullField("map_root").NullField("map");
         } else {
@@ -94,7 +123,8 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
     }
   });
 
-  RegisterRootEndpoint(server, impl_->context);
+  WriteInstanceFile(impl_->context, impl_->instance_id);
+  RegisterRootEndpoint(server, impl_->context, impl_->instance_id);
   RegisterPlaceEndpoints(server, impl_->context);
   RegisterSessionEndpoints(server, impl_->context);
   RegisterViewEndpoints(server, impl_->context);

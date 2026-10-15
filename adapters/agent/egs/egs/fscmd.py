@@ -11,16 +11,6 @@ def _rel(ctx, path):
     return norm(path, ctx.memory_dir())
 
 
-def _write_bytes(ctx, data):
-    buf = getattr(ctx.out, "buffer", None)
-    if buf is not None:
-        ctx.out.flush()
-        buf.write(data)
-        buf.flush()
-    else:
-        ctx.out.write(data.decode("utf-8", "replace"))
-
-
 def _stdin_bytes(args):
     if args.file:
         with open(args.file, "rb") as f:
@@ -47,12 +37,14 @@ def cmd_ls(ctx, args):
 
 def cmd_tree(ctx, args):
     depth = max(1, min(6, args.depth))
-    _write_bytes(ctx, ctx.store().tree(_rel(ctx, args.path), depth).encode("utf-8"))
+    ctx.write_bytes(ctx.store().tree(_rel(ctx, args.path), depth).encode("utf-8"))
     return EXIT_OK
 
 
 def cmd_cat(ctx, args):
     rel = _rel(ctx, args.path)
+    if args.output == "-":
+        args.output = None
     if args.output:
         ctx.refuse_inside_memory(args.output)
     data = ctx.store().read(rel)
@@ -68,7 +60,19 @@ def cmd_cat(ctx, args):
             raise EgsError("cannot write %s: %s" % (out, e.strerror or e), EXIT_USAGE)
         ctx.print(out)
         return EXIT_OK
-    _write_bytes(ctx, data)
+    ctx.write_bytes(data)
+    return EXIT_OK
+
+
+def cmd_grep(ctx, args):
+    if not args.pattern:
+        raise EgsError("fs grep needs a non-empty PATTERN", EXIT_USAGE, "bad_param")
+    matches, truncated = ctx.store().grep(_rel(ctx, args.path), args.pattern, args.include)
+    for m in matches:
+        ctx.print("%s:%d:%s" % (m["path"], m["line"], m["text"]))
+    if truncated:
+        ctx.warn("stopped at %d matches: narrow PATH, PATTERN or --include" % len(matches))
+    ctx.result({"ok": True, "reason": None, "matches": matches, "truncated": truncated})
     return EXIT_OK
 
 

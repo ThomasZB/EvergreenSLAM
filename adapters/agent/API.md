@@ -1,9 +1,10 @@
-# AgentService HTTP contract (v0.2)
+# AgentService HTTP contract (v0.3)
 
 `adapters/agent/service/`. An in-process `httplib::Server` owned by the host (bag main, live node)
 beside, never inside, the webui. Binds host flag `--agent_bind` (default **127.0.0.1**), port 8643;
 compose passes `0.0.0.0` inside the container and maps `127.0.0.1:8643:8643` on the host side. No
-auth: loopback and one agent session per map. `egs` is the only intended client.
+auth: loopback and one agent session per map. `egs` is the only intended client; an agent on
+another computer reaches it through an SSH tunnel to the robot's loopback (`egs/README.md`).
 
 ## Conventions
 
@@ -11,7 +12,8 @@ auth: loopback and one agent session per map. `egs` is the only intended client.
   JSON below). Exception: `fs write|append` take `path` in the query and raw bytes as the body. No
   JSON parser in the service; responses come from a small writer.
   Booleans accept `1|true` and `0|false`; an `fs` `path` of `.` is `memory/` itself.
-- **Responses** are `application/json` except `/view` (PNG), `/fs/cat` (raw bytes), `/fs/tree` (text).
+- **Responses** are `application/json` except `/view` (PNG), `/fs/cat` and `/snapshots/file` (raw
+  bytes), `/fs/tree` (text).
 - **Receipt**: every JSON response carries `ok` (bool) and `reason` (code string, `null` when ok);
   every endpoint marked *task* also carries `at_num_solves` = `optimization().num_solves()` read in
   that task, so values from one response share one solve. Endpoint fields are added beside these.
@@ -45,7 +47,7 @@ auth: loopback and one agent session per map. `egs` is the only intended client.
 |---|---|---|
 | 200 | every well-formed request, including refusals | receipt with `ok: false` and a `reason` |
 | 400 | missing / malformed parameter, path rule broken | `{ok: false, reason, detail}` |
-| 404 | unknown route (`not_found`); `GET /fs/cat` of a missing path | same, `reason: "not_found"` |
+| 404 | unknown route (`not_found`); `GET /fs/cat` of a missing path; `GET /snapshots/file` of anything it does not serve | same, `reason: "not_found"` |
 | 503 | task endpoint before `OnBackendStarted()` (an atomic), or after `Stop()` began | same, `reason: "not_started"` |
 
 Refusal codes: `unknown_anchor`, `unresolvable` (orphan anchor), `no_keyframe`, `node_gone`,
@@ -140,8 +142,15 @@ void Stop();              // stops the server and joins its threads
 `here`, `status`, `where`, `snapshot`, `view`, `zones`, `session ls` read; everything else
 mutates.
 
-**GET /root** — no task. `→ {ok, map_dir, memory_dir, map_root, map}` (absolute paths);
-`map_root` and `map` are `null` when the host named no map root.
+**GET /root** — no task. `→ {ok, api_version, instance_id, map_dir, memory_dir, map_root, map}`
+(absolute paths; `memory_dir` is the realpath); `map_root` and `map` are `null` when the host named
+no map root. `api_version` is `"0.3"`. `instance_id` is 32 random hex digits drawn when the service
+is constructed (so per process and per opened map); the service writes it, newline-terminated,
+atomically to `<map_dir>/agent_instance` (a write failure is only logged). `egs` works on files
+directly only when `EGS_MEMORY` / config `memory` names a directory, or when
+`<dirname(memory_dir)>/agent_instance` exists on its own machine and holds this `instance_id`;
+everything else goes through `/fs` and `/snapshots/file`, so a same-named directory on the agent's
+computer is never read or written.
 
 **GET /status** — task. `→ {ok, at_num_solves, boot_count, fed_session, map (name|null), has_frozen_base,
 aligned_to_base, phase, localization, closures_delta, num_anchors, num_orphans, num_place_files,
@@ -237,7 +246,14 @@ write through the tree (or `/fs`), not through the service.
 **POST /snapshot** — task, then writes. One task copies out the assembled map, every node's `{time,
 global_pose, session}`, sessions, `ResolveAll`, robot pose, `boot_count`; the service thread writes
 `<map_dir>/snapshots/NNNNNN/` (`.tmp`, renamed) and regenerates `memory/index.tsv` atomically.
-`→ {ok, at_num_solves, seq, dir, files: [name]}`. `egs snapshot -o` copies client side.
+`→ {ok, at_num_solves, seq, dir, files: [name]}`. `egs snapshot -o` copies client side in local
+mode and downloads each file through `/snapshots/file` otherwise.
+
+**GET /snapshots/file** `{seq, name}` — no task, read only. Raw bytes of
+`<map_dir>/snapshots/NNNNNN/<name>` (`NNNNNN` = `seq`, 6 digits). `name` must be one of the file
+names below and the file a regular file (no symlink) inside that directory; anything else,
+including a name not written for that snapshot (`map.*` without cells), answers 404
+`not_found`. `seq` outside 1..999999 or missing parameters: 400 `bad_param`.
 
 | file | content |
 |---|---|
@@ -374,7 +390,7 @@ switching", ≤ max(poll, 30) s).
 
 ### fs passthrough (no task)
 
-For agents without the directory. Paths relative to `memory/`. Dumb on purpose: no index, no search.
+For agents without the directory. Paths relative to `memory/`. No index; `grep` is the only search.
 
 - Rejected (400): absolute or empty paths, `..`, NUL, any existing symlink component (`lstat`
   each), a result outside `memory/` after `realpath`; `not_slug` on every component of a `mkdir`
@@ -390,12 +406,23 @@ For agents without the directory. Paths relative to `memory/`. Dumb on purpose: 
 |---|---|---|
 | `GET /fs/ls` | `path` | `{ok, entries: [{name, type: dir|file, size}]}`, sorted |
 | `GET /fs/tree` | `path, depth=3` (≤ 6) | `text/plain`, like `tree -L depth`; a non-empty directory cut off by the depth gets one `└── …` child line (not counted) |
-| `GET /fs/cat` | `path` | raw bytes; missing → 404 `not_found`; not a file → `fs_error`; > 1 MiB → `too_large` |
+| `GET /fs/cat` | `path` | raw bytes; missing → 404 `not_found`; not a file → `fs_error`; > 8 MiB (the request body limit, so every attachment reads back) → 400 `too_large` |
+| `GET /fs/grep` | `pattern`, `path=.`, `include` | below |
 | `POST /fs/write` | `path`, body | temp + rename (`WriteFileAtomically`); parent must exist |
 | `POST /fs/append` | `path`, body | `open(O_WRONLY\|O_APPEND\|O_CREAT)`, one `write()` |
 | `POST /fs/mkdir` | `path` | `mkdir -p` |
 | `POST /fs/mv` | `from, to` | `rename(2)`; `to` existing → `exists` |
 | `POST /fs/rm` | `path, recursive=0` | file or empty dir; non-empty without `recursive=1` → `not_empty` |
+
+`GET /fs/grep` searches lines for `pattern` as a fixed string, ASCII case-insensitive (no regex);
+missing or empty `pattern` → 400 `bad_param`. `path` (default `.`) is a directory, walked in
+byte order of names, or one file; missing → `fs_error`. In a walk, a file is searched when its
+name matches one of `include`'s comma-separated globs (`fnmatch`; default
+`node.yaml,notes.md,SKILL.md,*.md,*.yaml`). Always skipped: `observations.jsonl`, directories
+named `attachments`, symlinks, files over 1 MiB. Lines split on `\n`, a trailing `\r` dropped,
+numbered from 1. `→ {ok, matches: [{path, line, text}], truncated}`, `path` relative to `memory/`;
+at most 200 matches, `truncated: true` when a 201st exists. `egs fs grep` prints `path:line:text`
+and does the same walk itself in local mode.
 
 ## Anchor hooks inside PoseGraph
 

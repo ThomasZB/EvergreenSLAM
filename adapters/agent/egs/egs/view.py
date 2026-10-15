@@ -1,4 +1,4 @@
-"""egs view: one PNG rendered by the service, saved under <map_dir>/views/."""
+"""egs view: one PNG rendered by the service; its path here, or its bytes with -o -."""
 
 import os
 import tempfile
@@ -12,7 +12,13 @@ DEFAULT_EGO_M = 7.5
 
 
 def cmd_view(ctx, args):
-    if args.output:
+    to_stdout = args.output == "-"
+    if to_stdout and ctx.json:
+        raise EgsError("-o - writes the PNG to stdout: it does not go with --json", EXIT_USAGE)
+    if to_stdout:
+        # Everything but the PNG goes to stderr, refusals included.
+        png_out, ctx.out = ctx.out, ctx.err
+    elif args.output:
         ctx.refuse_inside_memory(args.output)
     params = {"preset": args.preset}
     target, session = args.target, args.session
@@ -68,19 +74,24 @@ def cmd_view(ctx, args):
     if resp.status != 200:
         ctx.client.check(resp)
     h = resp.headers
-    ctx.print("layers=%s  @solve %s" % (h.get("X-EGS-Layers", "-"), h.get("X-EGS-Solve", "-")))
+    lines = ["layers=%s  @solve %s" % (h.get("X-EGS-Layers", "-"), h.get("X-EGS-Solve", "-"))]
     legend, dropped = [], []
     for item in (h.get("X-EGS-Legend") or "").split(";"):
         item = item.strip()
         # The header line above already names the layers; `dropped=` still prints.
         if item and not item.startswith("layers="):
-            ctx.print(item)
+            lines.append(item)
             if item.startswith("dropped="):
                 dropped = item[len("dropped=") :].split(",")
             else:
                 legend.append(item)
-    png = _local_copy(ctx, args, h.get("X-EGS-View") or "", resp.body)
-    ctx.print(png)
+    if to_stdout:
+        ctx.print(*lines)
+        ctx.out = png_out
+        ctx.write_bytes(resp.body)
+        return EXIT_OK
+    png = _saved_png(ctx, args, h.get("X-EGS-View") or "", resp.body)
+    ctx.print(*lines, png)
     solve = h.get("X-EGS-Solve")
     ctx.result(
         {
@@ -97,23 +108,19 @@ def cmd_view(ctx, args):
     return EXIT_OK
 
 
-def _local_copy(ctx, args, view, png):
-    """The server's file when it is visible here, else a local copy of the bytes."""
+def _saved_png(ctx, args, view, png):
     if args.output:
         _write(args.output, png)
         return os.path.abspath(args.output)
-    path = view
-    if view and not os.path.isabs(view):
-        try:
-            base = ctx.map_dir()
-        except EgsError:
-            base = None
-        if base:
-            path = os.path.join(base, view if "/" in view else os.path.join("views", view))
-    if path and os.path.isfile(path):
-        return path
+    if view and ctx.is_local():
+        path = view
+        if not os.path.isabs(view):
+            rel = view if "/" in view else os.path.join("views", view)
+            path = os.path.join(ctx.local_map_dir(), rel)
+        if os.path.isfile(path):
+            return path
     name = os.path.basename(view) or "view_%s.png" % args.preset
-    local = os.path.join(tempfile.gettempdir(), "egs-views", name)
+    local = os.path.join(tempfile.gettempdir(), "egs-views", ctx.instance_id(), name)
     _write(local, png)
     return local
 

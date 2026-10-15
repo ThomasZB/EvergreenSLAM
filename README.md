@@ -288,11 +288,12 @@ egs where places/kitchen/door      # pose, precision, and the pose to approach i
 egs view here                      # scan over the map, around the robot
 ```
 
-`egs` is Python 3.9+ with no dependencies. To give an agent the skill, copy
-`adapters/agent/skills/evergreenslam/` into its skills directory; its first section is the
-onboarding (`cd "$(egs root)"`, read `memory/README.md`, read the `SKILL.md` chain down to the
-place). The service binds `127.0.0.1`; for an agent on another machine set the node's `agent_bind`
-parameter (`ros2 run`, not the pixi task) or tunnel the port, and point `EGS_URL` at it. The HTTP
+`egs` is Python 3.9+ with no dependencies; `pipx install ./adapters/agent/egs` installs it on a
+machine without ROS, and `egs skill install <skills dir>` gives an agent the skill. Its first
+section is the onboarding (`egs root`, read `memory/README.md` with `egs fs cat`, read the
+`SKILL.md` chain down to the place). The service binds `127.0.0.1`; an agent on another machine
+reaches it through an SSH tunnel (`ssh -NT -L 127.0.0.1:8643:127.0.0.1:8643 user@robot`), with
+connection settings in `~/.config/egs/config` ([`adapters/agent/egs/README.md`](adapters/agent/egs/README.md)). The HTTP
 contract is [`adapters/agent/API.md`](adapters/agent/API.md), the skill is
 [`adapters/agent/skills/evergreenslam/SKILL.md`](adapters/agent/skills/evergreenslam/SKILL.md).
 

@@ -15,11 +15,12 @@ class FallbackTest(EgsTestCase):
         super().setUp()
         self.remote_only()
 
-    def test_root_warns(self):
+    def test_root_says_remote(self):
         code, out, err = self.egs("root")
-        self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), self.state.root_memory_dir)
-        self.assertIn("egs fs", err)
+        self.assertEqual(code, 0, err)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "remote %s  map map" % self.service.url)
+        self.assertIn("egs fs", lines[1])
 
     def test_where_and_find_through_fs(self):
         code, out, _ = self.egs("where", "places/kitchen/table/apple")

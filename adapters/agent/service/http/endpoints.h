@@ -21,9 +21,9 @@ namespace evergreenslam::agent {
 void RegisterPlaceEndpoints(httplib::Server& server, ServiceContext& context);
 // /status, /sessions/**, /relocalize, /checkpoint.
 void RegisterSessionEndpoints(httplib::Server& server, ServiceContext& context);
-// /snapshot, and /view when the renderer is built.
+// /snapshot, /snapshots/file, and /view when the renderer is built.
 void RegisterViewEndpoints(httplib::Server& server, ServiceContext& context);
-// /fs/ls, tree, cat, write, append, mkdir, mv, rm.
+// /fs/ls, tree, cat, grep, write, append, mkdir, mv, rm.
 void RegisterFsEndpoints(httplib::Server& server, ServiceContext& context);
 // /maps, /maps/new, /maps/open.
 void RegisterMapsEndpoints(httplib::Server& server, ServiceContext& context);

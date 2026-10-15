@@ -1,8 +1,7 @@
 /**
  * @file fs_endpoints.cc
  * @author hang chen (chen@hang.plus)
- * @brief The /fs/ endpoints: memory/ over HTTP for agents without the directory; no index, no
- * search.
+ * @brief The /fs/ endpoints: memory/ over HTTP for agents without the directory.
  * @version 0.1
  * @date 2026-09-24
  *
@@ -24,6 +23,7 @@
 #include "common/file.h"
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"
+#include "service/memory/fs_grep.h"
 #include "service/memory/fs_sandbox.h"
 
 namespace evergreenslam::agent {
@@ -31,7 +31,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr uintmax_t kMaxCatBytes = 1 << 20;
+constexpr uintmax_t kMaxCatBytes = 8 << 20;
 constexpr int kMaxTreeDepth = 6;
 constexpr int kDefaultTreeDepth = 3;
 
@@ -181,7 +181,7 @@ void HandleCat(const ServiceContext& context, const httplib::Request& request,
     return;
   }
   if (static_cast<uintmax_t>(status.st_size) > kMaxCatBytes) {
-    throw RequestError("too_large", path.relative + " is over 1 MiB");
+    throw RequestError("too_large", path.relative + " is over 8 MiB");
   }
   const std::optional<std::string> contents = common::ReadFile(path.absolute.string());
   if (!contents.has_value()) {
@@ -189,6 +189,29 @@ void HandleCat(const ServiceContext& context, const httplib::Request& request,
     return;
   }
   response.set_content(*contents, "application/octet-stream");
+}
+
+void HandleGrep(const ServiceContext& context, const httplib::Request& request,
+                httplib::Response& response) {
+  const std::string pattern = RequiredParam(request, "pattern");
+  const SandboxPath path = context.sandbox.Resolve(OptionalParam(request, "path").value_or("."));
+  if (!path.exists()) {
+    SendRefusal(response, "fs_error", "no such file or directory: " + path.relative);
+    return;
+  }
+  const GrepResult result =
+      GrepTree(path, pattern, ParseGrepGlobs(OptionalParam(request, "include").value_or("")));
+  JsonWriter writer = BeginReceipt(std::nullopt);
+  writer.Key("matches").BeginArray();
+  for (const GrepMatch& match : result.matches) {
+    writer.BeginObject()
+        .Field("path", match.path)
+        .Field("line", match.line)
+        .Field("text", match.text)
+        .EndObject();
+  }
+  writer.EndArray().Field("truncated", result.truncated).EndObject();
+  SendJson(response, writer);
 }
 
 void HandleWrite(const ServiceContext& context, const httplib::Request& request,
@@ -328,6 +351,7 @@ void RegisterFsEndpoints(httplib::Server& server, ServiceContext& context) {
   server.Get("/fs/ls", route(HandleList));
   server.Get("/fs/tree", route(HandleTree));
   server.Get("/fs/cat", route(HandleCat));
+  server.Get("/fs/grep", route(HandleGrep));
   server.Post("/fs/write", route(HandleWrite));
   server.Post("/fs/append", route(HandleAppend));
   server.Post("/fs/mkdir", route(HandleMkdir));

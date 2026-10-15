@@ -42,10 +42,9 @@ def _switch(ctx, path, name, opened=False):
             "outcome unknown: map %s not open after %gs; check `egs root`" % (name, wait_s),
             EXIT_TRANSPORT,
         )
-    memory = root.get("memory_dir")
     ctx.print(
-        "map %s open; memory/ is now %s" % (name, memory),
-        "the workspace changed: cd %s again; the other map's places are not visible here" % memory,
+        "map %s open" % name,
+        "the workspace changed: run egs root again; the other map's places are not visible here",
     )
     if opened:
         # The map boots from its own last_pose.pb, not from where the robot is now.
