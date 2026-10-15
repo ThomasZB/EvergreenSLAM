@@ -40,7 +40,7 @@ numbers, strings); egs refuses to rewrite anything else, and rewriting drops com
 Timestamps print as ages (35s, 20m, 6d). A mutating command that gets no answer within the
 timeout prints 'outcome unknown': check with egs status / here / session ls before retrying.
 
---json (usage commands, map ls, session ls): one JSON object instead of text; prefer it to parsing.
+--json (every command but fs cat, skill, help, mcp): one JSON object instead of text; prefer it.
 
 exit codes: 0 done (a session plan printed without --yes is done too), 1 refused or plan
 rejected (nothing changed unless stated), or a relocalization ended no_match or superseded,
@@ -58,8 +58,7 @@ AGENT_HELP = """\
 8. there is no egs goto: egs never moves the robot
 
 first -> egs root: checks the connection; memory/ is on the robot, so work in it with egs fs
-where am I -> egs here
-where is a place or a thing -> egs where places/<path>
+where am I / where is a place or a thing -> egs here / egs where places/<path>
 find a thing by name, alias or kind -> egs find <words>
 remember the spot the robot stands at -> egs place save places/<path> [--offset DX DY 0, <= 3 m]
 I saw it / it is not there -> egs observe places/<path> [--result absent] [--note ..] [--attach F]
@@ -105,6 +104,12 @@ def _cmd_help(parser):
         return EXIT_OK
 
     return run
+
+
+def _cmd_mcp(ctx, args):
+    from . import mcp
+
+    return mcp.cmd_mcp(ctx, args)
 
 
 def build_parser():
@@ -241,6 +246,7 @@ def build_parser():
         help="add even when the robot is farther than EGS_OFFSET_MAX_M from the place",
     )
     za.set_defaults(fn=zones.cmd_add)
+    _json_flag(za)
     zl = zsub.add_parser(
         "ls", help="every zone: its place, state and area, or why it is unresolvable"
     )
@@ -250,6 +256,7 @@ def build_parser():
     zr = zsub.add_parser("rm", help="delete <path>/zone.yaml (and the directory once empty)")
     zr.add_argument("path")
     zr.set_defaults(fn=zones.cmd_rm)
+    _json_flag(zr)
 
     s = add("snapshot", commands.cmd_snapshot, "export map, trajectory, places; refresh index.tsv")
     s.add_argument(
@@ -309,7 +316,9 @@ def build_parser():
     ev.add_argument("--since", type=int, default=0, metavar="N", help="from sequence N (default 0)")
     ev.add_argument("--follow", action="store_true", help="poll every second, one line per event")
     _json_flag(ev)
-    add("checkpoint", commands.cmd_checkpoint, "write the session and anchors to disk now")
+    _json_flag(
+        add("checkpoint", commands.cmd_checkpoint, "write the session and anchors to disk now")
+    )
 
     ses = sub.add_parser("session", help="management: list, freeze, rotate, remove sessions")
     ssub = ses.add_subparsers(dest="sub", metavar="<ls|freeze|new|rm>", parser_class=_Parser)
@@ -322,7 +331,7 @@ def build_parser():
         sp = ssub.add_parser(name, help=help_, description=help_)
         sp.add_argument("--yes", action="store_true", help="apply the plan")
         sp.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
-        sp.set_defaults(fn=fn)
+        _json_flag(sp).set_defaults(fn=fn)
     rm = ssub.add_parser(
         "rm",
         help="remove an idle session, or drop the fed one in process: a fresh one is fed and "
@@ -345,7 +354,7 @@ def build_parser():
     ):
         sp = msub.add_parser(name, help=help_, description=help_)
         sp.add_argument("name", help="[a-z0-9][a-z0-9_-]*")
-        sp.set_defaults(fn=fn)
+        _json_flag(sp).set_defaults(fn=fn)
 
     fs = sub.add_parser("fs", help="memory/ file operations, on the robot or here")
     fsub = fs.add_subparsers(
@@ -360,7 +369,7 @@ def build_parser():
         sp.add_argument("path", nargs="?", default=".")
         if name == "tree":
             sp.add_argument("-L", dest="depth", type=int, default=3, help="depth (1..6, default 3)")
-        sp.set_defaults(fn=fn)
+        _json_flag(sp).set_defaults(fn=fn)
     sp = fsub.add_parser("cat", help="print a file")
     sp.add_argument("path")
     sp.add_argument(
@@ -390,18 +399,18 @@ def build_parser():
         sp = fsub.add_parser(name, help=help_)
         sp.add_argument("path")
         sp.add_argument("--file", help="read the content from FILE instead of stdin")
-        sp.set_defaults(fn=fn)
+        _json_flag(sp).set_defaults(fn=fn)
     sp = fsub.add_parser("mkdir", help="mkdir -p")
     sp.add_argument("path")
-    sp.set_defaults(fn=fscmd.cmd_mkdir)
+    _json_flag(sp).set_defaults(fn=fscmd.cmd_mkdir)
     sp = fsub.add_parser("mv", help="rename; the destination must not exist")
     sp.add_argument("src")
     sp.add_argument("dst")
-    sp.set_defaults(fn=fscmd.cmd_mv)
+    _json_flag(sp).set_defaults(fn=fscmd.cmd_mv)
     sp = fsub.add_parser("rm", help="remove a file or an empty directory; -r for a subtree")
     sp.add_argument("path")
     sp.add_argument("-r", "--recursive", action="store_true")
-    sp.set_defaults(fn=fscmd.cmd_rm)
+    _json_flag(sp).set_defaults(fn=fscmd.cmd_rm)
 
     sk = sub.add_parser("skill", help="the Agent Skill shipped with egs")
     sksub = sk.add_subparsers(dest="sub", metavar="<show|install>", parser_class=_Parser)
@@ -410,6 +419,15 @@ def build_parser():
     si = sksub.add_parser("install", help="write <dir>/evergreenslam/SKILL.md")
     si.add_argument("dir", help="the agent's skills directory, e.g. ~/.claude/skills")
     si.set_defaults(fn=skill.cmd_install)
+
+    mc = add(
+        "mcp",
+        _cmd_mcp,
+        "serve the egs commands as MCP tools on stdin/stdout, for one robot (see README)",
+    )
+    mc.add_argument(
+        "--management", action="store_true", help="also serve map and session freeze|new"
+    )
 
     h = add("help", None, "`egs help agent`: the rules and command table in 30 lines")
     h.add_argument("topic", nargs="?", choices=("agent",))

@@ -34,6 +34,7 @@ def _switch(ctx, path, name, opened=False):
         return ctx.refused(j)
     if not j.get("pending"):
         ctx.print("map %s is already open" % name)
+        ctx.result(dict(j, map=name, switched=False))
         return EXIT_OK
     wait_s = max(ctx.poll_s, SWITCH_MIN_WAIT_S)
     root = _wait_for(ctx, name, wait_s)
@@ -52,6 +53,7 @@ def _switch(ctx, path, name, opened=False):
             "if the robot moved since this map was last open, run "
             "`egs init-pose --place <p>` or `egs relocalize`"
         )
+    ctx.result(dict(j, map=name, switched=True, root=root))
     return EXIT_OK
 
 

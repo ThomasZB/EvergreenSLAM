@@ -5,7 +5,7 @@ import os
 import posixpath
 
 from . import se2
-from .client import EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EgsError, explain
+from .client import EXIT_OK, EXIT_USAGE, EgsError, explain
 from .store import node_path
 from .yamlmini import dumps
 
@@ -133,24 +133,23 @@ def cmd_add(ctx, args):
         raise EgsError("%s exists and is not a directory" % path, EXIT_USAGE)
     names = {n: t for n, t, _ in (store.listdir(path) or [])} if kind == "dir" else {}
     if ZONE_FILE in names:
-        ctx.print(
-            "refused: %s/%s exists; add is not an update: `egs zone rm %s` first"
-            % (path, ZONE_FILE, path)
+        return ctx.refuse(
+            "exists",
+            "%s/%s exists; add is not an update: `egs zone rm %s` first" % (path, ZONE_FILE, path),
         )
-        return EXIT_REFUSED
     if "place.yaml" in names:
-        ctx.print(
-            "refused: %s holds a place.yaml; a zone lives in its own directory below the place, "
-            "e.g. %s/<name>" % (path, path)
+        return ctx.refuse(
+            "holds_place",
+            "%s holds a place.yaml; a zone lives in its own directory below the place, "
+            "e.g. %s/<name>" % (path, path),
         )
-        return EXIT_REFUSED
     found = mem.nearest_place(path)
     if found is None:
-        ctx.print(
-            "refused: no directory above %s has a place.yaml; a zone moves with its place's "
-            "anchor, so stand there and `egs place save <ancestor>` first" % path
+        return ctx.refuse(
+            "no_place",
+            "no directory above %s has a place.yaml; a zone moves with its place's "
+            "anchor, so stand there and `egs place save <ancestor>` first" % path,
         )
-        return EXIT_REFUSED
     a_path, aid, _ = found
 
     robot_frame = args.frame == "robot"
@@ -159,31 +158,29 @@ def cmd_add(ctx, args):
         return ctx.refused(j)
     a_pose = se2.from_json(j.get("pose"))
     if a_pose is None:
-        ctx.print("refused: %s" % explain("unresolvable", "%s (anchor %d)" % (a_path, aid)))
-        return EXIT_REFUSED
+        return ctx.refuse("unresolvable", explain("unresolvable", "%s (anchor %d)" % (a_path, aid)))
     if robot_frame:
         robot = se2.from_json(j.get("robot"))
         if robot is None:
-            ctx.print("refused: %s" % explain("no_robot_pose"))
-            return EXIT_REFUSED
+            return ctx.refuse("no_robot_pose", explain("no_robot_pose"))
         # Unaligned, the robot pose is in the fed session's own frame and a frozen anchor is not:
         # the conversion would persist a polygon in the wrong place. --force does not cover this.
         if j.get("has_frozen_base") and j.get("aligned_to_base") is False:
-            ctx.print(
-                "refused: not linked to the base map yet, so the robot pose and %s's anchor are in "
+            return ctx.refuse(
+                "not_aligned",
+                "not linked to the base map yet, so the robot pose and %s's anchor are in "
                 "different frames; drive where the maps overlap until `egs status` says linked to "
-                "base yes, then retry (or give the points with --frame anchor)" % a_path
+                "base yes, then retry (or give the points with --frame anchor)" % a_path,
             )
-            return EXIT_REFUSED
         limit = float(ctx.env.get("EGS_OFFSET_MAX_M") or DEFAULT_OFFSET_MAX_M)
         dist = math.hypot(robot[0] - a_pose[0], robot[1] - a_pose[1])
         if dist > limit and not args.force:
-            ctx.print(
-                "refused: the robot is %.1fm from %s (anchor %d), over the %.1fm limit "
+            text = (
+                "the robot is %.1fm from %s (anchor %d), over the %.1fm limit "
                 "(EGS_OFFSET_MAX_M); save a place nearer the zone with `egs place save`, "
                 "or pass --force" % (dist, a_path, aid, limit)
             )
-            return EXIT_REFUSED
+            return ctx.refuse("too_far", text, dist_m=dist, limit_m=limit)
         to_anchor = se2.compose(se2.inverse(a_pose), robot)
         points = [se2.compose(to_anchor, (x, y, 0.0))[:2] for x, y in points]
 
@@ -195,6 +192,19 @@ def cmd_add(ctx, args):
     ctx.print(
         "zone %s keepout: %d points, %.2fm2, in the frame of %s (anchor %d)  @solve %s"
         % (path, len(polygon), area(polygon), a_path, aid, j.get("at_num_solves", "-"))
+    )
+    ctx.result(
+        {
+            "ok": True,
+            "reason": None,
+            "path": path,
+            "kind": KEEPOUT,
+            "frame": a_path,
+            "anchor": aid,
+            "polygon": polygon,
+            "area_m2": round(area(polygon), 4),
+            "at_num_solves": j.get("at_num_solves"),
+        }
     )
     return EXIT_OK
 
@@ -254,11 +264,11 @@ def cmd_rm(ctx, args):
     store = ctx.store()
     rel = posixpath.join(path, ZONE_FILE)
     if store.kind(rel) != "file":
-        ctx.print("refused: %s has no %s" % (path, ZONE_FILE))
-        return EXIT_REFUSED
+        return ctx.refuse("no_zone", "%s has no %s" % (path, ZONE_FILE))
     store.rm(rel)
     removed_dir = store.listdir(path) == []
     if removed_dir:
         store.rm(path)
     ctx.print("removed %s%s" % (rel, " and the empty directory" if removed_dir else ""))
+    ctx.result({"ok": True, "reason": None, "path": path, "removed_dir": removed_dir})
     return EXIT_OK

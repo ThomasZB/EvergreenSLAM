@@ -8,6 +8,9 @@ description: Spatial memory of a robot running EvergreenSLAM. Use when you need 
 ## Start here
 
 `egs help agent` prints the rules and command table in 30 lines; read the rest of this file once.
+With MCP (`egs mcp`), `egs <cmd> [<sub>]` is the tool `egs_<cmd>[_<sub>]` (`init-pose` is
+`egs_init_pose`), flags are its parameters, results are the `--json` objects, `egs_fs_cat`
+returns the file itself, and `egs_view` also returns the image.
 
 1. `egs root`. It checks the connection and says where `memory/` lives: usually
    `remote http://127.0.0.1:8643  map <name>` (the robot, through an SSH tunnel). If it cannot
@@ -167,8 +170,8 @@ layers; the first output line of any preset shows its layers, so you learn the n
 - State `pending`: navigable now; its coordinates can move when the map re-optimizes, ask
   `egs where` again before each trip. `frozen`: fixed for good. `rebound`: pending again after a
   re-save.
-- Every usage command takes `--json` (`zone ls` and `session rm` too); prefer it over parsing
-  text. Under `--json` every pose is `[x, y, theta]`, `robot` from `egs here` included.
+- Every command but `fs cat` takes `--json` (`fs`, `zone` and `session` too); prefer it over
+  parsing text. Under `--json` every pose is `[x, y, theta]`, `robot` from `egs here` included.
 - `not linked to the base map` from `observe --offset` or `zone add`: the robot pose and the
   place's anchor are in different frames until `egs status` says `linked to base yes`; drive
   through mapped area first, then retry.

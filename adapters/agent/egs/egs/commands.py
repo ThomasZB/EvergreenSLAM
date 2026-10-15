@@ -647,4 +647,5 @@ def cmd_checkpoint(ctx, args):
     if not j.get("ok"):
         return ctx.refused(j)
     ctx.print("checkpoint written (%s this run)  %s" % (j.get("num_checkpoints_written"), solve(j)))
+    ctx.result(j)
     return EXIT_OK

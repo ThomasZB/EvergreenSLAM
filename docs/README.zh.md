@@ -244,7 +244,9 @@ egs view here                      # 扫描叠在地图上，机器人周围
 
 `egs` 是 Python 3.9+，不依赖任何第三方库；`pipx install ./adapters/agent/egs` 可装在没有 ROS 的机器上，
 `egs skill install <skills 目录>` 给 agent 装 skill。skill 的第一节就是上手步骤（`egs root`，用 `egs fs cat`
-读 `memory/README.md`，读到该地点为止的 `SKILL.md` 链）。服务只绑 `127.0.0.1`；agent 在另一台机器上时
+读 `memory/README.md`，读到该地点为止的 `SKILL.md` 链）。只接工具、不接 shell 的 agent 可用 `egs mcp`：
+它以 stdio MCP 服务提供同一组命令，工具由 CLI 定义自动生成，与命令一一对应。
+服务只绑 `127.0.0.1`；agent 在另一台机器上时
 经 SSH 隧道访问（`ssh -NT -L 127.0.0.1:8643:127.0.0.1:8643 user@robot`），连接设置写在
 `~/.config/egs/config`（见 [`adapters/agent/egs/README.md`](../adapters/agent/egs/README.md)）。
 HTTP 契约见 [`adapters/agent/API.md`](../adapters/agent/API.md)，skill 是

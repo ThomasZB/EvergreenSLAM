@@ -24,7 +24,16 @@ def cmd_ls(ctx, args):
     entries = ctx.store().listdir(rel)
     if entries is None:
         ctx.print("fs_error: not a directory: " + rel)
+        ctx.result({"ok": False, "reason": "fs_error", "detail": "not a directory: " + rel})
         return EXIT_REFUSED
+    ctx.result(
+        {
+            "ok": True,
+            "reason": None,
+            "path": rel,
+            "entries": [{"name": n, "type": t, "size": size} for n, t, size in entries],
+        }
+    )
     for name, t, size in entries:
         if t == "dir":
             ctx.print(name + "/")
@@ -36,8 +45,12 @@ def cmd_ls(ctx, args):
 
 
 def cmd_tree(ctx, args):
-    depth = max(1, min(6, args.depth))
-    ctx.write_bytes(ctx.store().tree(_rel(ctx, args.path), depth).encode("utf-8"))
+    rel, depth = _rel(ctx, args.path), max(1, min(6, args.depth))
+    text = ctx.store().tree(rel, depth)
+    if ctx.json:
+        ctx.result({"ok": True, "reason": None, "path": rel, "depth": depth, "tree": text})
+    else:
+        ctx.write_bytes(text.encode("utf-8"))
     return EXIT_OK
 
 
@@ -76,26 +89,36 @@ def cmd_grep(ctx, args):
     return EXIT_OK
 
 
-def cmd_write(ctx, args):
-    ctx.store().write(_rel(ctx, args.path), _stdin_bytes(args))
+def _done(ctx, **fields):
+    ctx.result(dict({"ok": True, "reason": None}, **fields))
     return EXIT_OK
+
+
+def cmd_write(ctx, args):
+    rel = _rel(ctx, args.path)
+    ctx.store().write(rel, _stdin_bytes(args))
+    return _done(ctx, path=rel)
 
 
 def cmd_append(ctx, args):
-    ctx.store().append(_rel(ctx, args.path), _stdin_bytes(args))
-    return EXIT_OK
+    rel = _rel(ctx, args.path)
+    ctx.store().append(rel, _stdin_bytes(args))
+    return _done(ctx, path=rel)
 
 
 def cmd_mkdir(ctx, args):
-    ctx.store().mkdir(_rel(ctx, args.path))
-    return EXIT_OK
+    rel = _rel(ctx, args.path)
+    ctx.store().mkdir(rel)
+    return _done(ctx, path=rel)
 
 
 def cmd_mv(ctx, args):
-    ctx.store().mv(_rel(ctx, args.src), _rel(ctx, args.dst))
-    return EXIT_OK
+    src, dst = _rel(ctx, args.src), _rel(ctx, args.dst)
+    ctx.store().mv(src, dst)
+    return _done(ctx, **{"from": src, "to": dst})
 
 
 def cmd_rm(ctx, args):
-    ctx.store().rm(_rel(ctx, args.path), recursive=args.recursive)
-    return EXIT_OK
+    rel = _rel(ctx, args.path)
+    ctx.store().rm(rel, recursive=args.recursive)
+    return _done(ctx, path=rel)

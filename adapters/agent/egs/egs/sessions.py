@@ -85,6 +85,8 @@ def _print_plan(ctx, title, plan):
 def _plan_ok(ctx, plan):
     if plan.get("rejection"):
         ctx.print("rejected: " + explain(plan["rejection"]))
+        reason = plan.get("reason") or plan["rejection"]
+        ctx.result(dict(plan, ok=False, reason=reason, applied=False))
         return False
     if not plan.get("ok"):
         ctx.refused(plan)
@@ -102,6 +104,7 @@ def cmd_freeze(ctx, args):
         return EXIT_REFUSED
     if not args.yes:
         ctx.print(PLAN_ONLY)
+        ctx.result(dict(plan, applied=False))
         return EXIT_OK
     params["plan_token"] = plan.get("plan_token")
     j = ctx.client.post("/sessions/freeze/apply", params)
@@ -113,11 +116,13 @@ def cmd_freeze(ctx, args):
         s = ctx.client.get("/sessions")
         roles = {x.get("id"): x.get("role") for x in s.get("sessions") or []}
         role = roles.get(sid)
+        final = dict(j, applied=True, fed=s.get("fed"), at_num_solves=s.get("at_num_solves"))
         if role == "frozen":
             ctx.print(
                 "session %s frozen; fed session now %s  @solve %s"
                 % (sid, s.get("fed"), s.get("at_num_solves"))
             )
+            ctx.result(dict(final, outcome="frozen"))
             return EXIT_OK
         # The freeze-time trim can take every submap: such a session is removed, not frozen.
         if sid not in roles and s.get("fed") != sid:
@@ -125,14 +130,17 @@ def cmd_freeze(ctx, args):
                 "session %s lay wholly in the frozen map: removed, not frozen; fed session now %s"
                 "  @solve %s" % (sid, s.get("fed"), s.get("at_num_solves"))
             )
+            ctx.result(dict(final, outcome="removed"))
             return EXIT_OK
         if time.monotonic() >= deadline:
             break
         time.sleep(0.25)
-    ctx.print(
-        "freeze of session %s queued but not visible after %gs: check `egs session ls`"
-        % (sid, ctx.poll_s)
+    text = "freeze of session %s queued but not visible after %gs: check `egs session ls`" % (
+        sid,
+        ctx.poll_s,
     )
+    ctx.print(text)
+    ctx.result(dict(j, ok=False, reason="not_visible", detail=text, applied=True))
     return EXIT_REFUSED
 
 
@@ -153,7 +161,6 @@ def cmd_rm(ctx, args):
     else:
         _print_plan(ctx, "remove session %s" % args.id, plan)
     if not _plan_ok(ctx, plan):
-        ctx.result(dict(plan, ok=False, applied=False))
         return EXIT_REFUSED
     if not args.yes:
         ctx.print(PLAN_ONLY)

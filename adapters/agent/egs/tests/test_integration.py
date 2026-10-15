@@ -1,6 +1,7 @@
 """egs against the real AgentService: a fake host (service/test/fake_host_main.cc) drives a
 PoseGraph through simulated laps and serves it. Skipped unless EGS_FAKE_HOST names the binary."""
 
+import base64
 import io
 import json
 import math
@@ -87,6 +88,41 @@ class IntegrationTest(unittest.TestCase):
         # A memory dir this machine cannot see: every tree access goes through /fs.
         self.env["EGS_MEMORY"] = os.path.join(self.tmp, "not-mounted", "memory")
         self._scenario()
+
+    def test_mcp_tools(self):
+        from egs.mcp import serve
+
+        calls = [
+            ("egs_root", {}),
+            ("egs_place_save", {"path": "places/dock"}),
+            ("egs_here", {}),
+            ("egs_view", {"preset": "map"}),
+            ("egs_fs_write", {"path": "places/dock/notes.md", "content": "blue mug\n"}),
+            ("egs_fs_cat", {"path": "places/dock/notes.md"}),
+            ("egs_where", {"path": "places/nowhere"}),
+        ]
+        lines = "".join(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": i,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments},
+                }
+            )
+            + "\n"
+            for i, (name, arguments) in enumerate(calls)
+        )
+        outp = io.BytesIO()
+        serve(io.BytesIO(lines.encode()), outp, env=self.env, log=io.StringIO())
+        results = [json.loads(l)["result"] for l in outp.getvalue().decode().splitlines()]
+        self.assertEqual([r["isError"] for r in results], [False] * 6 + [True], results)
+        here = json.loads(results[2]["content"][0]["text"])
+        self.assertEqual(here["current"]["path"], "places/dock")
+        image = results[3]["content"][1]
+        self.assertTrue(base64.b64decode(image["data"]).startswith(PNG_SIGNATURE))
+        self.assertEqual(results[5]["content"], [{"type": "text", "text": "blue mug\n"}])
+        self.assertEqual(json.loads(results[6]["content"][0]["text"])["reason"], "no_such_node")
 
     def _scenario(self):
         remote = "EGS_MEMORY" in self.env

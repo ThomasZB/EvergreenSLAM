@@ -1,9 +1,16 @@
+import argparse
+import io
 import json
+import math
 import os
 import unittest
 
 from fake_service import pose
 from support import EgsTestCase
+
+from egs import cli
+
+NO_JSON = {("fs", "cat"), ("skill", "show"), ("skill", "install"), ("help",), ("mcp",)}
 
 RESOLUTION_KEYS = {
     "path",
@@ -175,7 +182,7 @@ class JsonTest(EgsTestCase):
         self.assertEqual(obj["reason"], "reserved_name")
         obj = self.js("here", "--json", code=3, EGS_URL="http://127.0.0.1:9")
         self.assertEqual(obj["reason"], "unreachable")
-        obj = self.js("--json", "fs", "ls", "places", code=2)
+        obj = self.js("--json", "fs", "cat", "README.md", code=2)
         self.assertIn("--json", obj["detail"])
         obj = self.js("where", "--json", code=2)
         self.assertEqual(obj["reason"], "usage")
@@ -194,6 +201,122 @@ class JsonTest(EgsTestCase):
             self.assertEqual(obj["reason"], "fs_error", obj)
         obj = self.js("--json", "view", "here", "--ego", "-1", code=2)
         self.assertEqual(obj["reason"], "bad_param")
+    def test_fs_commands_local_and_remote(self):
+        content = os.path.join(self.tmp, "notes.md")
+        with open(content, "w", encoding="utf-8") as f:
+            f.write("cold\n")
+        for remote in (False, True):
+            if remote:
+                self.remote_only()
+            ls = self.js("fs", "ls", "places/kitchen", "--json")
+            self.assertEqual(ls["path"], "places/kitchen")
+            by_name = {e["name"]: e for e in ls["entries"]}
+            self.assertEqual(by_name["fridge"]["type"], "dir")
+            place = by_name["place.yaml"]
+            self.assertEqual((place["type"], place["size"]), ("file", 10))
+            self.assertEqual([e["name"] for e in ls["entries"]], sorted(by_name))
+            bad = self.js("fs", "ls", "places/kitchen/place.yaml", "--json", code=1)
+            self.assertEqual(bad["reason"], "fs_error")
+
+            tree = self.js("--json", "fs", "tree", "places/kitchen", "-L", "1")
+            self.assertEqual((tree["path"], tree["depth"]), ("places/kitchen", 1))
+            self.assertIn("fridge", tree["tree"])
+            self.assertEqual(tree["tree"], self.egs("fs", "tree", "places/kitchen", "-L", "1")[1])
+
+            d = "places/kitchen/shelf%d" % remote
+            self.assertEqual(self.js("fs", "mkdir", d, "--json")["path"], d)
+            notes = d + "/notes.md"
+            for verb in ("write", "append"):
+                obj = self.js("fs", verb, notes, "--file", content, "--json")
+                self.assertEqual(obj["path"], notes)
+            self.assertEqual(self.read(notes), "cold\ncold\n")
+            mv = self.js("fs", "mv", d, d + "x", "--json")
+            self.assertEqual((mv["from"], mv["to"]), (d, d + "x"))
+            self.assertEqual(self.js("fs", "rm", "-r", d + "x", "--json")["path"], d + "x")
+            self.assertFalse(os.path.exists(os.path.join(self.mem, d + "x")))
+
+            refused = self.js("fs", "rm", "places/kitchen", "--json", code=1)
+            self.assertEqual(refused["reason"], "not_empty")
+            bad = self.js("fs", "rm", "places/kitchen/place.yaml", "--json", code=2)
+            self.assertEqual(bad["reason"], "owned_by_process")
+
+    def test_zone_add_and_rm(self):
+        self.state.robot = pose(5.0, 0.0, math.pi / 2)
+        for remote in (False, True):
+            if remote:
+                self.remote_only()
+            argv = ("zone", "add", "places/kitchen/slope", "--rect", "1", "-1", "3", "1", "--json")
+            obj = self.js(*argv)
+            self.assertEqual(obj["path"], "places/kitchen/slope")
+            self.assertEqual((obj["kind"], obj["frame"]), ("keepout", "places/kitchen"))
+            self.assertEqual(obj["anchor"], 2)
+            for got, want in zip(obj["polygon"], [[1, 1], [1, 3], [-1, 3], [-1, 1]]):
+                self.assertAlmostEqual(got[0], want[0], places=3)
+                self.assertAlmostEqual(got[1], want[1], places=3)
+            self.assertAlmostEqual(obj["area_m2"], 4.0, places=3)
+            self.assertEqual(obj["at_num_solves"], 100)
+            rect = ("--rect", "0", "0", "1", "1", "--json")
+            again = self.js("zone", "add", "places/kitchen/slope", *rect, code=1)
+            self.assertEqual(again["reason"], "exists")
+            rm = self.js("zone", "rm", "places/kitchen/slope", "--json")
+            self.assertEqual((rm["path"], rm["removed_dir"]), ("places/kitchen/slope", True))
+            gone = self.js("zone", "rm", "places/kitchen/slope", "--json", code=1)
+            self.assertEqual(gone["reason"], "no_zone")
+        self.state.robot = pose(105.0, 0.0, 0.0)
+        far = self.js("zone", "add", "places/kitchen/far", *rect, code=1)
+        self.assertEqual(far["reason"], "too_far")
+        self.assertIn("--force", far["detail"])
+
+    def test_checkpoint(self):
+        obj = self.js("checkpoint", "--json")
+        self.assertEqual(obj["num_checkpoints_written"], 4)
+        self.assertIn("at_num_solves", obj)
+
+    def test_session_freeze_plan_apply_and_rejection(self):
+        plan = self.js("session", "freeze", "--json")
+        self.assertFalse(plan["applied"])
+        self.assertEqual(plan["sessions_affected"], [2])
+        self.assertTrue(plan["plan_token"])
+        done = self.js("session", "new", "--yes", "--json")
+        self.assertEqual((done["applied"], done["outcome"]), (True, "frozen"))
+        self.assertEqual((done["frozen_session"], done["fed"]), (2, 3))
+        self.state.freeze_removes = True
+        self.assertEqual(self.js("session", "freeze", "--yes", "--json")["outcome"], "removed")
+        self.state.freeze_removes = False
+        self.state.freeze_visible_after = 10**6
+        late = self.js("session", "freeze", "--yes", "--json", code=1, EGS_POLL_S="0.3")
+        self.assertEqual(late["reason"], "not_visible")
+        self.assertTrue(late["applied"])
+        self.state.freeze_rejection = "not_anchored"
+        rejected = self.js("session", "freeze", "--yes", "--json", code=1)
+        self.assertEqual((rejected["reason"], rejected["applied"]), ("not_anchored", False))
+
+    def test_map_new_and_open(self):
+        self.state.maps.append("lab")
+        same = self.js("map", "open", "map", "--json")
+        self.assertEqual((same["map"], same["switched"]), ("map", False))
+        opened = self.js("map", "open", "lab", "--json")
+        self.assertEqual((opened["map"], opened["switched"]), ("lab", True))
+        self.assertEqual(opened["root"]["map"], "lab")
+        self.assertEqual(self.js("map", "new", "lab", "--json", code=1)["reason"], "exists")
+        self.assertTrue(self.js("--json", "map", "new", "fresh")["switched"])
+
+    def test_every_command_but_the_exempt_takes_json(self):
+        def leaves(parser, path=()):
+            subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+            if not subs:
+                yield path, parser
+                return
+            for name, child in subs[0].choices.items():
+                yield from leaves(child, path + (name,))
+
+        seen = set()
+        for path, parser in leaves(cli.build_parser()):
+            seen.add(path)
+            has = any("--json" in a.option_strings for a in parser._actions)
+            self.assertEqual(has, path not in NO_JSON, path)
+        self.assertLessEqual(NO_JSON, seen)
+
 
 if __name__ == "__main__":
     unittest.main()

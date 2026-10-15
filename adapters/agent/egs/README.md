@@ -66,5 +66,32 @@ on this machine (it proves that with the instance id it writes to `<map_dir>/age
 Otherwise everything goes through the service, so a directory of the same name on the agent's
 computer is never touched.
 
+## MCP
+
+`egs mcp` serves the same commands as MCP tools over stdio, for agents that take tools rather than
+a shell. Each tool is generated from one command's argparse definition and runs exactly that
+command with `--json`: `egs here` is `egs_here`, `egs place save` is
+`egs_place_save`, flags are parameters, the result is the JSON object (`isError` on a nonzero
+exit, reason inside).
+`egs_view` also returns the PNG as an image, `egs_fs_cat` returns text or an image,
+`egs_fs_write` / `egs_fs_append` take a `content` parameter, and `egs_help` returns SKILL.md.
+
+```bash
+claude mcp add egs -- egs mcp                           # Claude Code
+claude mcp add egs-lab -e EGS_ROBOT=lab -- egs mcp      # a robot from the config file
+```
+
+Other clients:
+
+```json
+{"mcpServers": {"egs": {"command": "egs", "args": ["mcp"], "env": {"EGS_ROBOT": "home"}}}}
+```
+
+One server is one robot: the connection comes from the server's own environment and config
+(`--robot` before `mcp` works too), never from a tool call; run one server per robot. The map and
+`session freeze|new` tools are left out unless the server runs with `egs mcp --management`
+(`session ls` and `session rm` are always there). Requests run one at a time.
+File parameters (`attach`, `file`, `output`) are paths on the machine that runs `egs mcp`.
+
 Humans only: `egs session freeze --force` waives `not anchored`.
 Tests: `python3 -m unittest discover -s adapters/agent/egs/tests`.
