@@ -15,6 +15,7 @@ def cmd_ls(ctx, args):
     if not j.get("ok"):
         return ctx.refused(j)
     ctx.print("fed %s  %s" % (j.get("fed"), "@solve %s" % j.get("at_num_solves", "-")))
+    now = ctx.robot_now_ns() if j.get("sessions") else None
     for s in j.get("sessions") or []:
         anchored = s.get("anchored")
         ctx.print(
@@ -27,15 +28,15 @@ def cmd_ls(ctx, args):
                 s.get("anchors"),
                 s.get("phase") or "-",
                 "-" if anchored is None else ("yes" if anchored else "no"),
-                fmt.age_ns(s.get("start_ns")),
-                fmt.age_ns(s.get("last_node_ns")),
+                fmt.age_ns(s.get("start_ns"), now),
+                fmt.age_ns(s.get("last_node_ns"), now),
             )
         )
     listed = [
         dict(
             s,
-            started_age_s=jsonout.age_s(s.get("start_ns")),
-            last_node_age_s=jsonout.age_s(s.get("last_node_ns")),
+            started_age_s=jsonout.age_s(s.get("start_ns"), now),
+            last_node_age_s=jsonout.age_s(s.get("last_node_ns"), now),
         )
         for s in j.get("sessions") or []
     ]

@@ -41,7 +41,6 @@ class Grep {
   Grep(std::string_view pattern, const std::vector<std::string>& globs)
       : needle_(AsciiLower(pattern)), globs_(globs) {}
 
-  // False once the match budget is spent.
   bool Walk(const fs::path& directory, const std::string& relative) {
     std::vector<std::string> names;
     std::error_code error;

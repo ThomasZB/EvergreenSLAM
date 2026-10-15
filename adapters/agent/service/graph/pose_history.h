@@ -25,20 +25,15 @@
 
 namespace evergreenslam::agent {
 
-// Not thread-safe: the host guards it with the mutex its hooks take.
 class PoseHistory {
  public:
   static constexpr common::Duration kSpan = std::chrono::seconds(10);
-  // Past the newest sample, At answers the newest sample up to this far.
   static constexpr common::Duration kMaxAhead = std::chrono::milliseconds(200);
   static constexpr common::Duration kMaxGap = std::chrono::milliseconds(500);
 
-  // `local_velocity` is MatchingResult::velocity, in the local frame. A time not after the newest
-  // sample restarts the history.
   void Add(common::Time time, const Eigen::Affine2d& local_pose,
            const Eigen::Vector3d& local_velocity,
            std::chrono::steady_clock::time_point received = std::chrono::steady_clock::now());
-  // A new frontend: clears the history and advances the epoch.
   void Reset();
 
   std::optional<HostPose> Latest() const;

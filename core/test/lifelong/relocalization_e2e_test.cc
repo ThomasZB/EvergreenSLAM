@@ -388,8 +388,6 @@ TEST_F(RelocalizationE2eTest, DroppingTheFedSessionMidRoundDiscardsTheRoundsMatc
   EXPECT_EQ(CountClosuresOntoOtherSessions(backend_->graph(), *dropped.fed_now), 0);
 }
 
-// Once anchored, a hint is only a match prior: its closure is a normal edge that does not reseed;
-// the request's one solve settles it.
 TEST_F(RelocalizationE2eTest, AHintOnAnAnchoredSessionAddsAClosureAndOneSolveWithoutReseeding) {
   Boot();
   FeedThrough(14);
@@ -445,8 +443,6 @@ void PinWithWrongClosures(PoseGraph& backend, SessionId session, int count,
   backend.WaitUntilQuiescent();
 }
 
-// The hint's round adds a handful of Huber-lossed edges, one solve, no reseed: they win only when
-// they outnumber the wrong ones.
 TEST_F(RelocalizationE2eTest, AHintOnASessionPinnedByOneWrongClosureOutvotesIt) {
   Boot();
   FeedThrough(14);

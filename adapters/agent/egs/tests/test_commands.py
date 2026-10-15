@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 
@@ -38,6 +39,47 @@ class CommandTest(EgsTestCase):
         )
         self.assertEqual(self.requests("GET", "/root"), [])
 
+    def test_here_sample_counts_each_keyframe_once_and_gates_on_cover(self):
+        self.state.base_reads = [
+            {"score": 0.40, "coverage": 0.9},
+            {"score": 0.40, "coverage": 0.9},
+            {"score": 0.30, "coverage": 0.3},
+            {"score": 0.60, "coverage": 0.8},
+        ]
+        code, out, _ = self.egs("here", "--sample", "1.2")
+        self.assertEqual(code, 0)
+        self.assertIn("base over 1.2s: median 0.50  min 0.40  (2 of 3 reads at cover >= 50%)", out)
+        code, out, _ = self.egs("here", "--sample", "61")
+        self.assertEqual(code, 2)
+
+    def test_here_sample_restarts_after_a_correction(self):
+        self.state.events = [{"kind": "pose_correction", "session": 2}]
+        self.state.base_reads = [
+            {"score": 0.30, "coverage": 0.9},
+            {"score": 0.32, "coverage": 0.9},
+            {"score": 0.70, "coverage": 0.9},
+            {"score": 0.72, "coverage": 0.9},
+        ]
+        no_match = {"kind": "relocalization", "request_id": 1, "state": "no_match"}
+        matched = {"kind": "relocalization", "request_id": 2, "state": "matched"}
+        self.state.here_events = {1: no_match, 2: matched}
+        code, out, _ = self.egs("here", "--sample", "2", "--json")
+        self.assertEqual(code, 0, out)
+        sample = json.loads(out)["base_sample"]
+        self.assertEqual(sample["restarted"], 1)
+        self.assertEqual((sample["reads"], sample["median"], sample["min"]), (2, 0.71, 0.70))
+        self.assertEqual(self.requests("GET", "/events")[0][2], {"since": "0"})
+        self.assertEqual(self.requests("GET", "/events")[1][2], {"since": "1"})
+        self.state.here_polls, self.state.here_events = 0, {}
+        self.state.base_reads = [{"score": 0.30, "coverage": 0.9}]
+        code, out, _ = self.egs("here", "--sample", "1")
+        self.assertIn("base over 1s: median 0.30", out)
+        self.assertNotIn("restarted", out)
+        self.state.here_polls = 0
+        self.state.here_events = {1: dict(matched, request_id=3)}
+        code, out, _ = self.egs("here", "--sample", "1")
+        self.assertIn("restarted 1: a correction landed", out)
+
     def test_here_and_status_without_a_host_frame(self):
         self.state.localization = {"since_base_match_m": None, "base": None, "scan_match": None}
         code, out, _ = self.egs("here")
@@ -66,6 +108,11 @@ class CommandTest(EgsTestCase):
         self.state.has_frozen_base = False
         code, out, _ = self.egs("here")
         self.assertTrue(out.startswith("current "), out)
+
+    def test_status_is_quiet_without_an_index(self):
+        code, out, _ = self.egs("status")
+        self.assertEqual(code, 0)
+        self.assertNotIn("index.tsv", out)
 
     def test_status_flags_stale_index(self):
         self.write("index.tsv", "#path anchor state x y theta num_solves\nplaces/dock\t1\n")

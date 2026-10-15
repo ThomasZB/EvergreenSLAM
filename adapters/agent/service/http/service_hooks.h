@@ -44,23 +44,18 @@ struct HostFrame {
   double match_score_avg = 0.0;
 };
 
-// The newest frontend pose the host took, without a scan.
 struct HostPose {
   StampedPose pose;
   // Robot frame: [vx, vy, omega].
   Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
-  // Counts every sample the host took, across fed-session drops.
   uint64_t seq = 0;
-  // +1 per fed-session drop: a new frontend, a new local frame.
   uint64_t epoch = 0;
   // Host steady clock when the sample arrived.
   std::chrono::steady_clock::time_point received;
 };
 
-// The frontend's local pose at a past time, interpolated in the host's pose history.
 struct PoseAt {
   enum class Refusal { NONE, NO_SAMPLE, TOO_OLD, IN_FUTURE, GAP };
-  // Set exactly when refusal == NONE.
   std::optional<Eigen::Affine2d> local_pose;
   Refusal refusal = Refusal::NONE;
 };

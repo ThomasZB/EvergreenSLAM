@@ -4,7 +4,7 @@ import json
 import os
 import sys
 
-from . import config
+from . import config, fmt
 from .client import (
     EXIT_REFUSED,
     EXIT_USAGE,
@@ -28,6 +28,7 @@ class Ctx:
         self._root = None
         self._local = None
         self._store = None
+        self._robot_now = None
         self.json = False
         self.emitted = False
 
@@ -65,6 +66,20 @@ class Ctx:
                 raise EgsError(explain(j.get("reason")), EXIT_REFUSED, j.get("reason"))
             self._root = j
         return self._root
+
+    def robot_now_ns(self):
+        """saved_at_ns and the like are on the robot's sensor clock, not this computer's."""
+        if self._robot_now is None:
+            try:
+                j = self.client.get("/pose")
+            except EgsError:
+                j = {}
+            stamp = j.get("stamp_ns") if j.get("ok") else None
+            if stamp is None:
+                self._robot_now = fmt.now_ns()
+            else:
+                self._robot_now = int(stamp) + int((j.get("age_s") or 0) * 1e9)
+        return self._robot_now
 
     def memory_dir(self):
         return self.settings().memory or self.root()["memory_dir"]

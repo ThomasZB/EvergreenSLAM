@@ -210,6 +210,29 @@ class ObserveTest(EgsTestCase):
         code, _, err = self.egs("observe", "places/kitchen/toaster")
         self.assertEqual(code, 2)
         self.assertIn("no such node", err)
+        self.assertIn("egs fs mkdir places/kitchen/toaster", err)
+        self.assertIn("egs fs write places/kitchen/toaster/node.yaml", err)
+
+    def test_a_thing_far_from_every_place_says_to_save_a_spot_first(self):
+        for remote in (False, True):
+            if remote:
+                self.remote_only()
+            self.write("places/garage/extinguisher/node.yaml", "kind: extinguisher\n")
+            code, out, _ = self.egs(
+                "observe", "places/garage/extinguisher", "--offset", "1", "0.2", "0"
+            )
+            self.assertEqual(code, 1, out)
+            self.assertIn("no ancestor of places/garage/extinguisher has a place.yaml", out)
+            self.assertIn("save the spot you stand at as a place first", out)
+            self.assertIn("`egs place save places/garage/<spot>`", out)
+            self.assertIn(
+                "`egs fs mv places/garage/extinguisher places/garage/<spot>/extinguisher`", out
+            )
+        self.state.robot = pose(106.0, -2.0, 0.0)
+        code, out, _ = self.egs("observe", "places/kitchen/fridge/milk", "--offset", "1", "0", "0")
+        self.assertEqual(code, 1, out)
+        self.assertIn("`egs place save places/kitchen/fridge/<spot>`", out)
+        self.assertIn("or pass --force", out)
 
 
 if __name__ == "__main__":

@@ -130,3 +130,22 @@ def localization(loc):
         meters(loc.get("since_base_match_m")),
         match_text,
     )
+
+
+def base_sample(b):
+    if not b["covered_reads"]:
+        text = "base over %gs: no read at cover >= 50%% (%d reads)" % (b["seconds"], b["reads"])
+    else:
+        text = "base over %gs: median %.2f  min %.2f  (%d of %d reads at cover >= 50%%)" % (
+            b["seconds"],
+            b["median"],
+            b["min"],
+            b["covered_reads"],
+            b["reads"],
+        )
+    if b.get("restarted"):
+        text += (
+            "  restarted %d: a correction landed, only reads after it count; sample again "
+            "until the median settles" % b["restarted"]
+        )
+    return text

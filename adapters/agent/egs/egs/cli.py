@@ -37,8 +37,9 @@ rules, and `egs root` prints `remote <url>  map <name>`.
 node.yaml must stay in the flat YAML subset of memory/README.md (key: value, flow lists [a, b],
 numbers, strings); egs refuses to rewrite anything else, and rewriting drops comments.
 
-Timestamps print as ages (35s, 20m, 6d). A mutating command that gets no answer within the
-timeout prints 'outcome unknown': check with egs status / here / session ls before retrying.
+Timestamps print as ages (35s, 20m, 6d); the robot's own stamps age by its clock (GET /pose).
+A mutating command that gets no answer within the timeout prints 'outcome unknown': check with
+egs status / here / session ls before retrying.
 
 --json (every command but fs cat, skill, help, mcp): one JSON object instead of text; prefer it.
 
@@ -51,27 +52,28 @@ AGENT_HELP = """\
 1. no map-frame XY in any file you write; ask `egs where` for a current position
 2. place.yaml belongs to the process: never write, edit or copy it; stand there, `egs place save`
 3. things you can stand in front of are places; small movable things: node.yaml, no place.yaml
-4. to find a thing use `egs find`; to search notes and skills `egs fs grep <words> [places/<p>]`
+4. to find a thing use `egs find`; to search notes and skills `egs fs grep <words> [--path <p>]`
 5. egs paths are relative to memory/ and start with places/
 6. skills and attachments are reserved names, never a place or a thing; no symbolic links
 7. observations.jsonl is append-only; retract a line with `egs observe <path> --invalidates <id>`
 8. there is no egs goto: egs never moves the robot
 
 first -> egs root: checks the connection; memory/ is on the robot, so work in it with egs fs
-where am I / where is a place or a thing -> egs here / egs where places/<path>
-find a thing by name, alias or kind -> egs find <words>
+where am I / is a place or a thing / find it by name -> egs here / where places/<p> / find <words>
 remember the spot the robot stands at -> egs place save places/<path> [--offset DX DY 0, <= 3 m]
 I saw it / it is not there -> egs observe places/<path> [--result absent] [--note ..] [--attach F]
-it is DX ahead, DY left of the robot -> egs observe places/<path> --offset DX DY 0 (within 10 m)
+a new thing -> egs fs mkdir places/<place>/<thing>, egs fs write <that>/node.yaml (kind, aliases)
+it is DX ahead, DY left -> egs observe <thing> --offset DX DY 0 (no place within 10 m: save one)
 ...in a photo taken a moment ago -> add --at <stamp_ns> (robot sensor clock, see egs pose --json)
 go somewhere -> egs where places/<path>, give its approach pose to your navigator
 the navigator must avoid an area -> egs zone add places/<place>/<name> --rect X0 Y0 X1 Y1 (ls | rm)
-is the map healthy, linked to the base -> egs status; after a start: egs here before moving
+after a start or a correction -> egs here --sample 20 until the base median settles (>= 0.5 ok)
 a picture -> egs view map | here | route places/<p> | trail | session [id]
-the robot's pose is wrong -> egs init-pose --place places/<p> (waits: matched | no_match)
-no_match, or matched but base still low -> egs session rm <fed id> (plan, --yes), init-pose again
-make sure it is on disk now -> egs checkpoint; what happened to the pose -> egs events
-look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words> [<path>]
+pose wrong, robot at a saved place now (<= 2 m) -> egs init-pose --place places/<p> (waits)
+pose wrong, robot moved since or unsure where -> egs relocalize (searches the whole saved map)
+no_match, or base low a minute after matched -> egs session rm <fed id> (plan, --yes), then again
+on disk now -> egs checkpoint; when did corrections land -> egs events; map health -> egs status
+look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words> [--path <p>]
 new container, rename, re-parent, delete -> egs fs mkdir | mv | rm -r (bindings move along)
 notes and skills -> egs fs write places/<p>/notes.md --file F (or stdin); egs fs append ...
 
@@ -136,7 +138,16 @@ def build_parser():
             "check the connection; print memory/'s path, or `remote <url>  map <name>`",
         )
     )
-    _json_flag(add("here", commands.cmd_here, "where the robot is: current place, two closest, pose"))
+    h = add("here", commands.cmd_here, "where the robot is: current place, two closest, pose")
+    h.add_argument(
+        "--sample",
+        type=float,
+        metavar="S",
+        help="keep reading for S seconds (<= 60) and add the median and minimum base score of the "
+        "keyframes seen at cover >= 50%%; a pose correction or matched relocalization during the "
+        "window drops the reads before it (restarted N)",
+    )
+    _json_flag(h)
     _json_flag(
         add("status", commands.cmd_status, "map health: frozen base, base link, closures")
     )
@@ -381,11 +392,13 @@ def build_parser():
     sp.set_defaults(fn=fscmd.cmd_cat)
     sp = fsub.add_parser(
         "grep",
-        help="print path:line:text for lines holding PATTERN (fixed string, any case); "
-        "skips observations.jsonl and attachments/; at most 200",
+        help="print path:line:text for lines holding WORDS joined by single spaces (one fixed "
+        "string, any case); skips observations.jsonl and attachments/; at most 200",
     )
-    sp.add_argument("pattern")
-    sp.add_argument("path", nargs="?", default=".")
+    sp.add_argument(
+        "words", nargs="+", metavar="WORD", help="the phrase to find, one or more words (hand truck)"
+    )
+    sp.add_argument("--path", default=".", help="a directory or file to search (default memory/)")
     sp.add_argument(
         "--include",
         metavar="GLOBS",

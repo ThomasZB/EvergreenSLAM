@@ -7,11 +7,12 @@ import os
 import posixpath
 import re
 import shutil
+import statistics
 import time
 
 from . import fmt, jsonout, se2
 from .client import EXIT_OK, EXIT_REFUSED, EXIT_TRANSPORT, EXIT_USAGE, EgsError, explain
-from .memory import ATTACHMENTS, Resolution, UnreadablePlace, match_rank
+from .memory import ATTACHMENTS, RANK_NAME, Resolution, UnreadablePlace, match
 from .store import node_path
 from .yamlmini import dumps
 
@@ -19,6 +20,7 @@ NODE_KEY_ORDER = ("kind", "aliases", "labels", "offset", "offset_from")
 DEFAULT_OFFSET_MAX_M = 10.0
 # The service's request body limit; local copies keep it so both modes accept the same files.
 MAX_ATTACHMENT_BYTES = 8 << 20
+BASE_MIN_COVERAGE = 0.5
 RANK_NAMES = ("name", "alias", "kind", "word", "fuzzy")
 RELOCALIZATION_POLL_S = 0.5
 EVENTS_POLL_S = 1.0
@@ -59,9 +61,16 @@ def cmd_root(ctx, args):
 
 
 def cmd_here(ctx, args):
+    seconds = getattr(args, "sample", None)
+    if seconds is not None and not 0 < seconds <= 60:
+        raise EgsError("--sample takes 0 < S <= 60 seconds", EXIT_USAGE, "bad_param")
+    events = _Corrections(ctx) if seconds else None
     j = ctx.client.get("/here")
     if not j.get("ok"):
         return ctx.refused(j)
+    sample = None
+    if seconds:
+        j, sample = _sample_base(ctx, j, seconds, events)
     if j.get("has_frozen_base") and j.get("aligned_to_base") is False:
         ctx.print("linked to base: no (positions below are unreliable until linked)")
     cur = j.get("current")
@@ -82,10 +91,71 @@ def cmd_here(ctx, args):
         % (fmt.pose(robot), fmt.age_s(j.get("keyframe_age_s")), solve(j))
     )
     ctx.print(fmt.localization(j.get("localization")))
+    if sample is not None:
+        ctx.print(fmt.base_sample(sample))
     if j.get("relocalization"):
         ctx.print(fmt.relocalization(j["relocalization"]))
-    ctx.result(dict(j, robot=jsonout.pose(robot)))
+    ctx.result(dict(j, robot=jsonout.pose(robot), base_sample=sample))
     return EXIT_OK
+
+
+class _Corrections:
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.seq = None
+        self.poll()
+
+    def poll(self):
+        try:
+            j = self.ctx.client.get("/events", {"since": self.seq or 0})
+        except EgsError:
+            return 0
+        if not j.get("ok"):
+            return 0
+        first = self.seq is None
+        self.seq = j.get("next_seq", self.seq)
+        if first:
+            return 0
+        if j.get("lost"):
+            return 1
+        return sum(1 for e in j.get("events") or [] if _is_correction(e))
+
+
+def _is_correction(e):
+    kind = e.get("kind")
+    return kind == "pose_correction" or (kind == "relocalization" and e.get("state") == "matched")
+
+
+def _sample_base(ctx, j, seconds, events):
+    """Reads before a correction describe the old pose: a correction restarts the sample."""
+    seen, reads, restarted = set(), [], 0
+    deadline = time.monotonic() + seconds
+    while True:
+        base = (j.get("localization") or {}).get("base")
+        if base and base.get("score") is not None:
+            read = (base["score"], base["coverage"])
+            if read not in seen:
+                seen.add(read)
+                reads.append(read)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+        corrections = events.poll()
+        if corrections:
+            restarted += corrections
+            reads = []
+        nxt = ctx.client.get("/here")
+        if nxt.get("ok"):
+            j = nxt
+    covered = sorted(score for score, coverage in reads if coverage >= BASE_MIN_COVERAGE)
+    return j, {
+        "seconds": seconds,
+        "reads": len(reads),
+        "covered_reads": len(covered),
+        "median": statistics.median(covered) if covered else None,
+        "min": covered[0] if covered else None,
+        "restarted": restarted,
+    }
 
 
 def cmd_status(ctx, args):
@@ -122,7 +192,7 @@ def _index_mismatch(ctx, num_place_files):
     except EgsError:
         return None
     if data is None:
-        return "index.tsv missing: run `egs snapshot`" if num_place_files else None
+        return None
     rows = [l for l in data.decode("utf-8", "replace").splitlines() if l and not l.startswith("#")]
     if num_place_files is not None and len(rows) != num_place_files:
         return "index.tsv stale: %d rows, %s place.yaml files: run `egs snapshot`" % (
@@ -165,13 +235,17 @@ def _mem_dir_or_none(ctx, raw):
     return ctx.memory_dir() if os.path.isabs(raw.strip()) else None
 
 
-def _existing_node(ctx, raw):
+def _existing_node(ctx, raw, create_hint=False):
     path = node_path(raw, ctx.memory_dir())
     mem = ctx.memory()
     if not mem.is_dir(path):
-        raise EgsError(
-            "no such node: %s (paths are relative to memory/)" % path, EXIT_USAGE, "no_such_node"
-        )
+        hint = "paths are relative to memory/"
+        if create_hint:
+            hint = (
+                "to remember a new thing, create it first: `egs fs mkdir %s`, then `egs fs "
+                "write %s/node.yaml` with `kind: <word>` and `aliases: [...]`" % (path, path)
+            )
+        raise EgsError("no such node: %s (%s)" % (path, hint), EXIT_USAGE, "no_such_node")
     return path, mem
 
 
@@ -184,14 +258,27 @@ def cmd_where(ctx, args):
         if not j.get("ok") and j.get("reason") != "unknown_anchor":
             return ctx.refused(j)
     r = mem.resolve(path, lambda aid: j if j.get("ok") else None)
-    obj = jsonout.resolution(r)
-    obj.update(ok=True, reason=None, at_num_solves=j.get("at_num_solves"))
+    now = ctx.robot_now_ns() if r.saved_at_ns is not None else None
+    obj = jsonout.resolution(r, now)
+    read_first = mem.read_first(path)
+    obj.update(ok=True, reason=None, at_num_solves=j.get("at_num_solves"), read_first=read_first)
+    code = _print_where(ctx, path, r, found, j, now)
+    if read_first:
+        ctx.print("read first: " + ", ".join(read_first))
+    if code == EXIT_OK:
+        ctx.result(obj)
+    else:
+        reason = "unknown_anchor" if r.state == "unknown" else "unresolvable"
+        ctx.result(dict(obj, ok=False, reason=reason))
+    return code
+
+
+def _print_where(ctx, path, r, found, j, now):
     if found is None:
         ctx.print(
             "%s  precision none  reason no bound ancestor  bound children: %s"
             % (path, ", ".join(r.bound_children) or "-")
         )
-        ctx.result(obj)
         return EXIT_OK
     for n in r.notes:
         ctx.print("note: " + n)
@@ -199,23 +286,20 @@ def cmd_where(ctx, args):
         ctx.print(
             "%s  unresolvable: anchor %d in %s/place.yaml is unknown" % (path, r.anchor, r.place)
         )
-        ctx.result(dict(obj, ok=False, reason="unknown_anchor"))
         return EXIT_REFUSED
     if not r.resolved:
         ctx.print(
             "%s  unresolvable: %s (anchor %d) is orphan (%s); go there and `egs place save %s`  %s"
             % (path, r.place, r.anchor, r.orphan_reason or "-", r.place, solve(j))
         )
-        ctx.result(dict(obj, ok=False, reason="unresolvable"))
         return EXIT_REFUSED
     theta = "%.2f" % r.pose[2] if r.precision in ("own", "offset") else "-"
     ctx.print(
         "%s  xy %s  theta %s  precision %s  resolved_via %s"
         % (path, fmt.xy(r.pose), theta, r.precision, r.resolved_via),
         "approach %s %s (%s)  saved %s  %s"
-        % (r.place, fmt.pose(r.approach), r.state, fmt.age_ns(r.saved_at_ns), solve(j)),
+        % (r.place, fmt.pose(r.approach), r.state, fmt.age_ns(r.saved_at_ns, now), solve(j)),
     )
-    ctx.result(obj)
     return EXIT_OK
 
 
@@ -225,9 +309,9 @@ def cmd_find(ctx, args):
     hits = []
     for rel in mem.nodes():
         ny, _ = mem.node_yaml(rel)
-        rank = match_rank(query, posixpath.basename(rel), ny)
-        if rank is not None:
-            hits.append((rank, rel, ny or {}))
+        m = match(query, posixpath.basename(rel), ny)
+        if m is not None:
+            hits.append((m, rel, ny or {}))
     if not hits:
         ctx.print("no match for %r" % query)
         ctx.result({"ok": True, "reason": None, "query": query, "rows": [], "more": 0})
@@ -238,7 +322,7 @@ def cmd_find(ctx, args):
     table = {a["anchor"]: a for a in j.get("anchors", [])}
     robot = se2.from_json(j.get("robot"))
     rows = []
-    for rank, rel, ny in hits:
+    for (rank, matched), rel, ny in hits:
         try:
             r = mem.resolve(rel, table.get)
         except UnreadablePlace as e:
@@ -253,8 +337,8 @@ def cmd_find(ctx, args):
             math.inf if d is None else d,
             rel,
         )
-        line = _find_row(rel, ny, r, last, robot, d)
-        rows.append((key, line, _find_obj(rank, ny, r, last, robot, d)))
+        line = _find_row(rel, ny, r, last, robot, d, rank, matched)
+        rows.append((key, line, _find_obj(rank, matched, ny, r, last, robot, d)))
     rows.sort(key=lambda x: x[0])
     limit = len(rows) if args.limit <= 0 else args.limit
     for _, line, _ in rows[:limit]:
@@ -277,7 +361,7 @@ def cmd_find(ctx, args):
     return EXIT_OK
 
 
-def _find_row(rel, ny, r, last, robot, d):
+def _find_row(rel, ny, r, last, robot, d, rank, matched):
     if r.resolved:
         prec = "%s:%s(%s)" % (r.precision, r.resolved_via, r.state)
     elif r.place:
@@ -285,8 +369,12 @@ def _find_row(rel, ny, r, last, robot, d):
     else:
         prec = "none"
     last_s = "last=%s %s" % (last["result"], fmt.age_ns(last["recorded_at"])) if last else "last=-"
-    return "%s [%s] %s %s %s prec=%s" % (
+    why = ""
+    if rank != RANK_NAME:
+        why = "  (%s %s)" % (RANK_NAMES[rank], json.dumps(matched, ensure_ascii=False))
+    return "%s%s [%s] %s %s %s prec=%s" % (
         rel,
+        why,
         ny.get("kind") or "-",
         fmt.meters(d),
         fmt.clock(robot, r.pose),
@@ -295,13 +383,14 @@ def _find_row(rel, ny, r, last, robot, d):
     )
 
 
-def _find_obj(rank, ny, r, last, robot, d):
+def _find_obj(rank, matched, ny, r, last, robot, d):
     obj = jsonout.resolution(r)
     del obj["notes"], obj["bound_children"]
     obj.update(
         kind=ny.get("kind"),
         rank=rank,
         match=RANK_NAMES[rank],
+        matched={"rank": RANK_NAMES[rank], "text": matched},
         dist_m=d,
         clock=fmt.clock_hour(robot, r.pose),
         result=last["result"] if last else None,
@@ -343,7 +432,7 @@ def cmd_observe(ctx, args):
     if args.at is not None and args.offset is None:
         raise EgsError("--at only goes with --offset", EXIT_USAGE)
     observed_at = _parse_stamp(args.at) if args.at is not None else None
-    path, mem = _existing_node(ctx, args.path)
+    path, mem = _existing_node(ctx, args.path, create_hint=True)
     attachment = _read_attachment(args.attach) if args.attach else None
     result = args.result or (None if args.invalidates is not None else "seen")
     obs_rel = posixpath.join(path, "observations.jsonl")
@@ -399,8 +488,7 @@ def _write_offset(ctx, mem, path, args, observed_at):
         return (
             ctx.refuse(
                 "no_bound_ancestor",
-                "no ancestor of %s has a place.yaml; stand at one and "
-                "`egs place save <ancestor>`" % path,
+                "no ancestor of %s has a place.yaml; %s" % (path, _save_spot_first(path)),
             ),
             None,
         )
@@ -450,9 +538,8 @@ def _write_offset(ctx, mem, path, args, observed_at):
     dist = math.hypot(robot[0] - a_pose[0], robot[1] - a_pose[1])
     if dist > limit and not args.force:
         text = (
-            "the robot is %.1fm from %s (anchor %d), over the %.1fm limit "
-            "(EGS_OFFSET_MAX_M); stand at the object and `egs place save` a place there, "
-            "or pass --force" % (dist, a_path, aid, limit)
+            "the robot is %.1fm from %s (anchor %d), over the %.1fm limit (EGS_OFFSET_MAX_M); "
+            "%s, or pass --force" % (dist, a_path, aid, limit, _save_spot_first(path))
         )
         return ctx.refuse("too_far", text, dist_m=dist, limit_m=limit), None
     off = se2.compose(se2.inverse(a_pose), se2.compose(robot, tuple(args.offset)))
@@ -476,6 +563,15 @@ def _write_offset(ctx, mem, path, args, observed_at):
         "at_num_solves": j.get("at_num_solves"),
     }
     return EXIT_OK, written
+
+
+def _save_spot_first(path):
+    parent, name = posixpath.dirname(path), posixpath.basename(path)
+    return (
+        "save the spot you stand at as a place first (`egs place save %s/<spot>`), "
+        "move %s under it (`egs fs mv %s %s/<spot>/%s`), then observe it there"
+        % (parent, name, path, parent, name)
+    )
 
 
 def _default_kind(path):

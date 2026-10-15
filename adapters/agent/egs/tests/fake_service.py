@@ -54,6 +54,9 @@ class FakeState:
         self.can_drop = False
         self.drop_refusal = None  # e.g. "session_changed": what the host's drop answers instead
         self.boot_count = 3
+        # A replayed bag's sensor clock, far from this computer's.
+        self.sensor_base_ns = 1785000000000000000
+        self.pose_sample = True  # False: GET /pose has no scan yet
         self.has_frozen_base = True
         self.aligned_to_base = True
         self.view_dropped = None  # e.g. "robot,scan": legend's dropped= item
@@ -76,6 +79,7 @@ class FakeState:
             "base": {"score": 0.72, "coverage": 0.85},
             "scan_match": {"score": 0.82, "avg": 0.8},
         }
+        self.base_reads = []
         self.offset_free = True  # False: every --offset target is a wall
         self.fed = 2
         self.sessions = [
@@ -110,7 +114,7 @@ class FakeState:
                 "phase": "LOCKED",
                 "anchored": True,
                 "start_ns": 5,
-                "last_node_ns": time.time_ns(),
+                "last_node_ns": self.sensor_base_ns,
             },
         ]
         # A relocalization request answers pending to this many /here?relocalization polls, then
@@ -126,6 +130,8 @@ class FakeState:
             "correction_rad": 2.86,
         }
         self.events = []  # dicts without seq; seq = events_first_seq + index
+        self.here_polls = 0
+        self.here_events = {}  # /here poll number -> event logged when that poll is served
         self.events_first_seq = 0
         self.freeze_rejection = None
         self.freeze_visible_after = 1  # /sessions polls before the frozen role shows
@@ -142,7 +148,7 @@ class FakeState:
             "orphan_reason": orphan_reason,
             "pose": p,
             "submap_id": [0, aid],
-            "saved_at_ns": saved_at_ns or time.time_ns() - 6 * 86400 * 10**9,
+            "saved_at_ns": saved_at_ns or self.sensor_base_ns - 6 * 86400 * 10**9,
         }
 
     def relocalization_request(self, kind, anchor=None):
@@ -341,6 +347,13 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def here(self, q, body):
+        with self.st.lock:
+            self.st.here_polls += 1
+            event = self.st.here_events.get(self.st.here_polls)
+            if event is not None:
+                self.st.events.append(event)
+        if self.st.base_reads:
+            self.st.localization["base"] = self.st.base_reads.pop(0)
         if "relocalization" in q:
             relocalization = self.st.relocalization_poll(int(q["relocalization"]))
         else:
@@ -380,7 +393,9 @@ class _Handler(BaseHTTPRequestHandler):
             os.makedirs(os.path.dirname(pf), exist_ok=True)
             with open(pf, "w") as f:
                 f.write("anchor: %d\n" % aid)
-        self.st.anchor(aid, dict(self.st.robot), state="pending", saved_at_ns=time.time_ns())
+        self.st.anchor(
+            aid, dict(self.st.robot), state="pending", saved_at_ns=self.st.sensor_base_ns
+        )
         self.ok(
             anchor=aid,
             submap_id=[2, 0],
@@ -415,13 +430,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         seq = (polls + st.pose_seq_every - 1) // st.pose_seq_every
+        if not st.pose_sample:
+            return self.ok(seq=None, stamp_ns=None, age_s=None, pose=None, velocity=None)
         self._send(
             200,
             {
                 "ok": True,
                 "reason": None,
                 "seq": seq,
-                "stamp_ns": 1785000000000000000 + seq * 10**8,
+                "stamp_ns": st.sensor_base_ns + seq * 10**8,
                 "age_s": 0.04,
                 "pose": st.pose,
                 "velocity": {"vx": 0.3, "vy": 0.0, "omega": 0.1},
@@ -643,8 +660,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "anchors": 0,
                 "phase": "BOOTSTRAP",
                 "anchored": False,
-                "start_ns": time.time_ns(),
-                "last_node_ns": time.time_ns(),
+                "start_ns": self.st.sensor_base_ns,
+                "last_node_ns": self.st.sensor_base_ns,
             }
         )
         self.st.fed = fed + 1
@@ -714,8 +731,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "anchors": 0,
                     "phase": "BOOTSTRAP",
                     "anchored": False,
-                    "start_ns": time.time_ns(),
-                    "last_node_ns": time.time_ns(),
+                    "start_ns": st.sensor_base_ns,
+                    "last_node_ns": st.sensor_base_ns,
                 }
             )
         self.ok(

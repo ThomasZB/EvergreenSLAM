@@ -13,6 +13,11 @@ class SessionTest(EgsTestCase):
         self.assertIn("1 idle  nodes 40", out)
         self.assertIn("2 fed", out)
         self.assertIn("last node 0s", out)
+        self.assertEqual(len(self.requests("GET", "/pose")), 1)
+        self.state.sessions[1]["last_node_ns"] = self.state.sensor_base_ns - 3 * 3600 * 10**9
+        code, out, _ = self.egs("session", "ls")
+        self.assertIn("1 idle  nodes 40", out)
+        self.assertIn("last node 3h", out)
 
     def test_freeze_without_yes_prints_plan_and_exits_0(self):
         code, out, _ = self.egs("session", "freeze")

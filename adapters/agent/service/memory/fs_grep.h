@@ -35,10 +35,8 @@ struct GrepResult {
   bool truncated = false;
 };
 
-// Comma-separated file-name globs; empty items dropped, nothing left means the default list.
 std::vector<std::string> ParseGrepGlobs(std::string_view include);
 
-// `start` comes from FsSandbox::Resolve and exists. Contract: API.md "GET /fs/grep".
 GrepResult GrepTree(const SandboxPath& start, std::string_view pattern,
                     const std::vector<std::string>& globs);
 

@@ -253,7 +253,12 @@ read in the same task as `robot`:
   node outside the frozen map). It is consistency with the frozen base, not proof the pose is
   right: furniture moved since the freeze and people in view lower it, and a pose that slides along
   a corridor can keep it high. `coverage` says how much of the cloud could be checked at all; a low
-  `coverage` makes `score` say little. No time average.
+  `coverage` makes `score` say little. No time average. Measured 2026-10-16 (long_update cross-day, museum_b2, scored
+  per keyframe): correct poses at `coverage` ≥ 0.5 score 0.41–0.79 (5th–95th percentile, median
+  0.62–0.72); the same nodes moved 0.25 m or turned 5° or more score 0.20–0.45 with `coverage`
+  barely lower. A 20 s median below 0.45 never occurred on a correct pose. `egs here --sample S`
+  takes that median client side; the service keeps none. It polls `/events` alongside and drops
+  the reads taken before a `relocalization` (matched) or `pose_correction` event (`restarted`).
 - `since_base_match_m`: keyframe-polyline distance the fed session has driven since its last
   accepted loop closure to a frozen session (`DriftTracker::SinceBaseMatch`; closures the
   constraint builder added, not trim-recovered edges or priors; a match arriving late never moves
@@ -294,7 +299,9 @@ alignment, composed as above, in the same task as the resolve (`egs observe --of
 Refusals (`ok: false`, anchor fields still there, `robot: null`): `too_old`, `in_future`, `gap`
 as in "Pose history", `no_robot_pose` (no sample, no fed session, or no `pose_at` hook);
 `unknown_anchor` wins over them. `at` is the robot's sensor clock (scan stamps), not the agent
-computer's: `/pose` `stamp_ns` is the robot's time now.
+computer's: `/pose` `stamp_ns` is the robot's time now. `egs where` and `egs session ls` print
+`saved_at_ns`, `start_ns` and `last_node_ns` as ages against `stamp_ns + age_s` of one `/pose` read
+(this computer's clock only while `/pose` has no sample).
 
 **GET /anchors[?robot=1]** — task. `→ {ok, at_num_solves, robot?, anchors: [{anchor, state,
 orphan_reason, pose|null}]}`. **find** and **observe** are CLI only, on these two endpoints.
@@ -549,8 +556,9 @@ name matches one of `include`'s comma-separated globs (`fnmatch`; default
 `node.yaml,notes.md,SKILL.md,*.md,*.yaml`). Always skipped: `observations.jsonl`, directories
 named `attachments`, symlinks, files over 1 MiB. Lines split on `\n`, a trailing `\r` dropped,
 numbered from 1. `→ {ok, matches: [{path, line, text}], truncated}`, `path` relative to `memory/`;
-at most 200 matches, `truncated: true` when a 201st exists. `egs fs grep` prints `path:line:text`
-and does the same walk itself in local mode.
+at most 200 matches, `truncated: true` when a 201st exists. `egs fs grep WORDS... [--path P]` joins
+the words with single spaces into `pattern`, prints `path:line:text` and does the same walk itself
+in local mode.
 
 ## Anchor hooks inside PoseGraph
 

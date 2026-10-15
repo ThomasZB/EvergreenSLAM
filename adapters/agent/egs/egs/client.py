@@ -31,7 +31,7 @@ HINTS = {
     "(egs pose --json stamp_ns), not this computer's",
     "gap": "the scans around --at are more than 0.5 s apart: no pose to interpolate there",
     "busy": "the service is answering other requests: retry in a moment",
-    "fs_error": "the process could not write the file",
+    "fs_error": "file system error",
     "unknown_session": "no such session: see `egs session ls`",
     "freezing": "a freeze is in progress: retry in a few seconds",
     "fed_session": "the session being fed cannot be removed",

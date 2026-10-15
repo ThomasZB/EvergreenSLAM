@@ -119,8 +119,6 @@ AgentService::AgentService(lifelong::PoseGraph& pose_graph, AgentServiceHooks ho
   const std::string& bind = option.bind;
   const int port = option.port;
   httplib::Server& server = impl_->server;
-  // Service-side state stays single-threaded on the serial executor; one request per connection,
-  // so an idle client never pins a pool thread.
   server.new_task_queue = [] { return new httplib::ThreadPool(kPoolThreads); };
   server.set_keep_alive_max_count(1);
   server.set_payload_max_length(kMaxRequestBytes);

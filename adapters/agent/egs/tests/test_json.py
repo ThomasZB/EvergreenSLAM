@@ -61,7 +61,7 @@ class JsonTest(EgsTestCase):
     def test_status(self):
         obj = self.js("status", "--json")
         self.assertEqual(obj["num_place_files"], 5)
-        self.assertEqual(obj["index_warning"], "index.tsv missing: run `egs snapshot`")
+        self.assertIsNone(obj["index_warning"])
         self.assertEqual(obj["phase"], "LOCKED")
 
     def test_root(self):
@@ -112,6 +112,10 @@ class JsonTest(EgsTestCase):
             by_path["places/kitchen/table/apple"]["last_seen_age_s"], 20 * 60, delta=60
         )
         self.assertEqual(by_path["places/office/desk/apple"]["match"], "name")
+        self.assertEqual(
+            by_path["places/office/desk/green_apple"]["matched"],
+            {"rank": "word", "text": "green_apple"},
+        )
         self.assertEqual(obj["more"], 0)
         limited = self.js("find", "apple", "--limit", "1", "--json")
         self.assertEqual(len(limited["rows"]), 1)

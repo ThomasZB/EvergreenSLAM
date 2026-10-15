@@ -11,6 +11,9 @@ every start, so do not edit it.
 
 ## Layout
 
+An example: only `README.md` and `places/` always exist; every other file appears when someone
+writes it.
+
 ```
 memory/
   README.md                          this contract (process)
@@ -163,9 +166,10 @@ Any directory, place or container, may hold:
   same frontmatter as above), optionally with `scripts/` for waypoints and `egs` calls.
 
 Scope is the ancestor chain: for `places/kitchen/fridge` read `places/SKILL.md`, then
-`places/kitchen/SKILL.md`, then `places/kitchen/fridge/SKILL.md`. Skills under any of those
-directories apply. On conflict the closest wins, and the user's direct instruction beats them all.
-Find them with `cat` and `find places -name SKILL.md`; `egs` does not load them for you.
+`places/kitchen/SKILL.md`, then `places/kitchen/fridge/SKILL.md`, each that exists (`egs where`
+lists them, with the `notes.md` files, as `read first:`). Skills under any of those directories
+apply. On conflict the closest wins, and the user's direct instruction beats them all. `egs` does
+not load them for you.
 
 A skill refers only to its own directory (`./...`), never to another place's path or anchor id:
 paths break on `mv`, while a skill nested in its place moves with it. A skill that spans places

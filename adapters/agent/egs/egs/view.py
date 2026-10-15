@@ -16,7 +16,6 @@ def cmd_view(ctx, args):
     if to_stdout and ctx.json:
         raise EgsError("-o - writes the PNG to stdout: it does not go with --json", EXIT_USAGE)
     if to_stdout:
-        # Everything but the PNG goes to stderr, refusals included.
         png_out, ctx.out = ctx.out, ctx.err
     elif args.output:
         ctx.refuse_inside_memory(args.output)

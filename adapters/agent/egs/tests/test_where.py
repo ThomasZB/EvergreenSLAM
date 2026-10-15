@@ -1,7 +1,9 @@
+import json
 import os
+import time
 import unittest
 
-from support import EgsTestCase
+from support import NS_DAY, NS_MIN, EgsTestCase
 
 
 class WhereTest(EgsTestCase):
@@ -91,6 +93,55 @@ class WhereTest(EgsTestCase):
         code, out, _ = self.egs("where", os.path.join(self.mem, "places/kitchen") + "/")
         self.assertEqual(code, 0)
         self.assertIn("places/kitchen  xy 5.00,0.00", out)
+
+    def test_read_first_lists_skills_and_notes_from_places_down(self):
+        self.write("places/kitchen/notes.md", "mind the step\n")
+        self.write("places/kitchen/table/SKILL.md", "---\nname: table\n---\n")
+        self.write("places/kitchen/table/apple/notes.md", "bruised\n")
+        self.write("places/kitchen/fridge/notes.md", "not on the way\n")
+        want = [
+            "places/SKILL.md",
+            "places/kitchen/notes.md",
+            "places/kitchen/table/SKILL.md",
+            "places/kitchen/table/apple/notes.md",
+        ]
+        for remote in (False, True):
+            if remote:
+                self.remote_only()
+            self.state.requests.clear()
+            code, out, _ = self.egs("where", "places/kitchen/table/apple")
+            self.assertEqual(code, 0, out)
+            self.assertEqual(out.splitlines()[-1], "read first: " + ", ".join(want))
+            listed = [q["path"] for _, _, q in self.requests("GET", "/fs/ls")]
+            self.assertEqual(len(listed), len(set(listed)), listed)
+            obj = json.loads(self.egs("where", "places/kitchen/table/apple", "--json")[1])
+            self.assertEqual(obj["read_first"], want)
+        code, out, _ = self.egs("where", "places/office")
+        self.assertEqual(out.splitlines()[-1], "read first: places/SKILL.md")
+        code, out, _ = self.egs("where", "places/garage/shelf")
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines()[-1], "read first: places/SKILL.md")
+        os.remove(os.path.join(self.mem, "places/SKILL.md"))
+        code, out, _ = self.egs("where", "places/dock")
+        self.assertNotIn("read first", out)
+        obj = json.loads(self.egs("where", "places/dock", "--json")[1])
+        self.assertEqual(obj["read_first"], [])
+
+    def test_saved_age_is_on_the_robot_clock(self):
+        robot_now = self.state.sensor_base_ns
+        self.state.anchors[1]["saved_at_ns"] = robot_now - 2 * NS_MIN
+        code, out, _ = self.egs("where", "places/dock")
+        self.assertIn("saved 2m", out)
+        obj = json.loads(self.egs("where", "places/dock", "--json")[1])
+        self.assertAlmostEqual(obj["saved_age_s"], 120, delta=5)
+        self.assertEqual(len(self.requests("GET", "/pose")), 2)
+        self.state.pose_sample = False
+        self.state.anchors[1]["saved_at_ns"] = time.time_ns() - 3 * NS_DAY
+        code, out, _ = self.egs("where", "places/dock")
+        self.assertIn("saved 3d", out)
+        self.state.requests.clear()
+        self.egs("where", "places/office")
+        self.assertEqual(self.requests("GET", "/pose"), [])
 
     def test_memory_from_env_skips_root(self):
         code, out, _ = self.egs("where", "places/dock", EGS_MEMORY=self.mem)

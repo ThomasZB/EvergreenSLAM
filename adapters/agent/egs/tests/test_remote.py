@@ -205,7 +205,7 @@ class GrepTest(RemoteCase):
                 "places/kitchen/notes.md:3:GALLEY light",
             ],
         )
-        _, out, _ = self.both("GALLEY", "places/kitchen", "--include", "*.txt, node.yaml")
+        _, out, _ = self.both("GALLEY", "--path", "places/kitchen", "--include", "*.txt, node.yaml")
         self.assertEqual(
             out.splitlines(),
             [
@@ -214,13 +214,15 @@ class GrepTest(RemoteCase):
             ],
         )
         self.assertEqual(self.both("a.b")[1], "")
-        self.assertEqual(self.both("厨房", "places/kitchen/node.yaml")[1].count("\n"), 1)
+        node = self.both("厨房", "--path", "places/kitchen/node.yaml")[1]
+        self.assertEqual(node.count("\n"), 1)
         code, out, _ = self.both("--json", "light")
         self.assertEqual(
             json.loads(out),
             {
                 "ok": True,
                 "reason": None,
+                "pattern": "light",
                 "matches": [{"path": "places/kitchen/notes.md", "line": 3, "text": "GALLEY light"}],
                 "truncated": False,
             },
@@ -228,18 +230,30 @@ class GrepTest(RemoteCase):
 
     def test_truncates_at_two_hundred(self):
         self.write("places/hall/notes.md", "".join("galley %d\n" % i for i in range(250)))
-        code, out, err = self.both("--json", "galley", "places/hall")
+        code, out, err = self.both("--json", "galley", "--path", "places/hall")
         j = json.loads(out)
         self.assertEqual((len(j["matches"]), j["truncated"]), (200, True))
-        code, out, err = self.egs("fs", "grep", "galley", "places/hall")
+        code, out, err = self.egs("fs", "grep", "galley", "--path", "places/hall")
         self.assertEqual(len(out.splitlines()), 200)
         self.assertIn("stopped at 200", err)
 
     def test_refusals(self):
-        self.assertEqual(self.egs("fs", "grep", "x", "places/office/link.md")[0], 2)
-        self.assertEqual(self.egs("fs", "grep", "x", "../")[0], 2)
-        self.assertEqual(self.egs("fs", "grep", "", "places")[0], 2)
-        self.assertEqual(self.egs("fs", "grep", "x", "places/none")[0], 1)
+        self.assertEqual(self.egs("fs", "grep", "x", "--path", "places/office/link.md")[0], 2)
+        self.assertEqual(self.egs("fs", "grep", "x", "--path", "../")[0], 2)
+        self.assertEqual(self.egs("fs", "grep", "", "--path", "places")[0], 2)
+        self.assertEqual(self.egs("fs", "grep", "x", "--path", "places/none")[0], 1)
+        self.assertEqual(self.egs("fs", "grep")[0], 2)
+
+    def test_several_words_are_one_phrase(self):
+        self.write("places/kitchen/table/node.yaml", "kind: table\naliases: [hand truck]\n")
+        self.write("places/kitchen/table/notes.md", "a truck, by hand\n")
+        code, out, err = self.both("hand", "truck")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "places/kitchen/table/node.yaml:2:aliases: [hand truck]\n")
+        self.assertEqual(self.both("hand   truck", "--path", "places/kitchen")[1], out)
+        code, out, err = self.egs("fs", "grep", "galley", "places/kitchen")
+        self.assertEqual((code, out), (0, ""))
+        self.assertIn("use --path places/kitchen", err)
 
 
 class BytesToStdoutTest(RemoteCase):

@@ -147,8 +147,8 @@ def cmd_add(ctx, args):
     if found is None:
         return ctx.refuse(
             "no_place",
-            "no directory above %s has a place.yaml; a zone moves with its place's "
-            "anchor, so stand there and `egs place save <ancestor>` first" % path,
+            "no directory above %s has a place.yaml, and a zone moves with its place's anchor; %s"
+            % (path, _save_spot_first(path)),
         )
     a_path, aid, _ = found
 
@@ -176,9 +176,8 @@ def cmd_add(ctx, args):
         dist = math.hypot(robot[0] - a_pose[0], robot[1] - a_pose[1])
         if dist > limit and not args.force:
             text = (
-                "the robot is %.1fm from %s (anchor %d), over the %.1fm limit "
-                "(EGS_OFFSET_MAX_M); save a place nearer the zone with `egs place save`, "
-                "or pass --force" % (dist, a_path, aid, limit)
+                "the robot is %.1fm from %s (anchor %d), over the %.1fm limit (EGS_OFFSET_MAX_M); "
+                "%s, or pass --force" % (dist, a_path, aid, limit, _save_spot_first(path))
             )
             return ctx.refuse("too_far", text, dist_m=dist, limit_m=limit)
         to_anchor = se2.compose(se2.inverse(a_pose), robot)
@@ -207,6 +206,14 @@ def cmd_add(ctx, args):
         }
     )
     return EXIT_OK
+
+
+def _save_spot_first(path):
+    parent, name = posixpath.dirname(path), posixpath.basename(path)
+    return (
+        "save the spot you stand at as a place first (`egs place save %s/<spot>`), then "
+        "`egs zone add %s/<spot>/%s`" % (parent, parent, name)
+    )
 
 
 def _zone_line(z):

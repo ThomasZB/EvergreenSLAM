@@ -25,7 +25,6 @@ class Routes {
  public:
   Routes(httplib::Server& server, SerialExecutor& serial) : server_(server), serial_(serial) {}
 
-  // Serial: 503 busy when the executor's wait line is full.
   Routes& Get(const std::string& pattern, RouteHandler handler);
   Routes& Post(const std::string& pattern, RouteHandler handler);
   // On the pool thread beside the serial handlers: may touch only thread-safe state.

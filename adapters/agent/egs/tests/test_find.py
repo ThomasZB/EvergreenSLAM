@@ -3,7 +3,15 @@ import unittest
 
 from support import NS_MIN, EgsTestCase, obs
 
-from egs.memory import RANK_ALIAS, RANK_FUZZY, RANK_KIND, RANK_NAME, RANK_WORD, match_rank
+from egs.memory import (
+    RANK_ALIAS,
+    RANK_FUZZY,
+    RANK_KIND,
+    RANK_NAME,
+    RANK_WORD,
+    match,
+    match_rank,
+)
 
 
 def rows(out):
@@ -20,6 +28,16 @@ class MatchRankTest(unittest.TestCase):
         self.assertEqual(match_rank("apple", "green_apple", {}), RANK_WORD)
         self.assertEqual(match_rank("apple", "apple-2", {}), RANK_WORD)
         self.assertEqual(match_rank("aple", "apple", {}), RANK_FUZZY)
+
+    def test_matched_text_as_written(self):
+        node = {"kind": "Jack", "aliases": ["Hand Truck", "叉车"], "labels": ["tools"]}
+        self.assertEqual(match("pallet jack", "pallet-jack", node), (RANK_NAME, "pallet-jack"))
+        self.assertEqual(match("hand truck", "pallet-jack", node), (RANK_ALIAS, "Hand Truck"))
+        self.assertEqual(match("jack", "pallet-jack", node), (RANK_KIND, "Jack"))
+        self.assertEqual(match("tools", "pallet-jack", node), (RANK_KIND, "tools"))
+        self.assertEqual(match("truck", "pallet-jack", node), (RANK_WORD, "Hand Truck"))
+        self.assertEqual(match("pallet jak", "pallet-jack", node), (RANK_FUZZY, "pallet-jack"))
+        self.assertIsNone(match("forklift", "pallet-jack", node))
 
     def test_word_boundary(self):
         self.assertIsNone(match_rank("apple", "pineapple", {"kind": "fruit"}))
@@ -72,6 +90,7 @@ class FindTest(EgsTestCase):
     def test_alias_and_label(self):
         code, out, _ = self.egs("find", "苹果")
         self.assertEqual(rows(out), ["places/kitchen/table/apple"])
+        self.assertTrue(out.startswith('places/kitchen/table/apple  (alias "苹果") [apple]'), out)
         code, out, _ = self.egs("find", "food")
         self.assertEqual(rows(out), ["places/kitchen/fridge/milk"])
 

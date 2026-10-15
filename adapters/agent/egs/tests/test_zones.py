@@ -61,7 +61,9 @@ class ZoneTest(EgsTestCase):
         self.assertIn("holds a place.yaml", out)
         code, out, _ = self.egs("zone", "add", "places/office/rug", "--rect", "0", "0", "1", "1")
         self.assertEqual(code, 1)
-        self.assertIn("egs place save", out)
+        self.assertIn("save the spot you stand at as a place first", out)
+        self.assertIn("`egs place save places/office/<spot>`", out)
+        self.assertIn("`egs zone add places/office/<spot>/rug`", out)
         self.assertFalse(os.path.exists(os.path.join(self.mem, "places/office/rug")))
         code, out, _ = self.egs(
             "zone", "add", "places/garage/shelf/oil", "--rect", "0", "0", "1", "1"
@@ -92,6 +94,7 @@ class ZoneTest(EgsTestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("100.0m from places/kitchen (anchor 2)", out)
+        self.assertIn("`egs place save places/kitchen/<spot>`", out)
         self.assertIn("--force", out)
         self.assertFalse(os.path.exists(os.path.join(self.mem, "places/kitchen/slope")))
         code, out, _ = self.egs(

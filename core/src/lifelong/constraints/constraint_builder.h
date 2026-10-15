@@ -55,7 +55,6 @@ class ConstraintBuilder {
   // Operator relocalization, so no attempted_pairs_ or drift gate: a resent pose retries pairs.
   // With a prior, finished submaps of other sessions whose footprint reaches it within the
   // relocalization window are matched from the prior; without one, whole grids over every heading.
-  // Returns the number of candidates selected; inline matches report before it returns.
   int SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
                                 int budget = -1, MatchObserver observer = nullptr);
 

@@ -271,7 +271,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("cannot read places/dock/missing.md", out)
         self.assertIn("places/", self.ok("fs", "ls", ".").splitlines())
         self.assertEqual(
-            self.ok("fs", "grep", "BLUE", "places"),
+            self.ok("fs", "grep", "BLUE", "--path", "places"),
             "places/dock/notes.md:1:blue mug\nplaces/dock/notes.md:2:blue mug\n",
         )
         grep = json.loads(self.ok("fs", "grep", "mug", "--include", "*.txt", "--json"))

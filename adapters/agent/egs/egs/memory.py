@@ -14,6 +14,7 @@ from .yamlmini import YamlSubsetError, loads
 
 RANK_NAME, RANK_ALIAS, RANK_KIND, RANK_WORD, RANK_FUZZY = range(5)
 ATTACHMENTS = "attachments"
+READ_FIRST = ("SKILL.md", "notes.md")
 FUZZY_CUTOFF = 0.75
 
 
@@ -90,6 +91,13 @@ class Memory:
         out = [rel]
         while out[-1] != "places" and "/" in out[-1]:
             out.append(posixpath.dirname(out[-1]))
+        return out
+
+    def read_first(self, rel):
+        out = []
+        for d in reversed(self.chain(rel)):
+            names = self._names(d)
+            out += [posixpath.join(d, f) for f in READ_FIRST if names.get(f) == "file"]
         return out
 
     def nearest_place(self, rel):
@@ -196,28 +204,35 @@ def _words(s):
 
 
 def match_rank(query, name, node):
-    """name > alias > kind (or label) > word-boundary substring > difflib; None for no match."""
+    m = match(query, name, node)
+    return None if m is None else m[0]
+
+
+def match(query, name, node):
+    """(rank, matched string as written) or None: name > alias > kind/label > word > fuzzy."""
     q = _words(query)
     if not q:
         return None
     node = node or {}
-    aliases = [_words(a) for a in _as_list(node.get("aliases"))]
-    kind = _words(node.get("kind")) if node.get("kind") is not None else None
-    labels = [_words(a) for a in _as_list(node.get("labels"))]
-    n = _words(name)
-    if q == n:
-        return RANK_NAME
-    if q in aliases:
-        return RANK_ALIAS
-    if q == kind or q in labels:
-        return RANK_KIND
-    fields = [n] + aliases + ([kind] if kind else [])
+    aliases = [(_words(a), str(a)) for a in _as_list(node.get("aliases"))]
+    kind = node.get("kind")
+    kinds = [] if kind is None else [(_words(kind), str(kind))]
+    labels = [(_words(a), str(a)) for a in _as_list(node.get("labels"))]
+    fields = [(_words(name), str(name))] + aliases + kinds
+    if q == fields[0][0]:
+        return RANK_NAME, fields[0][1]
+    for ranked, rank in ((aliases, RANK_ALIAS), (kinds + labels, RANK_KIND)):
+        for norm, raw in ranked:
+            if q == norm:
+                return rank, raw
     word = re.compile(r"(?<![^\W_])" + re.escape(q) + r"(?![^\W_])")
-    if any(word.search(f) for f in fields):
-        return RANK_WORD
-    candidates = fields + [w for f in fields for w in f.split(" ")]
-    if any(difflib.SequenceMatcher(None, q, c).ratio() >= FUZZY_CUTOFF for c in candidates):
-        return RANK_FUZZY
+    for norm, raw in fields:
+        if word.search(norm):
+            return RANK_WORD, raw
+    for norm, raw in fields:
+        for c in [norm] + norm.split(" "):
+            if difflib.SequenceMatcher(None, q, c).ratio() >= FUZZY_CUTOFF:
+                return RANK_FUZZY, raw
     return None
 
 

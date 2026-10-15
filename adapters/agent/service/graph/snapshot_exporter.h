@@ -82,7 +82,6 @@ std::vector<SnapshotNode> DecimateTrajectory(std::vector<SnapshotNode> nodes, do
 // One past the highest leading 6-digit number among the entries of `dir`, at least 1.
 int NextSequenceNumber(const std::string& dir);
 std::string SequenceName(int seq);
-// The names Export can write; GET /snapshots/file serves nothing else.
 bool IsSnapshotFileName(std::string_view name);
 
 }  // namespace evergreenslam::agent

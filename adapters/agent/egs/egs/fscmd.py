@@ -78,14 +78,22 @@ def cmd_cat(ctx, args):
 
 
 def cmd_grep(ctx, args):
-    if not args.pattern:
-        raise EgsError("fs grep needs a non-empty PATTERN", EXIT_USAGE, "bad_param")
-    matches, truncated = ctx.store().grep(_rel(ctx, args.path), args.pattern, args.include)
+    pattern = " ".join(w for a in args.words for w in a.split())
+    if not pattern:
+        raise EgsError("fs grep needs words to find", EXIT_USAGE, "bad_param")
+    matches, truncated = ctx.store().grep(_rel(ctx, args.path), pattern, args.include)
     for m in matches:
         ctx.print("%s:%d:%s" % (m["path"], m["line"], m["text"]))
     if truncated:
-        ctx.warn("stopped at %d matches: narrow PATH, PATTERN or --include" % len(matches))
-    ctx.result({"ok": True, "reason": None, "matches": matches, "truncated": truncated})
+        ctx.warn("stopped at %d matches: narrow --path, the words or --include" % len(matches))
+    if not matches and len(args.words) > 1 and args.words[-1].startswith("places"):
+        ctx.warn(
+            "no line holds %r; to search below a directory use --path %s"
+            % (pattern, args.words[-1])
+        )
+    ctx.result(
+        {"ok": True, "reason": None, "pattern": pattern, "matches": matches, "truncated": truncated}
+    )
     return EXIT_OK
 
 

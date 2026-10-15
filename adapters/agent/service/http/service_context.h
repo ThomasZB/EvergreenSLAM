@@ -36,8 +36,7 @@ struct ServiceContext {
   std::string views_dir() const;
 
   lifelong::PoseGraph& pose_graph;
-  // Odd while `hooks.drop_session` runs (it is wrapped to advance this): /pose pairs a host sample
-  // with ActiveSessionToGlobal() only between two equal even reads (API.md, "Epoch pairing").
+  // Odd while `hooks.drop_session` runs (API.md, "Epoch pairing").
   std::atomic<uint64_t> drop_seqlock{0};
   const AgentServiceHooks hooks;
   const PlaceStore places;
@@ -51,7 +50,6 @@ struct ServiceContext {
   std::atomic<bool> stopping{false};
   // Set once switch_map accepted a request; this service is torn down before it would clear.
   std::atomic<bool> switch_pending{false};
-  // Thread safe.
   RelocalizationRequests relocalizations;
 
   // Serial-executor state: only one handler runs at a time, so none of this is shared.
