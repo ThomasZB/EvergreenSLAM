@@ -57,7 +57,12 @@ class FakeState:
         self.anchors = {}
         self.next_id = 50
         self.keyframe = True
-        self.scan_match = {"score": 0.82, "avg": 0.8}  # None: no host frame yet
+        # base and scan_match are None without a host frame.
+        self.localization = {
+            "since_base_match_m": 3.2,
+            "base": {"score": 0.72, "coverage": 0.85},
+            "scan_match": {"score": 0.82, "avg": 0.8},
+        }
         self.offset_free = True  # False: every --offset target is a wall
         self.fed = 2
         self.sessions = [
@@ -258,7 +263,7 @@ class _Handler(BaseHTTPRequestHandler):
             has_frozen_base=self.st.has_frozen_base,
             aligned_to_base=self.st.aligned_to_base,
             phase="LOCKED",
-            scan_match=self.st.scan_match,
+            localization=self.st.localization,
             closures_delta=2,
             num_anchors=len(self.st.anchors),
             num_orphans=sum(1 for a in self.st.anchors.values() if a["state"] == "orphan"),
@@ -272,7 +277,7 @@ class _Handler(BaseHTTPRequestHandler):
             keyframe_age_s=1.5,
             has_frozen_base=self.st.has_frozen_base,
             aligned_to_base=self.st.aligned_to_base,
-            scan_match=self.st.scan_match,
+            localization=self.st.localization,
             current={"path": "places/dock", "anchor": 1, "dist_m": 0.4},
             closest=[
                 {"path": "places/dock", "anchor": 1, "dist_m": 0.4, "state": "frozen"},

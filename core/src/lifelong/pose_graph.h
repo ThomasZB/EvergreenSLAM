@@ -115,7 +115,6 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   bool CheckpointOnTask();
   SessionId boot_first_session() const { return boot_first_session_; }
 
-  // Graph and Problem must be re-keyed together, on the queue only. Returns old id -> new id.
   std::map<SubmapId, SubmapId> TransferUnfinishedSubmaps(SessionId from, SessionId to);
 
   void Enqueue(TaskQueue::Task task) override { task_queue_.Enqueue(std::move(task)); }

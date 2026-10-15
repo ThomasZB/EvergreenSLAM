@@ -23,6 +23,7 @@
 #include "common/time.h"
 #include "lifelong/anchors/anchor_store.h"
 #include "lifelong/pose_graph.h"
+#include "lifelong/sessions/frozen_base_map.h"
 #include "sensor/point_cloud.h"
 #include "service/http/json_writer.h"
 #include "service/http/service_hooks.h"
@@ -40,6 +41,8 @@ struct RobotReading {
   std::optional<double> keyframe_age_s;
   // From the same host frame as `pose`; empty whenever it is.
   std::optional<ScanMatch> scan_match;
+  std::optional<lifelong::FrozenBaseMap::Agreement> base;
+  std::optional<double> since_base_match_m;
 };
 
 struct BaseAlignment {
@@ -76,7 +79,7 @@ std::map<lifelong::AnchorId, lifelong::ResolvedAnchor> ById(
 void WritePose(JsonWriter& writer, std::string_view key,
                const std::optional<Eigen::Affine2d>& pose);
 void WriteSubmapId(JsonWriter& writer, std::string_view key, const lifelong::SubmapId& id);
-void WriteScanMatch(JsonWriter& writer, const std::optional<ScanMatch>& scan_match);
+void WriteLocalization(JsonWriter& writer, const RobotReading& reading);
 
 }  // namespace evergreenslam::agent
 

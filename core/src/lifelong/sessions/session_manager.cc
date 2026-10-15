@@ -204,6 +204,7 @@ void SessionManager::OnConstraintAddedOnTask(const Constraint& constraint) {
 void SessionManager::RebuildAfterLoadOnTask() {
   const PoseGraphData& graph = handle_.graph();
   coverage_.Rebuild(graph);
+  base_map_.Rebuild(graph);
   expansion_.clear();
   if (!option_.auto_freeze) {
     return;
@@ -414,6 +415,7 @@ void SessionManager::OnFrozenOnTask(SessionId id) {
     observer->OnSessionFrozen(graph, id);
   }
   coverage_.AddSession(graph, id);
+  base_map_.Rebuild(graph);
   expansion_.erase(id);
   // Edges into the session just frozen are frozen links now: a neighbour may have anchored.
   for (auto& [other, state] : expansion_) {

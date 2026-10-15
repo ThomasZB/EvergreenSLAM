@@ -71,8 +71,21 @@ def submap(s):
     return "[%s,%s]" % (s[0], s[1]) if s else "-"
 
 
-def scan_match(m):
-    """Agreement of the scan with the local map only; a wrong global pose can still score high."""
-    if not m:
-        return "match -"
-    return "match %.2f (avg %.2f)" % (m["score"], m["avg"])
+def localization(loc):
+    loc = loc or {}
+    base = loc.get("base")
+    if not base:
+        base_text = "base -"
+    else:
+        score = base.get("score")
+        base_text = "base %s (cover %d%%)" % (
+            "-" if score is None else "%.2f" % score,
+            round(100 * base["coverage"]),
+        )
+    m = loc.get("scan_match")
+    match_text = "match -" if not m else "match %.2f (avg %.2f)" % (m["score"], m["avg"])
+    return "%s  since base match %s  %s" % (
+        base_text,
+        meters(loc.get("since_base_match_m")),
+        match_text,
+    )

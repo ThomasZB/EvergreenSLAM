@@ -104,9 +104,19 @@ layers; the first output line of any preset shows its layers, so you learn the n
 - `egs here` starting with `aligned to base: no`: the robot has not yet been matched to the saved
   map, so `current` and `closest` are not to be trusted. Wait, drive through an area that is
   already mapped, or `egs init-pose --place places/<p>` / `egs relocalize`, then ask again.
-- `match` is 0.6–0.8 on a healthy run. Below ~0.5 for more than a few seconds (right after start
-  is normal): the scan does not fit the map; drive slowly through a mapped area, or `egs view
-  here`. It only compares the scan with the local map: a high `match` does not mean aligned.
+- The localization line, `base S (cover C%)  since base match Dm  match M (avg A)`:
+  - `base`: how well the latest keyframe scan, at its pose, fits the saved (frozen) map, 0..1.
+    It is consistency, not proof: moved furniture and people lower it. `cover` is how much of the
+    scan could be checked at all; with low `cover` (an area the saved map lacks), `base` says
+    little. `base -` means nothing could be checked.
+  - `since base match`: metres driven since the robot was last matched to the saved map. It grows
+    in new areas and drops back when a match lands; `-` means no match yet.
+  - `match` is 0.6–0.8 on a healthy run. Below ~0.5 for more than a few seconds (right after start
+    is normal): the scan does not fit the map; drive slowly through a mapped area, or `egs view
+    here`. It only compares the scan with the local map: a high `match` does not mean aligned.
+  - A `base` that drops and stays low while `cover` stays high, with `since base match` growing in
+    an area that is mapped, means the pose is probably wrong: `egs view here`, then
+    `egs init-pose --place places/<p>` or `egs relocalize`.
 - `where` precision: `own` (its own place), `offset` (measured from the place above), `inherited`
   (the position of the place or offset above; not observed), `none` (no bound ancestor). Navigate
   to `approach`, never to `xy`.

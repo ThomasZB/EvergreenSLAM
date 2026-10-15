@@ -136,7 +136,7 @@ void HandleHere(ServiceContext& context, httplib::Response& response) {
   writer.OptionalField("keyframe_age_s", reading.robot.keyframe_age_s)
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base);
-  WriteScanMatch(writer, reading.robot.scan_match);
+  WriteLocalization(writer, reading.robot);
   writer.Key("current");
   if (current.has_value()) {
     const Candidate& place = candidates[*current];

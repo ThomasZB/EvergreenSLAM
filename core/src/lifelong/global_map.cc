@@ -54,14 +54,15 @@ Bounds SnapshotWorldBounds(const mapping::GridMapu8& snapshot, const Eigen::Affi
 
 mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resolution,
                                      bool only_finished) {
-  return AssembleGlobalMap(graph, resolution, only_finished, std::nullopt);
+  return AssembleGlobalMap(graph, resolution, only_finished, [](SessionId) { return true; });
 }
 
 mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resolution,
-                                     bool only_finished, std::optional<SessionId> only_session) {
-  const auto skip = [only_finished, only_session](const SubmapId& id, const SubmapRecord& record) {
-    return (only_finished && !record.submap->finished()) ||
-           (only_session.has_value() && SessionOf(id) != *only_session);
+                                     bool only_finished,
+                                     const std::function<bool(SessionId)>& include_session) {
+  const auto skip = [&](const SubmapId& id, const SubmapRecord& record) {
+    return record.submap == nullptr || (only_finished && !record.submap->finished()) ||
+           !include_session(SessionOf(id));
   };
   Bounds bounds;
   double submap_resolution = 0.0;

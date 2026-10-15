@@ -33,18 +33,24 @@ class CommandTest(EgsTestCase):
                 "current places/dock 0.4m",
                 "closest places/dock 0.4m frozen; places/kitchen 5.0m frozen",
                 "robot 0.00,0.00,0.00  keyframe 1s  @solve 100",
-                "match 0.82 (avg 0.80)",
+                "base 0.72 (cover 85%)  since base match 3.2m  match 0.82 (avg 0.80)",
             ],
         )
         self.assertEqual(self.requests("GET", "/root"), [])
 
     def test_here_and_status_without_a_host_frame(self):
-        self.state.scan_match = None
+        self.state.localization = {"since_base_match_m": None, "base": None, "scan_match": None}
         code, out, _ = self.egs("here")
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[-1], "match -")
+        self.assertEqual(out.splitlines()[-1], "base -  since base match -  match -")
         code, out, _ = self.egs("status")
-        self.assertIn("match -", out.splitlines())
+        self.assertIn("base -  since base match -  match -", out.splitlines())
+
+    def test_here_without_a_frozen_base_to_check_against(self):
+        self.state.localization["base"] = {"score": None, "coverage": 0.0}
+        code, out, _ = self.egs("here")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.splitlines()[-1].startswith("base - (cover 0%)  since base match"))
 
     def test_here_flags_unaligned_positions(self):
         self.state.aligned_to_base = False
@@ -67,7 +73,9 @@ class CommandTest(EgsTestCase):
         self.assertEqual(code, 0)
         self.assertIn("frozen base yes  aligned to base yes", out)
         self.assertIn("closures +2", out)
-        self.assertIn("match 0.82 (avg 0.80)", out.splitlines())
+        self.assertIn(
+            "base 0.72 (cover 85%)  since base match 3.2m  match 0.82 (avg 0.80)", out.splitlines()
+        )
         self.assertIn("index.tsv stale: 1 rows, 5 place.yaml files", out)
 
     def test_place_save_new_and_rebind(self):

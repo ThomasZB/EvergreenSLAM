@@ -56,22 +56,15 @@ AgentHost::AgentHost(const AgentHostOption& option, lifelong::PoseGraph& pose_gr
 AgentHost::~AgentHost() { Stop(); }
 
 void AgentHost::Update(common::Time time, const Eigen::Affine2d& local_pose,
-                       const sensor::TimedPointCloud& scan, std::optional<double> match_score) {
+                       const sensor::TimedPointCloud& scan, double match_score) {
   sensor::PointCloud cloud;
   cloud.points().reserve(scan.size());
   for (const sensor::TimedPoint2d& point : scan) {
     cloud.push_back({point.point});
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  agent::HostFrame frame{agent::StampedPose{time, local_pose}, std::move(cloud)};
-  if (match_score.has_value()) {
-    frame.match_score = *match_score;
-    frame.match_score_avg = match_score_average_.Add(time, *match_score);
-  } else if (frame_.has_value()) {
-    frame.match_score = frame_->match_score;
-    frame.match_score_avg = frame_->match_score_avg;
-  }
-  frame_ = std::move(frame);
+  frame_ = agent::HostFrame{agent::StampedPose{time, local_pose}, std::move(cloud), match_score,
+                            match_score_average_.Add(time, match_score)};
 }
 
 void AgentHost::OnBackendStarted() { service_->OnBackendStarted(); }

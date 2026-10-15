@@ -61,10 +61,9 @@ class AgentHost {
   AgentHost(const AgentHost&) = delete;
   AgentHost& operator=(const AgentHost&) = delete;
 
-  // `scan` is in the robot frame at `local_pose`, the builder's pose after that scan.
-  // `match_score` is empty when the builder dropped the scan: the previous score stands.
+  // `scan` is in the robot frame at `local_pose`; a scan the builder dropped must not reach here.
   void Update(common::Time time, const Eigen::Affine2d& local_pose,
-              const sensor::TimedPointCloud& scan, std::optional<double> match_score);
+              const sensor::TimedPointCloud& scan, double match_score);
   // Right after PoseGraph::Start.
   void OnBackendStarted();
   // After a landed drop, before the new frontend's first Update: the old frame's pose is in the

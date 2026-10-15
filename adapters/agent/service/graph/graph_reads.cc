@@ -12,6 +12,7 @@
 #include "service/graph/graph_reads.h"
 
 #include <utility>
+#include <vector>
 
 #include "lifelong/sessions/frozen_links.h"
 #include "utils/transform/transform.h"
@@ -25,7 +26,18 @@ RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentS
     scan->reset();
   }
   const std::optional<lifelong::SessionId> fed = pose_graph.session_manager().fed_session();
-  if (!hooks.current_frame || !fed.has_value() || !pose_graph.graph().HasSession(*fed)) {
+  if (!fed.has_value() || !pose_graph.graph().HasSession(*fed)) {
+    return reading;
+  }
+  const lifelong::PoseGraphData& graph = pose_graph.graph();
+  reading.since_base_match_m = pose_graph.constraint_builder().drift_tracker().SinceBaseMatch(*fed);
+  const std::vector<lifelong::NodeId>& fed_nodes = graph.session(*fed).node_ids;
+  if (!fed_nodes.empty()) {
+    const lifelong::Node& newest = graph.node(fed_nodes.back());
+    reading.base = pose_graph.session_manager().base_map().Evaluate(
+        sensor::TransformPointCloud(newest.constant_data.point_cloud, newest.global_pose));
+  }
+  if (!hooks.current_frame) {
     return reading;
   }
   std::optional<HostFrame> frame = hooks.current_frame();
@@ -33,7 +45,6 @@ RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentS
     return reading;
   }
   const StampedPose& stamped = frame->pose;
-  const lifelong::PoseGraphData& graph = pose_graph.graph();
   const Eigen::Affine2d session_to_global =
       graph.ComputeSessionToGlobal(*fed).value_or(graph.session(*fed).local_to_global);
   reading.pose = Eigen::Affine2d(session_to_global * stamped.local_pose);
@@ -171,13 +182,29 @@ void WriteSubmapId(JsonWriter& writer, std::string_view key, const lifelong::Sub
   writer.Key(key).BeginArray().Int(id.session_id).Int(id.submap_index).EndArray();
 }
 
-void WriteScanMatch(JsonWriter& writer, const std::optional<ScanMatch>& scan_match) {
-  writer.Key("scan_match");
-  if (!scan_match.has_value()) {
+void WriteLocalization(JsonWriter& writer, const RobotReading& reading) {
+  writer.Key("localization")
+      .BeginObject()
+      .OptionalField("since_base_match_m", reading.since_base_match_m)
+      .Key("base");
+  if (reading.base.has_value()) {
+    writer.BeginObject()
+        .OptionalField("score", reading.base->score)
+        .Field("coverage", reading.base->coverage)
+        .EndObject();
+  } else {
     writer.Null();
-    return;
   }
-  writer.BeginObject().Field("score", scan_match->score).Field("avg", scan_match->avg).EndObject();
+  writer.Key("scan_match");
+  if (reading.scan_match.has_value()) {
+    writer.BeginObject()
+        .Field("score", reading.scan_match->score)
+        .Field("avg", reading.scan_match->avg)
+        .EndObject();
+  } else {
+    writer.Null();
+  }
+  writer.EndObject();
 }
 
 }  // namespace evergreenslam::agent

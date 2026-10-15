@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include <map>
+
 #include "common/time.h"
 #include "utils/transform/transform.h"
 
@@ -169,6 +171,135 @@ TEST(DriftTracker, APathlessIdleSessionGetsTheCapUntilAClosureTiesIt) {
   EXPECT_DOUBLE_EQ(tracker.Slack(graph, closing, loaded_submap), 0.0);
   RecordNode(graph, tracker, session, 2.0, submap);
   EXPECT_DOUBLE_EQ(tracker.Slack(graph, loaded_node, submap), kPerMeter * 1.0);
+}
+
+struct BaseScene {
+  PoseGraphData graph;
+  DriftTracker tracker{Option(1)};
+  SessionId base;
+  SubmapId base_submap;
+  NodeId base_node;
+  SessionId fed;
+  SubmapId fed_submap;
+};
+
+void BuildBaseScene(BaseScene& scene) {
+  scene.base = StartSession(scene.graph);
+  scene.base_submap = AddSubmap(scene.graph, scene.base);
+  scene.base_node = RecordNode(scene.graph, scene.tracker, scene.base, 0.0, scene.base_submap);
+  scene.graph.FreezeSession(scene.base);
+  scene.fed = StartSession(scene.graph);
+  scene.fed_submap = AddSubmap(scene.graph, scene.fed);
+}
+
+TEST(DriftTracker, OnlyAClosureToAFrozenSessionSetsTheBaseMatch) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  const SessionId idle = StartSession(graph);
+  const SubmapId idle_submap = AddSubmap(graph, idle);
+  RecordNode(graph, tracker, idle, 0.0, idle_submap);
+
+  NodeId node{};
+  for (double x = 0.0; x <= 4.0; x += 1.0) {
+    node = RecordNode(graph, tracker, scene.fed, x, scene.fed_submap);
+  }
+  const SubmapId later = AddSubmap(graph, scene.fed);
+  const NodeId far = RecordNode(graph, tracker, scene.fed, 5.0, later);
+  tracker.NoteClosure(graph, far, scene.fed_submap);
+  tracker.NoteClosure(graph, node, idle_submap);
+  EXPECT_FALSE(tracker.SinceBaseMatch(scene.fed).has_value());
+
+  tracker.NoteClosure(graph, node, scene.base_submap);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 1.0);
+  RecordNode(graph, tracker, scene.fed, 7.0, later);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 3.0);
+  EXPECT_FALSE(tracker.SinceBaseMatch(scene.base).has_value());
+  EXPECT_FALSE(tracker.SinceBaseMatch(idle).has_value());
+
+  // Frozen node against a fed submap: the submap's path counts.
+  tracker.NoteClosure(graph, scene.base_node, later);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 0.0);
+}
+
+TEST(DriftTracker, ALateBaseMatchNeverMovesTheMarkBack) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  const NodeId early = RecordNode(graph, tracker, scene.fed, 0.0, scene.fed_submap);
+  RecordNode(graph, tracker, scene.fed, 2.0, scene.fed_submap);
+  const NodeId newer = RecordNode(graph, tracker, scene.fed, 4.0, scene.fed_submap);
+  RecordNode(graph, tracker, scene.fed, 6.0, scene.fed_submap);
+
+  tracker.NoteClosure(graph, newer, scene.base_submap);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 2.0);
+  tracker.NoteClosure(graph, early, scene.base_submap);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 2.0);
+}
+
+TEST(DriftTracker, AnUnrecordedNodeMatchesAtTheCurrentPath) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  RecordNode(graph, tracker, scene.fed, 0.0, scene.fed_submap);
+  RecordNode(graph, tracker, scene.fed, 3.0, scene.fed_submap);
+  const NodeId pending = AddNode(graph, scene.fed, 4.0, scene.fed_submap);
+  tracker.NoteClosure(graph, pending, scene.base_submap);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 0.0);
+}
+
+TEST(DriftTracker, TheSuccessorContinuesThePredecessorsOdometerUnderTheNewIds) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  const SessionId old = scene.fed;
+  const SubmapId finished = scene.fed_submap;
+  NodeId matched{};
+  for (double x = 0.0; x <= 3.0; x += 1.0) {
+    matched = RecordNode(graph, tracker, old, x, finished);
+  }
+  const SubmapId open = AddSubmap(graph, old);
+  NodeId newest{};
+  for (double x = 4.0; x <= 6.0; x += 1.0) {
+    newest = RecordNode(graph, tracker, old, x, open);
+  }
+  tracker.NoteClosure(graph, matched, scene.base_submap);
+  ASSERT_DOUBLE_EQ(*tracker.SinceBaseMatch(old), 3.0);
+  const double slack_before = tracker.Slack(graph, newest, finished);
+  const double base_slack_before = tracker.Slack(graph, newest, scene.base_submap);
+
+  const SessionId next = graph.StartNewSession(common::FromUnixSeconds(1785000001.0));
+  const SubmapId adopted = graph.AllocateSubmapId(next);
+  const std::map<NodeId, NodeId> renamed = graph.TransferSubmap(open, adopted);
+  ASSERT_EQ(renamed.size(), 3u);
+  tracker.InheritSession(old, next, {{open, adopted}}, renamed);
+  graph.FreezeSession(old);
+
+  const NodeId renamed_newest = renamed.at(newest);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(next), 3.0);
+  EXPECT_DOUBLE_EQ(tracker.Slack(graph, renamed_newest, scene.base_submap), base_slack_before);
+  EXPECT_DOUBLE_EQ(tracker.Slack(graph, renamed_newest, adopted), 0.0);
+  EXPECT_DOUBLE_EQ(tracker.Slack(graph, renamed_newest, finished), slack_before);
+
+  RecordNode(graph, tracker, next, 8.0, adopted);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(next), 5.0);
+}
+
+TEST(DriftTracker, ASweptSessionLosesItsBaseMatch) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  const NodeId node = RecordNode(graph, tracker, scene.fed, 0.0, scene.fed_submap);
+  tracker.NoteClosure(graph, node, scene.base_submap);
+  ASSERT_TRUE(tracker.SinceBaseMatch(scene.fed).has_value());
+  graph.RemoveSession(scene.fed);
+  tracker.Sweep(graph);
+  EXPECT_FALSE(tracker.SinceBaseMatch(scene.fed).has_value());
 }
 
 }  // namespace

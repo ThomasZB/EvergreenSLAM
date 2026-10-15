@@ -526,6 +526,7 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
 
 std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from, SessionId to) {
   std::map<SubmapId, SubmapId> adoption;
+  std::map<NodeId, NodeId> renamed_nodes;
   // A copy: TransferSubmap edits the session's submap list while we walk it.
   const std::vector<SubmapId> submap_ids = data_.session(from).submap_ids;
   for (const SubmapId& old_id : submap_ids) {
@@ -534,17 +535,19 @@ std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from
       continue;
     }
     const SubmapId new_id = data_.AllocateSubmapId(to);
-    const std::map<NodeId, NodeId> renamed_nodes = data_.TransferSubmap(old_id, new_id);
+    const std::map<NodeId, NodeId> renamed = data_.TransferSubmap(old_id, new_id);
     optimization_.RenameVariable(VariableId::Of(old_id), VariableId::Of(new_id));
-    for (const auto& [old_node, new_node] : renamed_nodes) {
+    for (const auto& [old_node, new_node] : renamed) {
       optimization_.RenameVariable(VariableId::Of(old_node), VariableId::Of(new_node));
       if (last_ingested_node_ == old_node) {
         last_ingested_node_ = new_node;
       }
     }
-    anchor_store_.OnNodesTransferred(renamed_nodes);
+    anchor_store_.OnNodesTransferred(renamed);
+    renamed_nodes.insert(renamed.begin(), renamed.end());
     adoption.emplace(old_id, new_id);
   }
+  constraint_builder_.mutable_drift_tracker().InheritSession(from, to, adoption, renamed_nodes);
   return adoption;
 }
 

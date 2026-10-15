@@ -15,6 +15,7 @@
 #include <cmath>
 #include <iterator>
 #include <set>
+#include <utility>
 
 namespace evergreenslam::lifelong {
 namespace {
@@ -23,6 +24,23 @@ template <typename Key>
 std::optional<double> FindPath(const std::map<Key, double>& paths, const Key& key) {
   const auto it = paths.find(key);
   return it == paths.end() ? std::nullopt : std::optional<double>(it->second);
+}
+
+template <typename Map, typename Key>
+void Rekey(Map& map, const Key& from, const Key& to) {
+  auto entry = map.extract(from);
+  if (!entry.empty()) {
+    entry.key() = to;
+    map.insert(std::move(entry));
+  }
+}
+
+template <typename Map, typename Key>
+void CopyEntry(Map& map, const Key& from, const Key& to) {
+  const auto it = map.find(from);
+  if (it != map.end()) {
+    map.insert_or_assign(to, it->second);
+  }
 }
 
 template <typename Map, typename Alive>
@@ -82,6 +100,36 @@ void DriftTracker::NoteClosure(const PoseGraphData& graph, const NodeId& node_id
   }
   NoteSessionClosure(graph, SessionOf(node_id), PathAtNode(node_id).value_or(0.0));
   NoteSessionClosure(graph, SessionOf(submap_id), PathAtSubmap(submap_id).value_or(0.0));
+  const bool node_frozen = graph.session(SessionOf(node_id)).frozen();
+  const bool submap_frozen = graph.session(SessionOf(submap_id)).frozen();
+  if (node_frozen && !submap_frozen) {
+    NoteBaseMatch(SessionOf(submap_id), PathAtSubmap(submap_id));
+  } else if (submap_frozen && !node_frozen) {
+    NoteBaseMatch(SessionOf(node_id), PathAtNode(node_id));
+  }
+}
+
+void DriftTracker::InheritSession(SessionId from, SessionId to,
+                                  const std::map<SubmapId, SubmapId>& submaps,
+                                  const std::map<NodeId, NodeId>& nodes) {
+  for (const auto& [old_id, new_id] : nodes) {
+    Rekey(path_at_node_, old_id, new_id);
+  }
+  for (const auto& [old_id, new_id] : submaps) {
+    Rekey(path_at_submap_, old_id, new_id);
+  }
+  CopyEntry(path_length_, from, to);
+  CopyEntry(last_node_position_, from, to);
+  CopyEntry(path_at_last_closure_, from, to);
+  CopyEntry(path_at_last_base_match_, from, to);
+}
+
+std::optional<double> DriftTracker::SinceBaseMatch(SessionId session) const {
+  const std::optional<double> mark = FindPath(path_at_last_base_match_, session);
+  if (!mark.has_value()) {
+    return std::nullopt;
+  }
+  return std::max(0.0, FindPath(path_length_, session).value_or(0.0) - *mark);
 }
 
 void DriftTracker::Sweep(const PoseGraphData& graph) {
@@ -91,6 +139,7 @@ void DriftTracker::Sweep(const PoseGraphData& graph) {
   SweepMap(path_length_, has_session);
   SweepMap(last_node_position_, has_session);
   SweepMap(path_at_last_closure_, has_session);
+  SweepMap(path_at_last_base_match_, has_session);
 }
 
 bool DriftTracker::IsValidClosure(const PoseGraphData& graph, const NodeId& node_id,
@@ -132,6 +181,15 @@ void DriftTracker::NoteSessionClosure(const PoseGraphData& graph, SessionId sess
   }
   double& recorded = path_at_last_closure_[session];
   recorded = std::max(recorded, path);
+}
+
+// A relocalization match can land before its node is recorded; that node is the newest.
+void DriftTracker::NoteBaseMatch(SessionId session, std::optional<double> path) {
+  const double at = path.has_value() ? *path : FindPath(path_length_, session).value_or(0.0);
+  const auto [it, inserted] = path_at_last_base_match_.emplace(session, at);
+  if (!inserted) {
+    it->second = std::max(it->second, at);
+  }
 }
 
 std::optional<double> DriftTracker::PathAtNode(const NodeId& node_id) const {

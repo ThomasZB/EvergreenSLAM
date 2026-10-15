@@ -58,7 +58,7 @@ def cmd_here(ctx, args):
         "robot %s  keyframe %s  %s"
         % (fmt.pose(robot), fmt.age_s(j.get("keyframe_age_s")), solve(j))
     )
-    ctx.print(fmt.scan_match(j.get("scan_match")))
+    ctx.print(fmt.localization(j.get("localization")))
     ctx.result(dict(j, robot=jsonout.pose(robot)))
     return EXIT_OK
 
@@ -74,7 +74,7 @@ def cmd_status(ctx, args):
         % (j.get("boot_count"), j.get("fed_session"), j.get("phase")),
         "frozen base %s  aligned to base %s"
         % (yn(j.get("has_frozen_base")), yn(j.get("aligned_to_base"))),
-        fmt.scan_match(j.get("scan_match")),
+        fmt.localization(j.get("localization")),
         "closures +%s since last status" % j.get("closures_delta"),
         "anchors %s (orphans %s)  place.yaml files %s"
         % (j.get("num_anchors"), j.get("num_orphans"), j.get("num_place_files")),

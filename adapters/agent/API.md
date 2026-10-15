@@ -69,7 +69,7 @@ struct StampedPose {
   Eigen::Affine2d local_pose = Eigen::Affine2d::Identity();  // frontend local frame
 };
 struct HostFrame {
-  StampedPose pose;          // builder_->local_pose()
+  StampedPose pose;          // MatchingResult::time, ::local_pose
   sensor::PointCloud scan;   // robot frame at that pose
   double match_score = 0.0;      // MatchingResult::match_score of that scan
   double match_score_avg = 0.0;  // MatchScoreAverage over the host's scans
@@ -127,8 +127,9 @@ void Stop();              // stops the server and joins its threads
   `PoseGraph` call (it updates by copy under the lock). Empty hook or nullopt → the fields are `null`.
   Pose and scan come from one call: two calls could straddle a scan-thread update and draw scan
   k+1 at pose k.
-- **Scan-match score**: the host sets `match_score` from each `AddScan` result (a scan the builder
-  drops keeps the previous frame's score) and `match_score_avg` from `MatchScoreAverage`
+- **Frame update**: pose, scan and `match_score` come from one non-null `AddScan` result; a scan the
+  builder drops (nullptr) leaves the previous frame untouched, so a new scan is never paired with an
+  old pose. `match_score_avg` comes from `MatchScoreAverage`
   (`service/graph/match_score_average.h`), sampled per scan under its own mutex, not per request:
   `avg += (1 - exp(-dt / 2 s)) * (score - avg)`, seeded by the first scan.
 - Robot pose = `ComputeSessionToGlobal(fed)` (nullopt → `graph.session(fed).local_to_global`, as
@@ -143,8 +144,8 @@ mutates.
 `map_root` and `map` are `null` when the host named no map root.
 
 **GET /status** — task. `→ {ok, at_num_solves, boot_count, fed_session, map (name|null), has_frozen_base,
-aligned_to_base, phase, scan_match, closures_delta, num_anchors, num_orphans, num_place_files,
-duplicate_anchor_paths: [path]}`. `scan_match` as in `/here`. `has_frozen_base` = any `graph.sessions()` entry frozen;
+aligned_to_base, phase, localization, closures_delta, num_anchors, num_orphans, num_place_files,
+duplicate_anchor_paths: [path]}`. `localization` as in `/here`. `has_frozen_base` = any `graph.sessions()` entry frozen;
 `aligned_to_base` = `HasFrozenLink(graph, fed)`; `phase` from `expansion().find(fed)`, absent →
 `BOOTSTRAP`; `closures_delta` = `constraint_builder().num_constraints_added()` since the previous
 `/status`. Two `place.yaml` naming one anchor (a `cp -r`) are listed and ignored by `here`.
@@ -152,19 +153,43 @@ duplicate_anchor_paths: [path]}`. `scan_match` as in `/here`. `has_frozen_base` 
 **GET /here** — task. The service scans `memory/places/**/place.yaml` (skipping `skills/` and
 symlinks), then one task reads `current_frame` and `ResolveAll`.
 `→ {ok, at_num_solves, robot: pose|null, keyframe_age_s|null, has_frozen_base, aligned_to_base,
-scan_match: {score, avg}|null, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
+localization: {since_base_match_m|null, base: {score|null, coverage}|null, scan_match: {score,
+avg}|null}, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
 dist_m, state}]}` — `closest` is the
 top 2 non-orphan referenced anchors by straight-line distance. `current` = nearest within 2.5 m;
 once current, a place stays current until 3.75 m. `keyframe_age_s` = robot stamp − newest node time.
 `has_frozen_base` / `aligned_to_base` as in `/status`, read in the same task: with a frozen base but
 no link to it, the robot pose is in the fed session's own frame and `current` / `closest` compare it
-with frozen anchors in another frame (`egs here` says so on its first line). `scan_match` comes from
-the same `current_frame` call as `robot` (`null` with it): `score` is the frontend's match score of
-the newest scan, the mean occupancy probability of its points in the active local submap (0..1),
-and `avg` its ~2 s average. It measures agreement with the **local** map only, so it can stay high
-while the global pose is wrong; `aligned_to_base` remains the global signal. Measured on the
-`museum_b2` replay (333 `egs here` reads): `score` 0.58–0.79 (5th–95th percentile, median 0.72);
-`avg` starts low for a few seconds, since the first scans have no map to match (score 0).
+with frozen anchors in another frame (`egs here` says so on its first line).
+
+`localization` (replaces the former top-level `scan_match`) carries three signals,
+read in the same task as `robot`:
+- `scan_match` comes from the same `current_frame` call as `robot` (`null` with it): `score` is the
+  frontend's match score of the newest scan, the mean occupancy probability of its points in the
+  active local submap (0..1), and `avg` its ~2 s average. It measures agreement with the **local**
+  map only, so it can stay high while the global pose is wrong. Measured on the `museum_b2` replay
+  (333 `egs here` reads): `score` 0.58–0.79 (5th–95th percentile, median 0.72); `avg` starts low for
+  a few seconds, since the first scans have no map to match (score 0).
+- `base` (`null` while the fed session has no node): the fed session's newest node — its
+  `constant_data.point_cloud` (the adaptively filtered cloud loop closure matches) at its
+  `global_pose` — looked up in one grid of every frozen session's finished submaps
+  (`SessionManager::base_map()`, a `FrozenBaseMap` rebuilt in full at load and after each freeze).
+  It does not use the host frame: it lags the robot by up to one keyframe (`keyframe_age_s`).
+  `coverage` = fraction of the node's points on known cells; `score` = mean occupancy probability
+  over those points only (0..1), `null` when no point lands on a known cell (no frozen base, or the
+  node outside the frozen map). It is consistency with the frozen base, not proof the pose is
+  right: furniture moved since the freeze and people in view lower it, and a pose that slides along
+  a corridor can keep it high. `coverage` says how much of the cloud could be checked at all; a low
+  `coverage` makes `score` say little. No time average.
+- `since_base_match_m`: keyframe-polyline distance the fed session has driven since its last
+  accepted loop closure to a frozen session (`DriftTracker::SinceBaseMatch`; closures the
+  constraint builder added, not trim-recovered edges or priors; a match arriving late never moves
+  it back). `null` before the first such closure: no frozen base, a fresh boot, a fed session just
+  dropped. A relocalization request by itself resets nothing. The freeze rotation hands it on: the
+  successor continues the predecessor's distance.
+
+`aligned_to_base` remains the structural global signal (a frozen link exists at all); `base` and
+`since_base_match_m` say how well and how recently the current pose agrees with that base.
 
 **POST /place/save** — task, mutating. `{path, scan: true, offset?}`. `offset=dx,dy,dtheta`
 (m, rad; robot frame, x forward, y left, as `egs observe --offset`) binds the place to that pose

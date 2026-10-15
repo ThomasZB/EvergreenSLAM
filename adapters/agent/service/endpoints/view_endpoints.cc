@@ -230,7 +230,8 @@ void HandleView(ServiceContext& context, const httplib::Request& request,
       return result;
     }
     if (has("session")) {
-      input.grid = lifelong::AssembleGlobalMap(graph, 0.0, /*only_finished=*/true, session);
+      input.grid = lifelong::AssembleGlobalMap(graph, 0.0, /*only_finished=*/true,
+                                               [session](SessionId id) { return id == session; });
     } else if (has("map")) {
       input.grid = lifelong::AssembleGlobalMap(graph, 0.0, /*only_finished=*/true);
     }

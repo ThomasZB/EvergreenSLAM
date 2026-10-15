@@ -136,13 +136,13 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
     int num_anchors = 0;
     int num_orphans = 0;
     int num_solves = 0;
-    std::optional<ScanMatch> scan_match;
+    RobotReading robot;
   };
   PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
     Reading result;
     const lifelong::PoseGraphData& graph = pose_graph.graph();
-    result.scan_match = ReadRobotOnTask(pose_graph, context.hooks).scan_match;
+    result.robot = ReadRobotOnTask(pose_graph, context.hooks);
     const SessionId fed = *pose_graph.session_manager().fed_session();
     result.boot_count = pose_graph.map_manager()->boot_count();
     result.fed = fed.session_index;
@@ -168,7 +168,7 @@ void HandleStatus(ServiceContext& context, httplib::Response& response) {
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base)
       .Field("phase", reading.phase);
-  WriteScanMatch(writer, reading.scan_match);
+  WriteLocalization(writer, reading.robot);
   writer.Field("closures_delta", closures_delta)
       .Field("num_anchors", reading.num_anchors)
       .Field("num_orphans", reading.num_orphans)

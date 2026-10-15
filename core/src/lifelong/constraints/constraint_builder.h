@@ -66,6 +66,8 @@ class ConstraintBuilder {
   int num_precomputation_builds() const { return num_precomputation_builds_.load(); }
   // Backend task state; only meaningful to a caller that has drained the queue.
   int num_cached_precomputations() const { return static_cast<int>(precomputation_cache_.size()); }
+  const DriftTracker& drift_tracker() const { return drift_; }
+  DriftTracker& mutable_drift_tracker() { return drift_; }
 
  private:
   enum class PriorSource { GRAPH, EXTERNAL, NONE };

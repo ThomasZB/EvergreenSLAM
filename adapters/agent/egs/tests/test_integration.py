@@ -113,7 +113,9 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("resolved_via places/dock", shelf)
         here = self.ok("here")
         self.assertIn("current places/dock", here)
-        self.assertIn("match 0.80 (avg 0.80)", here.splitlines())
+        self.assertIn(
+            "base - (cover 0%)  since base match -  match 0.80 (avg 0.80)", here.splitlines()
+        )
         ahead = self.ok("place", "save", "places/doorway", "--offset", "1", "0", "0")
         self.assertIn("offset 1.00,0.00,0.00", ahead)
         # Both saved from the same keyframe, so they sit exactly the offset apart.

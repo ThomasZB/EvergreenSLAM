@@ -1,7 +1,8 @@
 /**
  * @file scan_match_and_offset_e2e_test.cc
  * @author hang chen (chen@hang.plus)
- * @brief The scan-match score in /here and /status, and /place/save at an offset, over real HTTP.
+ * @brief The localization signals in /here and /status, and /place/save at an offset, over real
+ * HTTP.
  * @version 0.1
  * @date 2026-09-29
  *
@@ -63,35 +64,107 @@ std::string OffsetTo(int step, const Eigen::Vector2d& target) {
   return std::to_string(local.x()) + "," + std::to_string(local.y()) + ",0";
 }
 
-TEST(ScanMatchE2eTest, HereAndStatusReportTheHostScoreAndItsAverage) {
+size_t CountKey(const std::string& body, const std::string& key) {
+  size_t count = 0;
+  for (size_t at = body.find("\"" + key + "\":"); at != std::string::npos;
+       at = body.find("\"" + key + "\":", at + 1)) {
+    ++count;
+  }
+  return count;
+}
+
+void ExpectLocalizationOnly(const Reply& reply) {
+  ASSERT_EQ(JsonRaw(reply.body, "ok"), "true") << reply.body;
+  EXPECT_EQ(CountKey(reply.body, "scan_match"), 1u) << reply.body;
+  EXPECT_TRUE(testing::FindValue(reply.body, "localization.scan_match").has_value()) << reply.body;
+}
+
+TEST(LocalizationE2eTest, HereAndStatusReportTheHostScoreAndItsAverage) {
   Rig rig;
   ASSERT_GT(rig.service.port(), 0);
   TestClient client(rig.service.port());
   rig.backend.Start(TestTime(0));
   rig.service.OnBackendStarted();
 
-  EXPECT_EQ(JsonRaw(client.Get("/here").body, "scan_match"), "null");
-  EXPECT_EQ(JsonRaw(client.Get("/status").body, "scan_match"), "null");
+  for (const std::string& path : {"/here", "/status"}) {
+    const Reply reply = client.Get(path);
+    ExpectLocalizationOnly(reply);
+    EXPECT_EQ(JsonRaw(reply.body, "localization.scan_match"), "null");
+    EXPECT_EQ(JsonRaw(reply.body, "localization.base"), "null");
+    EXPECT_EQ(JsonRaw(reply.body, "localization.since_base_match_m"), "null");
+  }
 
   const int last_step = 5;
   rig.FeedTo(last_step, 0.75);
   const Reply here = client.Get("/here");
-  ASSERT_EQ(JsonRaw(here.body, "ok"), "true") << here.body;
-  EXPECT_DOUBLE_EQ(JsonNumber(here.body, "scan_match.score"), 0.75);
-  EXPECT_DOUBLE_EQ(JsonNumber(here.body, "scan_match.avg"), 0.75);
+  ExpectLocalizationOnly(here);
+  EXPECT_DOUBLE_EQ(JsonNumber(here.body, "localization.scan_match.score"), 0.75);
+  EXPECT_DOUBLE_EQ(JsonNumber(here.body, "localization.scan_match.avg"), 0.75);
+  // No frozen session: nothing to check the scan against, and no match to it.
+  EXPECT_EQ(JsonRaw(here.body, "localization.base.score"), "null");
+  EXPECT_DOUBLE_EQ(JsonNumber(here.body, "localization.base.coverage"), 0.0);
+  EXPECT_EQ(JsonRaw(here.body, "localization.since_base_match_m"), "null");
 
   // One bad scan moves the score at once and the 2 s average by 1 - exp(-0.1 / 2) of the gap.
   rig.host.Update(TestTime(last_step + 1), rig.odometry[last_step + 1],
                   SimulateScan(LoopRoom(), LoopGroundTruth(last_step + 1)), 0.25);
   const double expected_avg = 0.75 - (1.0 - std::exp(-0.1 / 2.0)) * 0.5;
   const Reply status = client.Get("/status");
-  ASSERT_EQ(JsonRaw(status.body, "ok"), "true") << status.body;
-  EXPECT_DOUBLE_EQ(JsonNumber(status.body, "scan_match.score"), 0.25);
-  EXPECT_NEAR(JsonNumber(status.body, "scan_match.avg"), expected_avg, 1e-9);
-  EXPECT_NEAR(JsonNumber(client.Get("/here").body, "scan_match.avg"), expected_avg, 1e-9);
+  ExpectLocalizationOnly(status);
+  EXPECT_DOUBLE_EQ(JsonNumber(status.body, "localization.scan_match.score"), 0.25);
+  EXPECT_NEAR(JsonNumber(status.body, "localization.scan_match.avg"), expected_avg, 1e-9);
+  EXPECT_NEAR(JsonNumber(client.Get("/here").body, "localization.scan_match.avg"), expected_avg,
+              1e-9);
 
   rig.service.Stop();
   rig.backend.Finish();
+}
+
+TEST(LocalizationE2eTest, TheBaseScoreAndTheMatchDistanceAppearOnceMatchedToAFrozenBase) {
+  const std::string map_dir = lifelong::testing::MakeTempDir("evergreenslam_localization_base");
+  const std::vector<Eigen::Affine2d> odometry =
+      lifelong::testing::GroundTruthOdometry(3 * kNodesPerLap);
+  PoseGraph backend{lifelong::testing::AnchorTestOption(), map_dir};
+  SimulatedHost host;
+  AgentService service{backend, host.Hooks(), AgentServiceOption{}};
+  Frontend frontend{backend, odometry};
+  ASSERT_GT(service.port(), 0);
+  TestClient client(service.port());
+  backend.Start(TestTime(0));
+  service.OnBackendStarted();
+
+  const auto feed = [&](int step) {
+    frontend.Feed(step);
+    backend.WaitUntilQuiescent();
+    host.Update(TestTime(step), odometry[step], SimulateScan(LoopRoom(), LoopGroundTruth(step)),
+                0.8);
+  };
+  int step = lifelong::testing::FreezeABase(backend, frontend, 2 * kNodesPerLap);
+  const lifelong::DriftTracker& tracker = backend.constraint_builder().drift_tracker();
+  const auto matched = [&] {
+    return tracker.SinceBaseMatch(*backend.session_manager().fed_session()).has_value();
+  };
+  for (; step < 3 * kNodesPerLap && !matched(); ++step) {
+    feed(step);
+  }
+  ASSERT_TRUE(matched());
+  feed(step);
+
+  const Reply here = client.Get("/here");
+  ExpectLocalizationOnly(here);
+  const double score = JsonNumber(here.body, "localization.base.score");
+  EXPECT_GT(score, 0.7) << here.body;
+  EXPECT_GT(JsonNumber(here.body, "localization.base.coverage"), 0.9) << here.body;
+  const double since = JsonNumber(here.body, "localization.since_base_match_m");
+  EXPECT_GE(since, 0.0);
+  EXPECT_LT(since, 5.0);
+  const Reply status = client.Get("/status");
+  ExpectLocalizationOnly(status);
+  EXPECT_DOUBLE_EQ(JsonNumber(status.body, "localization.base.score"), score);
+  EXPECT_DOUBLE_EQ(JsonNumber(status.body, "localization.since_base_match_m"), since);
+
+  service.Stop();
+  backend.Finish();
 }
 
 TEST(PlaceOffsetE2eTest, SavesAtAnOffsetAndRefusesFarOrNonFreeTargets) {

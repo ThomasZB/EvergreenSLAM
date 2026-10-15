@@ -27,6 +27,7 @@
 #include "lifelong/backend_handles.h"
 #include "lifelong/pose_graph_data.h"
 #include "lifelong/sessions/freeze_judge.h"
+#include "lifelong/sessions/frozen_base_map.h"
 #include "lifelong/sessions/frozen_coverage.h"
 
 namespace evergreenslam::lifelong {
@@ -122,6 +123,7 @@ class SessionManager {
   int num_judgements() const { return num_judgements_; }
   const FreezeJudge& freeze_judge() const { return judge_; }
   const FrozenCoverage& coverage() const { return coverage_; }
+  const FrozenBaseMap& base_map() const { return base_map_; }
   const std::map<SessionId, ExpansionState>& expansion() const { return expansion_; }
   // Backend task only. A freeze sequence is queued and assumes its session outlives it.
   bool freezing() const { return freezing_; }
@@ -139,6 +141,7 @@ class SessionManager {
   FreezeJudge judge_;
   CovarianceEvaluator covariance_evaluator_;
   FrozenCoverage coverage_;
+  FrozenBaseMap base_map_;
   std::vector<std::shared_ptr<SessionObserver>> observers_;
 
   std::optional<SessionId> fed_session_;

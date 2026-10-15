@@ -360,10 +360,9 @@ class EvergreenSlamNode : public rclcpp::Node {
       backend_->AddInsertionResult(*matching->insertion_result);
     }
 #ifdef EVERGREENSLAM_WITH_AGENT
-    if (agent_host_ != nullptr) {
-      agent_host_->Update(
-          timed_scan.time, builder_->local_pose(), timed_scan.point_cloud,
-          matching != nullptr ? std::optional<double>(matching->match_score) : std::nullopt);
+    if (agent_host_ != nullptr && matching != nullptr) {
+      agent_host_->Update(matching->time, matching->local_pose, timed_scan.point_cloud,
+                          matching->match_score);
     }
 #endif
     Publish(ToRosTime(timed_scan.time), builder_->local_pose(),

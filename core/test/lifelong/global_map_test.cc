@@ -217,18 +217,38 @@ TEST(GlobalMap, SessionFilterAssemblesThatSessionAlone) {
   AddSubmap(graph, second, MakeSubmap(graph.AllocateSubmapId(second), pose, {{kProbe, 60, 0}}),
             far);
 
-  const mapping::GridMapu8 all = AssembleGlobalMap(graph, 0.0, true, std::nullopt);
+  const mapping::GridMapu8 all = AssembleGlobalMap(graph, 0.0, true);
   EXPECT_TRUE(mapping::IsKnownValue(all.GetValueAtPoint(kProbe)));
   EXPECT_TRUE(mapping::IsKnownValue(all.GetValueAtPoint(far * kProbe)));
 
-  const mapping::GridMapu8 only_second = AssembleGlobalMap(graph, 0.0, true, second);
+  const mapping::GridMapu8 only_second =
+      AssembleGlobalMap(graph, 0.0, true, [&](SessionId id) { return id == second; });
   EXPECT_TRUE(mapping::IsKnownValue(only_second.GetValueAtPoint(far * kProbe)));
   EXPECT_FALSE(mapping::IsKnownValue(only_second.GetValueAtPoint(kProbe)));
   EXPECT_LT(only_second.width(), all.width()) << "bounds come from the session's submaps alone";
 
-  const mapping::GridMapu8 absent = AssembleGlobalMap(graph, 0.0, true, SessionId{7});
+  const mapping::GridMapu8 absent =
+      AssembleGlobalMap(graph, 0.0, true, [](SessionId id) { return id == SessionId{7}; });
   EXPECT_EQ(absent.width(), 0);
   EXPECT_EQ(absent.height(), 0);
+}
+
+TEST(GlobalMap, ASessionPredicateCanKeepTheFrozenLayerAlone) {
+  PoseGraphData graph;
+  const SessionId frozen = graph.StartNewSession(TestTime(0));
+  const SessionId fed = graph.StartNewSession(TestTime(1));
+  const Eigen::Affine2d pose = transform::FromXYTheta(0.0, 0.0, 0.0);
+  const Eigen::Affine2d far = transform::FromXYTheta(20.0, 0.0, 0.0);
+  AddSubmap(graph, frozen, MakeSubmap(graph.AllocateSubmapId(frozen), pose, {{kProbe, 60, 0}}),
+            pose);
+  AddSubmap(graph, fed, MakeSubmap(graph.AllocateSubmapId(fed), pose, {{kProbe, 60, 0}}), far);
+  graph.FreezeSession(frozen);
+
+  const mapping::GridMapu8 base = AssembleGlobalMap(
+      graph, 0.0, true, [&graph](SessionId id) { return graph.session(id).frozen(); });
+  EXPECT_GT(ProbabilityAt(base, kProbe), 0.8);
+  EXPECT_FALSE(mapping::IsKnownValue(base.GetValueAtPoint(far * kProbe)));
+  EXPECT_LT(base.width(), AssembleGlobalMap(graph).width());
 }
 
 TEST(GlobalMap, EmptyGraphIsZeroSized) {
