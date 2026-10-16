@@ -26,20 +26,27 @@ match 0.74 (avg 0.72)
   mapping.</sub>
 </p>
 
-Tool-using agents can write code and operate computers; their use on physical robots is
-less mature. Whatever model is used, such an agent needs a spatial memory. It must be able to remember a place from a command, a sentence or a
-photo, send the robot back there later, and keep that memory across context compaction, map
-re-optimization and process restarts. EvergreenSLAM is a 2D lidar SLAM designed around this
-requirement. It runs as a background process on the robot with no separate mapping and
-localization modes: it always maps into the current *session* while localizing against sessions it
-has already *frozen*, and a session freezes itself once it has added enough new area and its poses
-are well constrained. Places are *anchors* bound to submaps of the pose graph rather than to
-coordinates, exposed to the agent as a directory tree plus a small CLI (`egs`). The scan matching
-and the submaps follow Cartographer. The lifelong layer above them is the project's own: sessions
-and freezing, trimming with marginalization and Chow-Liu sparsification, and frozen poses held
-constant in the optimizer, so that memory and CPU are bounded by the mapped area rather than by
-uptime. The system has been run on a 215 CNY lidar and an RK3588 board, and on the public 2D
-datasets.
+Tool-using agents can write code and operate computers; their use on physical robots is less
+mature. Whatever model is used, such an agent needs a spatial memory: it must be able to remember a
+place from a command, a sentence or a photo, send the robot back there later, and keep that memory
+across context compaction, map re-optimization and process restarts. EvergreenSLAM is a 2D lidar
+SLAM designed around this requirement.
+
+- **One mode, no operator.** It runs as a background process with no separate mapping and
+  localization modes: it always maps into the current *session* while localizing against sessions
+  it has already *frozen*, and a session freezes itself once it has added enough new area and its
+  poses are well constrained.
+- **Bounded by area, not uptime.** Trimming marginalizes what it removes and sparsifies the result
+  to a Chow-Liu tree, and frozen poses are held constant in the optimizer, so that memory and CPU
+  are bounded by the mapped area rather than by uptime.
+- **Places that keep resolving.** A place is an *anchor* bound to a submap of the pose graph rather
+  than to coordinates, exposed to the agent as a directory tree plus a small CLI (`egs`, also
+  served as MCP tools).
+- **One cheap sensor.** A 2D lidar and a CPU; no IMU, wheel odometry, camera or GPU. It has been run
+  on a 215 CNY lidar and an RK3588 board, and on the public 2D datasets.
+
+The scan matching and the submaps follow Cartographer; the lifelong layer above them is the
+project's own. How it relates to slam_toolbox is under Related work.
 
 <p align="center">
   <img src="docs/images/car.jpg" width="640" alt="The test robot: a 2D lidar on an Orange Pi, mecanum wheels, a power bank">
@@ -139,7 +146,7 @@ Ceres refinement, submaps as probability grids, a pose graph with branch-and-bou
 Ceres optimization, then session-aware trimming, freezing and persistence with atomic commits.
 `core/` has no ROS dependency; ROS 2 is one adapter.
 
-## A field run
+## Field test
 
 On 2026-09-29 Claude Code drove the platform above through a flat. The agent had a small
 wrapper tool (`mochibot`) around `egs` and a Nav2 navigator, plus a skill for that flat
@@ -330,6 +337,20 @@ tools/           bag converters, the TSan gate and the demo
   rviz2 submap display is ported from `cartographer_rviz`. See `NOTICE`.
   `core/src/utils/scan_matching` is the closest to the original. Cartographer has no sessions,
   freezing or marginalizing trimmer; those are this project's.
+- [slam_toolbox](https://github.com/SteveMacenski/slam_toolbox) (Macenski and Jambrecic, 2021),
+  the 2D lidar SLAM supported by Nav2. The user picks its mode by node and configuration: mapping
+  (synchronous or asynchronous), continued mapping of a serialized pose graph, and localization
+  against one with a rolling window of recent scans; an experimental node switches between
+  mapping and localization through a service call. Nodes are removed in two places, both through
+  `Mapper::RemoveNodeFromGraph`, which deletes a node and its edges without marginalizing them:
+  localization drops its expired scans, and a lifelong node in `src/experimental/`, described by
+  its README as highly experimental, drops nearby map nodes that score low against each new scan.
+  It requires an odom-to-base transform in TF: scans without one are dropped, and its
+  minimum-travel gate is measured in that frame. EvergreenSLAM has no mapping/localization split,
+  decides by itself when a session freezes, marginalizes what it trims, and needs no odometry
+  source. slam_toolbox has a scan matcher (Karto) that its README describes as used in companies
+  across the world, Nav2 integration, multi-robot mapping, map merging and interactive graph
+  editing in rviz. Checked against its `ros2` branch at commit 6efdc33 (2026-10-15).
 - The trimmer's marginalization and Chow-Liu sparsification follow the pose-graph compression
   literature, in the spirit of Kretzschmar and Stachniss (2012).
 - [Claude Code](https://claude.com/claude-code). Most of the code was written with Claude, under
