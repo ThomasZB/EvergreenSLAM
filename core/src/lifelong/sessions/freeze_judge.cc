@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <set>
 
 #include "lifelong/sessions/frozen_links.h"
 #include "utils/config/yaml_utils.h"
@@ -98,10 +99,11 @@ FreezeVerdict FreezeJudge::Judge(const PoseGraphData& graph, Optimization& optim
   }
 
   const SessionData& session = graph.session(id);
-  std::vector<SubmapId> finished;
+  // Read once: finished() flips on the frontend thread, and the loops below must agree on it.
+  std::set<SubmapId> finished;
   for (const SubmapId& submap_id : session.submap_ids) {
     if (!IsUnfinished(graph, submap_id)) {
-      finished.push_back(submap_id);
+      finished.insert(submap_id);
     }
   }
   if (finished.empty()) {
@@ -140,7 +142,7 @@ FreezeVerdict FreezeJudge::Judge(const PoseGraphData& graph, Optimization& optim
   for (const SubmapId& submap_id : session.submap_ids) {
     SubmapUncertainty uncertainty;
     uncertainty.id = submap_id;
-    if (IsUnfinished(graph, submap_id)) {
+    if (finished.count(submap_id) == 0) {
       uncertainty.unfinished = true;
       verdict.submaps.push_back(uncertainty);
       continue;
