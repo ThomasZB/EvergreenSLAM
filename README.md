@@ -18,6 +18,14 @@ robot 1.90,-0.50,0.07  keyframe 1s  @solve 418
 match 0.74 (avg 0.72)
 ```
 
+<p align="center">
+  <img src="docs/images/demo.gif" width="960" alt="Replay of the revo_lds bag in the browser debug view: the map grows, sessions 0 and 1 freeze, session 2 starts">
+  <br>
+  <sub><code>pixi run -e ros demo</code>: Cartographer's public revo_lds bag (a Neato Revo LDS, 16 min of
+  driving) replayed at 8x in the browser debug view. Sessions #0 and #1 freeze in turn and #2 starts
+  mapping.</sub>
+</p>
+
 Tool-using agents can write code and operate computers; their use on physical robots is
 less mature. Whatever model is used, such an agent needs a spatial memory. It must be able to remember a place from a command, a sentence or a
 photo, send the robot back there later, and keep that memory across context compaction, map
@@ -230,6 +238,7 @@ pixi run agent-test                     # agent service and egs
 pixi run -e ros ros-test                # ROS 2 adapter
 SCAN_TOPIC=/base_scan BASE_FRAME=base_footprint pixi run -e ros bag bags/wg_cafe   # replay, browser view at http://localhost:8642
 pixi run -e ros live                    # live node: /scan in, map, tf and the agent service out
+pixi run -e ros demo                    # fetch a 3 MB public bag, replay it with the browser view and egs
 ```
 
 `live` expects a lidar driver publishing `sensor_msgs/LaserScan` on `/scan` (`SCAN_TOPIC` changes
@@ -310,7 +319,7 @@ adapters/ros2/   three ament packages: msgs, the node and bag tool, the rviz2 pl
 adapters/agent/  the agent service (HTTP), the egs CLI and the agent skill
 apps/webui/      the browser debug view
 configs/         yaml configs; configs/reference.yaml lists every key
-tools/           bag converters and the TSan gate
+tools/           bag converters, the TSan gate and the demo
 ```
 
 ## Related work and acknowledgements
@@ -329,7 +338,8 @@ tools/           bag converters and the TSan gate
   [stb_image_write](https://github.com/nothings/stb) (public domain), vendored in `third_party/`.
 - [RoboStack](https://robostack.github.io/), which puts ROS 2 inside pixi and makes the macOS
   workflow possible.
-- The Freiburg and Willow Garage datasets, used for replay and scoring.
+- The Freiburg and Willow Garage datasets, used for replay and scoring, and Cartographer's
+  revo_lds bag, used for the demo.
 
 ## License
 

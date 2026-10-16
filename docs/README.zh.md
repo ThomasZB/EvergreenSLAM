@@ -18,6 +18,13 @@ robot 1.90,-0.50,0.07  keyframe 1s  @solve 418
 match 0.74 (avg 0.72)
 ```
 
+<p align="center">
+  <img src="images/demo.gif" width="960" alt="revo_lds 数据包在浏览器调试视图里的回放：地图生长，session 0 和 1 先后冻结，session 2 开始建图">
+  <br>
+  <sub><code>pixi run -e ros demo</code>：Cartographer 公开的 revo_lds 数据包（Neato Revo LDS，16 分钟的行驶）
+  在浏览器调试视图里 8 倍速回放。session #0 和 #1 先后冻结，#2 开始建图。</sub>
+</p>
+
 会用工具的 agent 已经能写代码、操作电脑，在实体机器人上的应用则还不成熟。不论用的是哪个
 模型，这样的 agent 都需要空间记忆。它得能通过一句命令、
 一段文字或一张图片记住一个地点，之后让机器人回到那里，而且这份记忆要经得住上下文压缩、地图
@@ -191,6 +198,7 @@ pixi run agent-test                     # agent 服务和 egs
 pixi run -e ros ros-test                # ROS 2 适配器
 SCAN_TOPIC=/base_scan BASE_FRAME=base_footprint pixi run -e ros bag bags/wg_cafe   # 回放，浏览器视图在 http://localhost:8642
 pixi run -e ros live                    # 实时节点：/scan 进，地图、tf 和 agent 服务出
+pixi run -e ros demo                    # 下载 3 MB 的公开数据包，带浏览器视图和 egs 回放
 ```
 
 `live` 需要一个雷达驱动往 `/scan` 发 `sensor_msgs/LaserScan`（`SCAN_TOPIC` 可改），以及
@@ -263,7 +271,7 @@ adapters/ros2/   三个 ament 包：msgs、节点与回放工具、rviz2 插件
 adapters/agent/  agent 服务（HTTP）、egs CLI 和 agent skill
 apps/webui/      浏览器调试视图
 configs/         yaml 配置；configs/reference.yaml 列出全部键
-tools/           包转换脚本和 TSan 门禁
+tools/           包转换脚本、TSan 门禁和 demo
 ```
 
 ## 相关工作与致谢
@@ -280,7 +288,7 @@ tools/           包转换脚本和 TSan 门禁
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib)（MIT）和
   [stb_image_write](https://github.com/nothings/stb)（公有领域），放在 `third_party/`。
 - [RoboStack](https://robostack.github.io/)，它把 ROS 2 装进了 pixi，macOS 上的工作流全靠它。
-- Freiburg 和 Willow Garage 的数据集，回放和打分用的是它们。
+- Freiburg 和 Willow Garage 的数据集，回放和打分用的是它们；Cartographer 的 revo_lds 数据包，demo 用的是它。
 
 ## 许可
 

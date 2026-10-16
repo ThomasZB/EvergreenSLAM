@@ -9,6 +9,7 @@
 #   pixi run -e ros live               # live node: /scan in, webui at :8642
 #   pixi run -e ros bag-play bags/wg_cafe [-- -r 4]   # feed the live node over DDS
 #   pixi run -e ros rviz               # rviz2 with the submap display and the project's config
+#   pixi run -e ros demo               # download a 3 MB public bag, replay it with webui + agent
 #   pixi shell -e ros                  # interactive shell; then: source build-pixi/install/setup.zsh
 #
 # Tunables via env, same names as docker-compose.yml: SCAN_TOPIC (/scan), BASE_FRAME (base_link),
@@ -83,6 +84,10 @@ ros-jazzy-visualization-msgs = "*"
 ros-jazzy-rosidl-default-generators = "*"
 colcon-common-extensions = ">=0.3.0,<0.4"
 
+# tools/convert_ros1_bag.py, for the demo bag.
+[feature.ros.pypi-dependencies]
+rosbags = ">=0.10"
+
 [environments]
 ros = { features = ["ros"], solve-group = "default" }
 
@@ -144,6 +149,11 @@ depends-on = ["ros-build"]
 [feature.ros.tasks.bag-play]
 cmd = "python tools/bag_play.py {{ bag }}"
 args = [{ arg = "bag" }]
+
+[feature.ros.tasks.demo]
+env = { RMW_FASTRTPS_PUBLICATION_MODE = "ASYNCHRONOUS", GLOG_minloglevel = "1" }
+cmd = "bash tools/demo.sh"
+depends-on = ["ros-build"]
 
 [feature.ros.tasks.rviz]
 cmd = "bash -c 'source build-pixi/install/setup.bash && exec rviz2 -d adapters/ros2/evergreenslam_rviz/config/evergreenslam.rviz'"
