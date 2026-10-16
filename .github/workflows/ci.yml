@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libeigen3-dev libceres-dev \
+            libgoogle-glog-dev libyaml-cpp-dev libprotobuf-dev protobuf-compiler \
+            libgtest-dev libgmock-dev
+      - name: core
+        run: |
+          cmake -S core -B build/core -G Ninja -DCMAKE_BUILD_TYPE=Release -DEVERGREENSLAM_BUILD_TESTS=ON
+          cmake --build build/core
+          ctest --test-dir build/core --output-on-failure
+      - name: agent
+        run: |
+          cmake -S adapters/agent -B build/agent -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/agent
+          ctest --test-dir build/agent --output-on-failure
+          EGS_FAKE_HOST=build/agent/fake_host python3 -m unittest discover -s adapters/agent/egs/tests
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: default
+      - run: pixi run core-test
+      - run: pixi run agent-test
