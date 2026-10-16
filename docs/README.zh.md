@@ -2,6 +2,8 @@
 
 常驻的 2D 激光 SLAM，带命名地点，作为 LLM agent 的空间记忆。
 
+[![ci](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml)
+
 [English](../README.md) | 中文
 
 ---
@@ -140,7 +142,8 @@ skill（`robot-places`）。对话是中文的，各步及其背后的 `egs` 调
 这是一个 preview，不是产品。范围限定在核心，已知的缺项列在下面。
 
 在 macOS 和 Linux 上测过：单测；前端、扫描匹配器和后端每一级（回环、删减、冻结、持久化、重定位、
-锚点）的模拟激光端到端测试；手动对后端测试跑 ThreadSanitizer。还没有 CI。在上面的平台和公开
+锚点）的模拟激光端到端测试。每次 push 由 CI 在 Linux（gcc）和 macOS 上跑 core 与 agent 的测试；
+后端测试的 ThreadSanitizer 和 ROS 2 适配器的构建仍是手动。在上面的平台和公开
 数据包上跑过：激光里程计、回环、多 session 建图与自动冻结和删减、原子提交的持久化和命名地图、
 agent 服务和 `egs`、浏览器调试视图、rviz2 插件。数据集上回放工具会报告相对参考轨迹的误差
 （见 ROS README）；这里还没有整理成结果表。

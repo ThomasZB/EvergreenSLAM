@@ -2,6 +2,8 @@
 
 Always-on 2D lidar SLAM with named places, as a spatial memory for LLM agents.
 
+[![ci](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml)
+
 English | [中文](docs/README.zh.md)
 
 ---
@@ -173,7 +175,8 @@ This is a preview, not a product. Scope was limited to the core; known omissions
 
 Tested on macOS and Linux: unit tests, simulated-lidar end-to-end tests for the frontend, the scan
 matcher and each backend stage (loop closure, trimming, freezing, persistence, relocalization,
-anchors), and a ThreadSanitizer run over the backend tests, by hand. There is no CI yet. Exercised
+anchors). CI runs the core and agent tests on Linux (gcc) and macOS on every push; the
+ThreadSanitizer run over the backend tests and the ROS 2 adapter build are by hand. Exercised
 on the platform above and on the public bags: laser odometry, loop closure, multi-session mapping
 with automatic freezing and trimming, persistence with atomic commits and named maps, the agent
 service and `egs`, the browser debug view, the rviz2 plugin. On the datasets the replay tool
