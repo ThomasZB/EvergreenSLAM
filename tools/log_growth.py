@@ -4,7 +4,9 @@ curve. Python 3 standard library only; run it next to the node and leave it runn
 
   python3 tools/log_growth.py --map_dir ~/maps/default --out growth.csv [--interval 60]
 
-Rows are appended; a sample taken while the service or the process is down is skipped.
+Rows are appended; a sample taken while the service or the process is down is skipped. Only
+/sessions is read: /status would consume the closures_delta that `egs status` reports. A restart
+shows as a new pid.
 """
 import argparse
 import csv
@@ -16,7 +18,7 @@ import time
 import urllib.request
 
 COLUMNS = [
-    "unix_s", "boot_count", "at_num_solves", "sessions", "frozen_sessions", "fed",
+    "unix_s", "at_num_solves", "sessions", "frozen_sessions", "fed",
     "nodes", "submaps", "fed_nodes", "fed_submaps", "anchors", "pid", "rss_mb", "cpu_s",
     "map_dir_mb",
 ]
@@ -69,9 +71,8 @@ def dir_mb(path):
 
 
 def sample(args):
-    status = get(args.url, "/status")
     sessions = get(args.url, "/sessions")
-    if not status.get("ok") or not sessions.get("ok"):
+    if not sessions.get("ok"):
         return None
     proc = find_process(args.process)
     if proc is None:
@@ -80,8 +81,7 @@ def sample(args):
     fed = [s for s in rows if s.get("role") == "fed"]
     return {
         "unix_s": int(time.time()),
-        "boot_count": status.get("boot_count"),
-        "at_num_solves": status.get("at_num_solves"),
+        "at_num_solves": sessions.get("at_num_solves"),
         "sessions": len(rows),
         "frozen_sessions": sum(1 for s in rows if s.get("role") == "frozen"),
         "fed": sessions.get("fed"),
