@@ -26,11 +26,12 @@ base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
   mapping.</sub>
 </p>
 
-Tool-using agents can write code and operate computers; their use on physical robots is less
-mature. Whatever model is used, such an agent needs a spatial memory: it must be able to remember a
-place from a command, a sentence or a photo, send the robot back there later, and keep that memory
-across context compaction, map re-optimization and process restarts. EvergreenSLAM is a 2D lidar
-SLAM designed around this requirement.
+An agent asked to fetch a cola from the fridge understands the request but not the home: where
+the fridge is, how to reach the kitchen, where the cola was last seen. Whatever model is used, it
+needs a spatial memory: it must be able to remember a place from a command, a sentence or a photo,
+send the robot back there later, and keep that memory across context compaction, map
+re-optimization and process restarts. EvergreenSLAM is a 2D lidar SLAM designed around this
+requirement.
 
 - **One mode, no operator.** It runs as a background process with no separate mapping and
   localization modes: it always maps into the current *session* while localizing against sessions
@@ -49,22 +50,46 @@ The scan matching and the submaps follow Cartographer; the lifelong layer above 
 project's own. How it relates to slam_toolbox is under Related work.
 
 <p align="center">
-  <img src="docs/images/car.jpg" width="640" alt="The test robot: a 2D lidar on an Orange Pi, mecanum wheels, a power bank">
+  <img src="docs/images/car.jpg" width="640" alt="The test robot: a 2D lidar on an Orange Pi, mecanum wheels, two power banks">
   <br>
-  <sub>The test platform: a 2D lidar (215 CNY, about 30 USD), an Orange Pi with an RK3588, mecanum wheels, a power bank.</sub>
+  <sub>The test platform: a 2D lidar (215 CNY, about 30 USD), an Orange Pi with an RK3588, mecanum wheels, two power banks.</sub>
 </p>
 
 ## Motivation
 
-**Agents lack a spatial memory.** An agent's memory is text. It survives only as long as the
-context does, and a location written down as coordinates is stale as soon as the map is
-re-optimized or the process restarts. What an agent can use is a *name* that keeps resolving to
-the same physical spot, plus a way to record what it saw there.
+**The agent does not know the home.** Language is no longer the bottleneck: an agent asked for a
+cola from the fridge knows what is wanted. What it lacks is the layout. Its memory is text, and a
+layout described in enough detail to act on takes a lot of context and survives only as long as
+the context does, compaction included.
 
-**SLAM without an operator.** The usual SLAM workflow is: drive around to map, save the
-map, switch to localization mode, tune parameters when the environment changes, and rebuild when
-it changes too much. Each step needs an operator. A spatial memory for an agent has to be a
-background service with none of these steps.
+**Coordinates are fragile.** Writing places down as map coordinates does not hold for long. A
+coordinate goes stale when the map is rebuilt or re-optimized, often without the agent noticing,
+and means nothing in another map. Every agent on a conventional SLAM would have to keep its own
+record of where things are and keep that record consistent with the map. What an agent can use is
+a *name* that keeps resolving to the same physical spot, plus a place to record what it saw there.
+
+**SLAM without an operator.** The usual workflow: tune the odometry, calibrate extrinsics and
+synchronize timestamps, drive around to map, save, switch to localization mode, tune parameters
+when the environment changes, and rebuild when it changes too much. Vendors usually package this
+or train their customers. For a newcomer a mistake shows up as ghosting or drift, sometimes only
+later, and a rebuild means entering every saved station again. Each step needs an operator, and
+the agent should not have to be one.
+
+**The intended use.** For example: walk the robot around the home once, saying "this is the
+kitchen" in the kitchen and "this is the desk" at the desk, and do nothing else about mapping or
+localization. The next day, "go and check the kitchen" works. The agent notes that the scissors
+are in the left desk drawer and the apples on the dining table, and days later "where are the
+scissors?" leads it to the right place. Furniture moves, the map is re-optimized, the robot
+restarts, and the places still resolve. Fetching the cola then starts from knowing that the fridge
+is in the kitchen and how to get there, before an arm takes over. The later steps need
+manipulation and vision; the layer underneath, places that stay valid without anyone maintaining
+the map, is what this project argues SLAM itself should provide.
+
+**Lifelong SLAM, but where.** Underneath this is lifelong SLAM: always on, mapping while in use,
+following changes, with resources that do not grow with uptime. The research literature on it is
+long, yet to the author's knowledge few open-source 2D implementations can be used as they are;
+slam_toolbox's lifelong node is described by its README as highly experimental and removes nodes
+without marginalizing them (see Related work).
 
 **Cost.** The memory should be cheap enough to leave running on a small robot all day. A 3D lidar
 costs a few hundred dollars and up and needs a board that can keep up with it. Cameras are cheap,
@@ -183,7 +208,8 @@ use so far, which covered more than this trip and predates the v0.2 features. In
 started from an empty map on this platform, saved the kitchen and the desk, later returned by name
 to check for changes, and after a restart the map and the pose were recovered without
 intervention; almost everything was `egs` commands and an ordinary directory, with no raw
-coordinates and no ROS details.
+coordinates and no ROS details. The platform has since run in the same flat over several days;
+after the fixes those days prompted, the agent has not been stuck on localization or on the map.
 
 ## Validation and limitations
 
@@ -200,8 +226,10 @@ reports the error against the reference trajectory (see the ROS README); no resu
 kept here yet.
 
 - No IMU, wheel odometry or camera fusion, and no 3D (see Motivation).
-- Frozen sessions cannot be unfrozen, and a changed room is not refreshed automatically
-  (see Sessions and freezing). If the frozen map is wrong, start a new map directory.
+- Frozen sessions cannot be unfrozen. A change inside mapped ground is mapped and matched by the
+  current session, which stays aligned through its loop closures to the frozen base, so
+  localization holds; the change is not frozen in, though (see Sessions and freezing). A map that
+  diverged and was then frozen means starting a new map directory.
 - No dynamic-object filtering. Odometry has no remedy for degenerate geometry (long corridors,
   open halls); loop closure rejects ambiguous matches in corridors.
 - One robot, one map. No multi-robot support.
