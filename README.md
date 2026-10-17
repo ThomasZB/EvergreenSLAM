@@ -12,10 +12,10 @@ English | [中文](docs/README.zh.md)
 
 ```
 $ egs here
-current places/dock 0.4m
-closest places/dock 0.4m frozen; places/kitchen 5.0m frozen
-robot 1.90,-0.50,0.07  keyframe 1s  @solve 418
-match 0.74 (avg 0.72)
+current places/dock 2.4m
+closest places/dock 2.4m frozen; places/kitchen 15.3m frozen
+robot 0.48,1.02,-2.72  keyframe 0s  @solve 135
+base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
 ```
 
 <p align="center">
@@ -121,8 +121,9 @@ dropped the same way, keeping one if all qualify.
 *Frozen sessions are constant.* Frozen poses are parameter blocks held constant in the Ceres
 problem, no constraint is built between two frozen submaps, and frozen submaps are never
 modified. The optimization therefore scales with the live session, not with the whole map, and
-the frozen part grows linearly with mapped area. A simulated 30-loop run stays bounded; long runs
-on the robot have not been measured.
+the frozen part grows linearly with mapped area. A simulated 30-loop run stays bounded. On the
+robot it has run in one flat over several days, but memory and graph size were not logged then;
+the numbers will be added.
 
 ### Places as anchors
 

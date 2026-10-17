@@ -12,10 +12,10 @@
 
 ```
 $ egs here
-current places/dock 0.4m
-closest places/dock 0.4m frozen; places/kitchen 5.0m frozen
-robot 1.90,-0.50,0.07  keyframe 1s  @solve 418
-match 0.74 (avg 0.72)
+current places/dock 2.4m
+closest places/dock 2.4m frozen; places/kitchen 15.3m frozen
+robot 0.48,1.02,-2.72  keyframe 0s  @solve 135
+base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
 ```
 
 <p align="center">
@@ -67,7 +67,7 @@ match 0.74 (avg 0.72)
 
 *带稀疏化的删减。* 活动 session 在重复经过的区域只保留自己子图的一个滚动窗口：旧子图的区域已被更新的子图覆盖，或其轨迹已被之后的几趟覆盖时，就会被删除。删除通过边缘化完成，而不是直接丢弃：取被删节点的 Markov 毯，计算保留节点的联合协方差，再将得到的稠密信息稀疏化为一棵 Chow-Liu 树（基于两两互信息的最大生成树），用树的边替换被删除的约束；跨度过大的边转为按边缘协方差加权的先验。冻结时，大部分区域已落在冻结地图内的已完成子图也按同样方式删除；若全部满足条件，则保留一张。
 
-*冻结的 session 是常量。* 冻结位姿在 Ceres 问题中是设为常量的参数块，两张冻结子图之间不建约束，冻结的子图也从不修改。因此优化规模只取决于活动 session，与整张地图无关；冻结部分随建图面积线性增长。仿真中 30 圈的运行保持有界；实机上的长时间运行尚未测量。
+*冻结的 session 是常量。* 冻结位姿在 Ceres 问题中是设为常量的参数块，两张冻结子图之间不建约束，冻结的子图也从不修改。因此优化规模只取决于活动 session，与整张地图无关；冻结部分随建图面积线性增长。仿真中 30 圈的运行保持有界。实机上已在一套住宅里运行过数天，但当时没有记录内存和位姿图规模，数据之后补充。
 
 ### 地点即锚点
 
