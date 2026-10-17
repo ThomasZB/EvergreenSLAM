@@ -95,6 +95,7 @@ void PoseGraph::Start(common::Time time, std::optional<Eigen::Affine2d> initial_
   started_ = true;
   submap_translation_.clear();
   retired_local_indices_.clear();
+  open_local_indices_.clear();
   watched_submaps_.clear();
   last_ingested_node_index_ = -1;
   nodes_since_cadence_ = 0;
@@ -553,6 +554,7 @@ SessionId PoseGraph::RotateAndFreezeFedSessionOnTask(SessionId id) {
       ++it;
     } else {
       retired_local_indices_.insert(it->first);
+      open_local_indices_.erase(it->first);
       it = submap_translation_.erase(it);
     }
   }
@@ -565,8 +567,11 @@ void PoseGraph::TrimSubmapsOnTask(const std::vector<SubmapId>& ids) {
   if (!option_.trim) {
     return;
   }
+  const std::set<SubmapId> open = OpenSubmapIds();
   for (const SubmapId& id : ids) {
-    trimmer_.EnqueueForTrim(id);
+    if (open.count(id) == 0) {
+      trimmer_.EnqueueForTrim(id);
+    }
   }
   trimmer_.TrimToCompletionOnTask();
 }
@@ -601,6 +606,7 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
 
   submap_translation_.clear();
   retired_local_indices_.clear();
+  open_local_indices_.clear();
   watched_submaps_.clear();
   last_ingested_node_index_ = -1;
   nodes_since_cadence_ = 0;
@@ -624,11 +630,12 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
 std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from, SessionId to) {
   std::map<SubmapId, SubmapId> adoption;
   std::map<NodeId, NodeId> renamed_nodes;
+  const std::set<SubmapId> open = OpenSubmapIds();
   // A copy: TransferSubmap edits the session's submap list while we walk it.
   const std::vector<SubmapId> submap_ids = data_.session(from).submap_ids;
   for (const SubmapId& old_id : submap_ids) {
     const SubmapRecord& record = data_.submap(old_id);
-    if (record.submap == nullptr || record.submap->finished()) {
+    if (record.submap == nullptr || (record.submap->finished() && open.count(old_id) == 0)) {
       continue;
     }
     const SubmapId new_id = data_.AllocateSubmapId(to);
@@ -646,6 +653,14 @@ std::map<SubmapId, SubmapId> PoseGraph::TransferUnfinishedSubmaps(SessionId from
   }
   constraint_builder_.mutable_drift_tracker().InheritSession(from, to, adoption, renamed_nodes);
   return adoption;
+}
+
+std::set<SubmapId> PoseGraph::OpenSubmapIds() const {
+  std::set<SubmapId> open;
+  for (const int local_index : open_local_indices_) {
+    open.insert(submap_translation_.at(local_index));
+  }
+  return open;
 }
 
 void PoseGraph::HandleInsertionResult(
@@ -670,6 +685,7 @@ void PoseGraph::HandleInsertionResult(
       }
       // Trimmed under the frontend's feet: the window still names it, the graph no longer does.
       retired_local_indices_.insert(entry->first);
+      open_local_indices_.erase(entry->first);
       submap_translation_.erase(entry);
     }
     if (retired_local_indices_.count(submap->local_index()) > 0) {
@@ -677,6 +693,7 @@ void PoseGraph::HandleInsertionResult(
     }
     const SubmapId submap_id = data_.AllocateSubmapId(session_id);
     submap_translation_.emplace(submap->local_index(), submap_id);
+    open_local_indices_.insert(submap->local_index());
     SubmapRecord record;
     record.id = submap_id;
     record.submap = submap;
@@ -692,7 +709,7 @@ void PoseGraph::HandleInsertionResult(
     submap_ids.push_back(submap_id);
   }
   CHECK(!submap_ids.empty()) << "a keyframe with only pruned submaps cannot exist: the window "
-                                "always carries an unfinished submap";
+                                "always carries a submap the queue still sees open";
 
   const std::optional<Eigen::Affine2d> session_to_global = data_.ComputeSessionToGlobal(session_id);
   CHECK(session_to_global.has_value());
@@ -822,6 +839,7 @@ void PoseGraph::SearchForFinishedSubmaps(
     }
     const int local_index = it->first;
     task_queue_.Enqueue([this, local_index] {
+      open_local_indices_.erase(local_index);
       const auto entry = submap_translation_.find(local_index);
       if (entry == submap_translation_.end()) {
         return;

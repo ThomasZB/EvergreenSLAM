@@ -168,6 +168,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);
   void EnqueueNodeSearch();
   void SearchForFinishedSubmaps(const mapping::LocalTrajectoryBuilder::InsertionResult& result);
+  std::set<SubmapId> OpenSubmapIds() const;
 
   PoseGraphOption option_;
   PoseGraphData data_;
@@ -191,6 +192,9 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   SessionId boot_first_session_;
   std::map<int, SubmapId> submap_translation_;
   std::set<int> retired_local_indices_;
+  // Allocated and not yet finished as far as the queue has seen: finished() runs ahead of it, and
+  // keyframes still queued may name these.
+  std::set<int> open_local_indices_;
   NodeId last_ingested_node_;
   int last_ingested_node_index_ = -1;
   // Caller-thread state, keyed by local_index; the drop task clears it while the caller waits.

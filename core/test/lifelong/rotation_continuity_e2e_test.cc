@@ -16,7 +16,9 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <future>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -172,6 +174,66 @@ TEST(RotationContinuityE2eTest, HandedOverSubmapsKeepAbsorbingAndTheErrorShowsNo
   // Absolute sanity: both windows sit at the closed-loop error level of this drift setting.
   EXPECT_LT(mean_before, 0.35);
   EXPECT_LT(mean_after, 0.35);
+}
+
+// The frontend runs ahead of the queue: by the time the rotation runs it has finished both
+// submaps that queued keyframes still name. Those keyframes must land in the successor.
+TEST(RotationContinuityE2eTest, KeyframesQueuedBehindTheRotationSurviveTheFrontendRunningAhead) {
+  const std::string config_path = std::string(EVERGREENSLAM_CONFIG_DIR) + "/evergreenslam.yaml";
+  PoseGraphOption option = LoadPoseGraphOptionFromFile(config_path);
+  option.session_manager.auto_freeze = false;
+  option.trim = false;
+
+  const int last_step = 5 * kNodesPerSubmap;
+  PoseGraph backend(option);
+  backend.Start(TestTime(0));
+  Frontend frontend(backend, DriftedOdometry(last_step + 1));
+  const SessionId first_session = *backend.session_manager().fed_session();
+
+  // Local submaps 2 and 3 are the window from step 3 * kNodesPerSubmap on.
+  int step = 0;
+  for (; step < 3 * kNodesPerSubmap + 5; ++step) {
+    frontend.Feed(step);
+    backend.WaitUntilQuiescent();
+  }
+
+  // The first gate lets the freeze task queue its rotation behind the second; every keyframe
+  // fed afterwards then lands behind the rotation.
+  std::promise<void> first_gate;
+  std::promise<void> second_reached;
+  std::promise<void> second_gate;
+  std::shared_future<void> first_open = first_gate.get_future().share();
+  std::shared_future<void> second_open = second_gate.get_future().share();
+  backend.Enqueue([first_open] { first_open.wait(); });
+  backend.FreezeFedSession();
+  backend.Enqueue([&second_reached, second_open] {
+    second_reached.set_value();
+    second_open.wait();
+  });
+  first_gate.set_value();
+  second_reached.get_future().wait();
+  for (; step <= last_step; ++step) {
+    frontend.Feed(step);
+  }
+  second_gate.set_value();
+  backend.Finish();
+
+  const PoseGraphData& graph = backend.graph();
+  ASSERT_EQ(backend.session_manager().num_sessions_frozen(), 1);
+  const SessionId second_session = *backend.session_manager().fed_session();
+  std::set<int> steps_in_graph;
+  for (const SessionId session : {first_session, second_session}) {
+    for (const NodeId& id : graph.session(session).node_ids) {
+      steps_in_graph.insert(testing::StepAt(graph.node(id).constant_data.time));
+    }
+  }
+  EXPECT_EQ(static_cast<int>(steps_in_graph.size()), last_step + 1) << "keyframes were dropped";
+  std::set<int> handed_over;
+  for (const SubmapId& id : graph.session(second_session).submap_ids) {
+    handed_over.insert(graph.submap(id).submap->local_index());
+  }
+  EXPECT_EQ(handed_over.count(2), 1u);
+  EXPECT_EQ(handed_over.count(3), 1u);
 }
 
 }  // namespace
