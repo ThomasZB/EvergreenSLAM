@@ -2,7 +2,7 @@ import json
 import os
 import unittest
 
-from support import EgsTestCase
+from support import EgsTestCase, virtual_clock
 
 from egs import fmt
 
@@ -39,6 +39,7 @@ class CommandTest(EgsTestCase):
         )
         self.assertEqual(self.requests("GET", "/root"), [])
 
+    @virtual_clock()
     def test_here_sample_counts_each_keyframe_once_and_gates_on_cover(self):
         self.state.base_reads = [
             {"score": 0.40, "coverage": 0.9},
@@ -52,6 +53,7 @@ class CommandTest(EgsTestCase):
         code, out, _ = self.egs("here", "--sample", "61")
         self.assertEqual(code, 2)
 
+    @virtual_clock()
     def test_here_sample_restarts_after_a_correction(self):
         self.state.events = [{"kind": "pose_correction", "session": 2}]
         self.state.base_reads = [

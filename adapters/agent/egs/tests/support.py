@@ -8,9 +8,11 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from egs import commands  # noqa: E402
 from egs.cli import main  # noqa: E402
 from fake_service import FakeService, FakeState, pose  # noqa: E402
 
@@ -46,6 +48,27 @@ def obs(recorded_at, result, **kw):
     d = {"recorded_at": recorded_at, "source": "agent", "result": result}
     d.update(kw)
     return json.dumps(d) + "\n"
+
+
+class _VirtualClock:
+    """sleep() advances monotonic() at once, so a polling loop takes its nominal number of polls
+    however slow the machine is."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def virtual_clock():
+    return mock.patch.object(commands, "time", _VirtualClock())
 
 
 class EgsTestCase(unittest.TestCase):
