@@ -25,6 +25,7 @@
 #include "lifelong/constraints/match_worker_pool.h"
 #include "lifelong/global_map.h"
 #include "lifelong/sessions/frozen_links.h"
+#include "sensor/point_cloud.h"
 #include "mapping/grid_mapping/probability_values.h"
 #include "utils/transform/transform.h"
 
@@ -76,7 +77,8 @@ PoseGraph::PoseGraph(const PoseGraphOption& option, const std::string& map_direc
       optimization_(option_.optimization, option_.constraint_weight),
       session_manager_(*this, option_.session_manager),
       constraint_builder_(*this, option_.constraint_builder, option_.constraint_weight),
-      trimmer_(*this, option_.trimmer) {
+      trimmer_(*this, option_.trimmer),
+      kidnap_detector_(option_.kidnap_detector) {
   if (!map_directory.empty()) {
     map_manager_ = std::make_shared<MapManager>(map_directory, anchor_store_);
     session_manager_.AddObserver(map_manager_);
@@ -269,6 +271,10 @@ void PoseGraph::SettleRelocalization() {
 }
 
 void PoseGraph::AppendRelocalizationEvent(const RelocalizationStatus& status) {
+  if (kidnap_request_ == status.id) {
+    kidnap_detector_.OnSearchSettled(status.state);
+    kidnap_request_.reset();
+  }
   PoseGraphEvent event;
   event.time = status.resolved_at.value_or(SensorNow());
   event.kind = PoseGraphEvent::Kind::RELOCALIZATION;
@@ -279,6 +285,50 @@ void PoseGraph::AppendRelocalizationEvent(const RelocalizationStatus& status) {
   event.superseded_by = status.superseded_by;
   event.correction = status.correction;
   events_.Append(std::move(event));
+}
+
+void PoseGraph::CheckForKidnapOnTask() {
+  if (!kidnap_check_due_ || !option_.kidnap_detector.enabled) {
+    return;
+  }
+  kidnap_check_due_ = false;
+  const SessionId fed = *session_manager_.fed_session();
+  const std::vector<NodeId>& node_ids = data_.session(fed).node_ids;
+  if (node_ids.empty()) {
+    return;
+  }
+  const Node& newest = data_.node(node_ids.back());
+  const DriftTracker& drift = constraint_builder_.drift_tracker();
+  KidnapSignals signals;
+  signals.match_score = newest_match_score_;
+  signals.base = session_manager_.base_map().Evaluate(
+      sensor::TransformPointCloud(newest.constant_data.point_cloud, newest.global_pose));
+  signals.since_base_match = drift.SinceBaseMatch(fed);
+  signals.path_length = drift.PathLength(fed).value_or(0.0);
+  const bool relocalization_open =
+      pending_relocalization_.has_value() || relocalization_.round().has_value();
+  const std::optional<KidnapEvidence> evidence =
+      kidnap_detector_.Observe(signals, relocalization_open);
+  if (!evidence.has_value()) {
+    return;
+  }
+  const RelocalizationId id =
+      relocalization_.Mint(/*has_prior=*/false, RelocalizationTrigger::KIDNAP);
+  kidnap_request_ = id;
+  PoseGraphEvent event;
+  event.time = newest.constant_data.time;
+  event.kind = PoseGraphEvent::Kind::KIDNAP_SUSPECTED;
+  event.relocalization_id = id;
+  event.session = fed;
+  event.kidnap = evidence;
+  latest_kidnap_ = event;
+  events_.Append(std::move(event));
+  LOG(WARNING) << "kidnap suspected on session " << fed.session_index << " after "
+               << evidence->keyframes << " keyframes (base " << evidence->base_score
+               << ", cover " << evidence->base_coverage << ", "
+               << evidence->distance_without_base_match
+               << " m without a base closure): global relocalization " << id;
+  RelocalizeOnTask(id, std::nullopt);
 }
 
 common::Time PoseGraph::SensorNow() const {
@@ -361,6 +411,7 @@ void PoseGraph::FinishBatch() {
     }
   }
   RepublishActiveSessionToGlobal();
+  CheckForKidnapOnTask();
 }
 
 bool PoseGraph::CheckpointDue() const {
@@ -623,6 +674,9 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
   nodes_since_cadence_ = 0;
   pending_relocalization_.reset();
   CancelRelocalizationMatches();
+  kidnap_detector_.Reset();
+  newest_match_score_.reset();
+  kidnap_check_due_ = false;
   last_checkpoint_time_ = time;
   RepublishActiveSessionToGlobal();
   PoseGraphEvent event;
@@ -733,6 +787,8 @@ void PoseGraph::HandleInsertionResult(
   data_.AddNode(node, submap_ids);
   optimization_.AddVariable(VariableId::Of(node.id), node.global_pose);
   last_ingested_node_ = node.id;
+  newest_match_score_ = result.match_score;
+  kidnap_check_due_ = true;
   if (map_manager_ != nullptr) {
     map_manager_->WriteLastPose(node);
   }

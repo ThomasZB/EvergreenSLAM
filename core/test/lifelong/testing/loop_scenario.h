@@ -20,8 +20,10 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -190,6 +192,11 @@ class Frontend {
     CHECK_EQ(truth_.size(), odometry_.size());
   }
 
+  // What the frontend reports as each keyframe's match score; none by default.
+  void set_match_score(std::function<std::optional<double>(int step)> match_score) {
+    match_score_ = std::move(match_score);
+  }
+
   void Feed(int step) {
     if (submaps_.empty() || fed_into_newest_ >= kNodesPerSubmap) {
       const int local_index = next_local_index_++;
@@ -210,6 +217,9 @@ class Frontend {
     result.node.time = TestTime(step);
     result.node.local_pose = odometry_[step];
     result.node.point_cloud = cloud;
+    if (match_score_) {
+      result.match_score = match_score_(step);
+    }
     for (const auto& submap : submaps_) {
       submap->InsertScan(odometry_[step], cloud, inserter_);
       result.insertion_submaps.push_back(submap);
@@ -235,6 +245,7 @@ class Frontend {
   std::vector<Eigen::Affine2d> truth_;
   std::vector<Eigen::Affine2d> odometry_;
   double max_range_;
+  std::function<std::optional<double>(int step)> match_score_;
   mapping::CastRaysMapping inserter_;
   std::vector<std::shared_ptr<mapping::Submap>> submaps_;
   std::map<int, int> creation_steps_;

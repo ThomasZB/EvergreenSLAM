@@ -29,6 +29,16 @@ const char* ToString(RelocalizationState state) {
   return "PENDING";
 }
 
+const char* ToString(RelocalizationTrigger trigger) {
+  switch (trigger) {
+    case RelocalizationTrigger::OPERATOR:
+      return "OPERATOR";
+    case RelocalizationTrigger::KIDNAP:
+      return "KIDNAP";
+  }
+  return "OPERATOR";
+}
+
 const char* ToString(PoseGraphEvent::Kind kind) {
   using Kind = PoseGraphEvent::Kind;
   switch (kind) {
@@ -42,6 +52,8 @@ const char* ToString(PoseGraphEvent::Kind kind) {
       return "SESSION_REMOVED";
     case Kind::FED_SESSION_DROPPED:
       return "FED_SESSION_DROPPED";
+    case Kind::KIDNAP_SUSPECTED:
+      return "KIDNAP_SUSPECTED";
   }
   return "RELOCALIZATION";
 }

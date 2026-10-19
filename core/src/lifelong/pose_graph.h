@@ -30,6 +30,7 @@
 #include "lifelong/anchors/anchor_store.h"
 #include "lifelong/backend_handles.h"
 #include "lifelong/constraints/constraint_builder.h"
+#include "lifelong/kidnap_detector.h"
 #include "lifelong/map_manager/map_manager.h"
 #include "lifelong/optimization/optimization.h"
 #include "lifelong/pose_graph_data.h"
@@ -77,6 +78,10 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
     return relocalization_.Latest();
   }
   PoseGraphEvents::Page EventsSince(int64_t seq) const { return events_.Since(seq); }
+  // Backend task only.
+  const KidnapDetector& kidnap_detector() const { return kidnap_detector_; }
+  // The newest KIDNAP_SUSPECTED event, kept past the ring. Backend task only.
+  const std::optional<PoseGraphEvent>& latest_kidnap() const { return latest_kidnap_; }
 
   void WaitUntilQuiescent();
 
@@ -166,6 +171,8 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void CancelRelocalizationMatches();
   void SettleRelocalization();
   void AppendRelocalizationEvent(const RelocalizationStatus& status);
+  // Once per ingested keyframe, after its search and any solve; may start a global search.
+  void CheckForKidnapOnTask();
   common::Time SensorNow() const;
   bool ReseedOnFirstAnchoring(const Constraint& constraint);
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);
@@ -190,6 +197,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   std::optional<SessionId> published_fed_;
   RelocalizationTracker relocalization_;
   PoseGraphEvents events_;
+  KidnapDetector kidnap_detector_;
 
   bool started_ = false;
   SessionId boot_first_session_;
@@ -206,6 +214,12 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   std::optional<PendingRelocalization> pending_relocalization_;
   // The open round's flag; workers read it, so it outlives the round in their jobs.
   std::shared_ptr<std::atomic<bool>> relocalization_cancel_;
+  // The newest ingested keyframe's frontend score, and whether the detector has seen it.
+  std::optional<double> newest_match_score_;
+  bool kidnap_check_due_ = false;
+  // The detector's own search while it is open.
+  std::optional<RelocalizationId> kidnap_request_;
+  std::optional<PoseGraphEvent> latest_kidnap_;
   int solves_before_last_add_ = 0;
   // The only solve trigger; freeze and first-anchoring solves neither reset nor shift it.
   int nodes_since_cadence_ = 0;

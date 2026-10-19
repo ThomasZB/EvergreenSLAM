@@ -18,11 +18,12 @@
 
 namespace evergreenslam::lifelong {
 
-RelocalizationId RelocalizationTracker::Mint(bool has_prior) {
+RelocalizationId RelocalizationTracker::Mint(bool has_prior, RelocalizationTrigger trigger) {
   std::lock_guard<std::mutex> lock(mutex_);
   Entry entry;
   entry.status.id = next_id_++;
   entry.status.has_prior = has_prior;
+  entry.status.trigger = trigger;
   recent_.push_back(entry);
   while (recent_.size() > capacity_) {
     recent_.pop_front();

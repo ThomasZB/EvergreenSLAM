@@ -29,6 +29,10 @@ using RelocalizationId = int64_t;
 enum class RelocalizationState { PENDING, MATCHED, NO_MATCH, SUPERSEDED };
 const char* ToString(RelocalizationState state);
 
+// Who asked: an operator through the API, or the backend's own kidnap detector.
+enum class RelocalizationTrigger { OPERATOR, KIDNAP };
+const char* ToString(RelocalizationTrigger trigger);
+
 struct PoseCorrection {
   double translation = 0.0;
   double rotation = 0.0;
@@ -52,7 +56,8 @@ struct PoseGraphEvent {
     POSE_CORRECTION,
     SESSION_FROZEN,
     SESSION_REMOVED,
-    FED_SESSION_DROPPED
+    FED_SESSION_DROPPED,
+    KIDNAP_SUSPECTED
   };
 
   int64_t seq = 0;
@@ -66,6 +71,7 @@ struct PoseGraphEvent {
   std::optional<PoseCorrection> correction;
   std::optional<SessionId> session;
   std::optional<SessionId> fed_now;
+  std::optional<KidnapEvidence> kidnap;
 };
 const char* ToString(PoseGraphEvent::Kind kind);
 

@@ -27,6 +27,7 @@ namespace evergreenslam::lifelong {
 struct RelocalizationStatus {
   RelocalizationId id = 0;
   bool has_prior = false;
+  RelocalizationTrigger trigger = RelocalizationTrigger::OPERATOR;
   RelocalizationState state = RelocalizationState::PENDING;
   int candidates = 0;
   int constraints_added = 0;
@@ -50,7 +51,8 @@ class RelocalizationTracker {
 
   explicit RelocalizationTracker(size_t capacity = 16) : capacity_(capacity) {}
 
-  RelocalizationId Mint(bool has_prior);
+  RelocalizationId Mint(bool has_prior,
+                        RelocalizationTrigger trigger = RelocalizationTrigger::OPERATOR);
   std::optional<RelocalizationStatus> Get(RelocalizationId id) const;
   std::optional<RelocalizationStatus> Latest() const;
 
