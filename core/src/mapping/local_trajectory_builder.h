@@ -40,6 +40,9 @@ class LocalTrajectoryBuilder {
     int node_index = 0;
     TrajectoryNode node;
     std::vector<std::shared_ptr<const Submap>> insertion_submaps;
+    // MatchingResult::match_score of the scan this keyframe is; empty when there was no map to
+    // match it against yet.
+    std::optional<double> match_score;
   };
   struct MatchingResult {
     common::Time time;

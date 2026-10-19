@@ -91,10 +91,15 @@ TEST(LocalTrajectoryBuilderTest, TracksASimulatedRobotInAClosedRoom) {
     if (result->insertion_result != nullptr) {
       const auto& insertion = *result->insertion_result;
       ++num_keyframes;
-      // The first keyframe has no map to match against and scores 0 by definition.
-      if (num_keyframes > 1) {
+      // The first keyframe has no map to match against and scores 0 by definition; the backend
+      // is handed no score for it rather than that 0.
+      if (num_keyframes == 1) {
+        EXPECT_FALSE(insertion.match_score.has_value());
+      } else {
         last_score = result->match_score;
         worst_score = std::min(worst_score, last_score);
+        ASSERT_TRUE(insertion.match_score.has_value());
+        EXPECT_DOUBLE_EQ(*insertion.match_score, result->match_score);
       }
       EXPECT_FALSE(insertion.insertion_submaps.empty());
       // The node carries the adaptively filtered cloud, so its size follows the point budget.

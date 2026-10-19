@@ -57,8 +57,10 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
   }
 
   double match_score = 0.0;
+  bool matched = false;
   const std::shared_ptr<const Submap> matching_submap = active_map_.matching_submap();
   if (matching_submap != nullptr && !matching_submap->grid().empty()) {
+    matched = true;
     const GridMapu8& grid_map = matching_submap->Snapshot();
     const Eigen::Affine2d& grid_pose = matching_submap->local_pose();
     const Eigen::Affine2d predicted_pose = pose;
@@ -90,9 +92,10 @@ std::unique_ptr<LocalTrajectoryBuilder::MatchingResult> LocalTrajectoryBuilder::
   if (motion_filter_.IsSimilar(time, local_pose_)) {
     return result;
   }
-  result->insertion_result = std::make_unique<InsertionResult>(
-      InsertionResult{next_node_index_++, TrajectoryNode{time, local_pose_, filtered},
-                      active_map_.InsertScan(local_pose_, dense)});
+  result->insertion_result = std::make_unique<InsertionResult>(InsertionResult{
+      next_node_index_++, TrajectoryNode{time, local_pose_, filtered},
+      active_map_.InsertScan(local_pose_, dense),
+      matched ? std::optional<double>(match_score) : std::nullopt});
   return result;
 }
 
