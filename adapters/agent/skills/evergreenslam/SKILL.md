@@ -129,6 +129,10 @@ the PNG path on this machine;
 
 ## Recovery when the pose is wrong
 
+If `egs here` has a `kidnap suspected` line, the process noticed on its own and searched the whole
+map already: `searching` means wait and ask again, `found again` means done (check `egs here
+--sample 20`), and otherwise the line names the next step (step 2 below).
+
 1. The robot stands at a saved place now (within ~2 m): `egs init-pose --place places/<p>` (or
    `x y theta`). It moved since (a "switched on at the dock" is stale once it drove), or you do
    not know where it is: `egs relocalize`, which searches the whole saved map. Both wait up to
@@ -166,9 +170,14 @@ the PNG path on this machine;
   already mapped, or follow **Recovery**, then ask again.
 - `relocalization N <kind> <state>` in `egs here` / `egs status`: the latest `init-pose` or
   `relocalize` and how it ended (`pending`, `matched: corrected ...`, `no_match`, `superseded`).
+  Kind `kidnap` is a search the process started itself.
+- `kidnap suspected: base S (cover C%), Dm without base match, ...; request N, <where>`: the
+  scan stopped fitting the saved map after tracking broke (`match dipped to M`, or `never matched
+  the base` right after a start), so the process searched the whole map as request N. `<where>`
+  is `searching`, `found again`, or the recovery to follow (**Recovery when the pose is wrong**).
 - `egs events`: one line per backend event, oldest first: `relocalization`, `pose_correction` (a
   re-optimization moved the robot's pose more than 0.3 m or 0.2 rad), `session_frozen`,
-  `session_removed`, `fed_session_dropped`. Resume with `--since <next_seq>`; `events lost` on
+  `session_removed`, `fed_session_dropped`, `kidnap_suspected`. Resume with `--since <next_seq>`; `events lost` on
   stderr means older ones fell off the log.
 - The localization line, `base S (cover C%)  since base match Dm  match M (avg A)`:
   - `base`: how well the latest keyframe scan, at its pose, fits the saved (frozen) map, 0..1.

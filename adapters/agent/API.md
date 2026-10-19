@@ -226,7 +226,7 @@ word "aligned": its text says `linked to base yes|no` for `aligned_to_base` (JSO
 (skipping `skills/` and symlinks), then one task reads `current_frame` and `ResolveAll`.
 `→ {ok, at_num_solves, robot: pose|null, keyframe_age_s|null, has_frozen_base, aligned_to_base,
 localization: {since_base_match_m|null, base: {score|null, coverage}|null, scan_match: {score,
-avg}|null}, relocalization, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
+avg}|null, kidnap|null}, relocalization, current: {path, anchor, dist_m}|null, closest: [{path, anchor,
 dist_m, state}]}` — `relocalization` is the request named by the parameter, or the latest without
 it, `null` when there is none or the id is no longer tracked (malformed id → 400). `closest` is the
 top 2 non-orphan referenced anchors by straight-line distance. `current` = nearest within 2.5 m;
@@ -265,6 +265,14 @@ read in the same task as `robot`:
   it back). `null` before the first such closure: no frozen base, a fresh boot, a fed session just
   dropped. A relocalization request by itself resets nothing. The freeze rotation hands it on: the
   successor continues the predecessor's distance.
+
+- `kidnap`: the newest `kidnap_suspected` event (`PoseGraph::latest_kidnap()`, kept past the event
+  ring), `null` before the first: `{time_ns, request_id, session, keyframes,
+  lowest_match_score|null, base_score, base_coverage, since_base_match_m, continuity_broken}`, the
+  evidence fields as in `/events`. `continuity_broken` is the detector's current read, not the
+  event's: `false` once a base closure landed while the base agreed with the keyframe (found
+  again). `egs here` / `egs status` print a `kidnap suspected: ...` line ending `searching` (its
+  request still pending), `found again`, or the recovery (`egs session rm`, then `relocalize`).
 
 `aligned_to_base` remains the structural global signal (a frozen link exists at all); `base` and
 `since_base_match_m` say how well and how recently the current pose agrees with that base.
@@ -383,7 +391,7 @@ request_id}`, kind `global`.
 `SetInitialPose` / `RelocalizeGlobally` mint the id on the calling thread (counter from 1 per
 process) and return it; the search runs later on the backend task. The object in `/here` and
 `/status`:
-`{id, kind: pose|place|global, anchor|null, state: pending|matched|no_match|superseded, candidates,
+`{id, kind: pose|place|global|kidnap, anchor|null, state: pending|matched|no_match|superseded, candidates,
 constraints, correction_m|null, correction_rad|null, requested_ns|null, resolved_ns|null,
 superseded_by|null}`.
 - The request's task supersedes every older request still pending (`superseded_by` = its id). A
@@ -406,6 +414,19 @@ superseded_by|null}`.
   `AHintOnASessionPinnedBySixWrongClosuresMatchesButLeavesItWrong`); the recovery is `session rm`
   of the fed session, then `init-pose`.
 - A fed-session drop marks the open request `superseded` with `superseded_by` null.
+- `kidnap`: the backend's own request, a `RelocalizeGlobally()` round started on the backend task
+  by the kidnap detector (`lifelong.kidnap_detector` in `configs/reference.yaml`), which checks
+  each fed-session keyframe after its search and any solve. It fires when, for
+  `min_suspect_keyframes` (8) in a row, continuity is broken (a frontend match score at or below
+  `max_match_score` (0.45) since the last base closure the base agreed with, or none ever: a boot
+  seed is a guess), the keyframe's `base` score is below `max_base_score` (0.4) at `coverage` ≥
+  `min_base_coverage` (0.5), and `min_distance_without_base_match` (3 m) went by without a base
+  closure. Never while a request is open: an operator's request owns the correction. After it
+  settles the detector waits `cooldown_keyframes` (50), doubled after each search up to
+  `max_cooldown_keyframes` (800) and reset once continuity mends; a superseded one does not
+  double. On a fed session already linked to the base the round's edges are outvoted (the case
+  above), so `matched` with a small correction and `continuity_broken` still `true` is the usual
+  outcome for a robot carried mid-run.
 - Times are sensor time (`resolved_ns` = newest node time across sessions at settlement).
 - Core reads `relocalization(id)` / `latest_relocalization()` are thread safe (own mutex; the last 16
   requests); the service reads them inside its task so they match `robot`.
@@ -423,6 +444,12 @@ event is returned; a changed `instance_id` (a map switch or restart) also means 
   the same fed session (a rotation or drop to a new fed session never logs one).
 - `session_frozen`, `session_removed`: `session`. A drop logs `session_removed` then
   `fed_session_dropped` (`session, fed_now`), then `relocalization` for a superseded request.
+- `kidnap_suspected`: `request_id, session, keyframes, lowest_match_score|null, base_score,
+  base_coverage, since_base_match_m` — logged before its `kidnap` request starts, its
+  `relocalization` settlement follows. `keyframes` the streak, `lowest_match_score` the lowest
+  frontend score since the last agreeing base closure (`null`: the session never had one),
+  `base_*` the newest keyframe, `since_base_match_m` the distance without a base closure (from the
+  session's start when it never had one).
 
 egs: `init-pose` / `relocalize` poll `/here?relocalization=<id>` every 0.5 s up to `--wait S`
 (default 30; `--no-wait` returns at once). Printed outcome: `matched: corrected D m A°; check egs
@@ -620,6 +647,10 @@ new row); `next_id` stays past the refused id, which is never issued.
   `SessionManager::FreezeFedSession(expected)`; `Start(..., bool seed_from_previous_boot = true)`.
 - `PoseGraph`, any thread: `RelocalizationId SetInitialPose(pose)`, `RelocalizationId
   RelocalizeGlobally()`, `relocalization(id)`, `latest_relocalization()`, `EventsSince(seq)`.
+  `RelocalizationStatus::trigger` (`OPERATOR` | `KIDNAP`). Backend task only: `kidnap_detector()`,
+  `latest_kidnap()`. `InsertionResult::match_score` (empty for a scan with no map to match yet)
+  feeds the detector; `ConstraintBuilder::SearchForNodeAroundOnTask(..., CancelFlag)` skips the
+  queued matches of a superseded round (`num_matches_cancelled()`).
 - `AnchorStore::Rebind`. `AssembleGlobalMap(..., std::optional<SessionId>)` already exists.
 - Zones (`service/memory/zone_store.h`), for a host's own backend task, never a host thread waiting on
   one: `std::optional<std::vector<ResolvedZone>> ResolveZones(const PoseGraph&, const ZoneStore&)`

@@ -70,7 +70,7 @@ the navigator must avoid an area -> egs zone add places/<place>/<name> --rect X0
 after a start or a correction -> egs here --sample 20 until the base median settles (>= 0.5 ok)
 a picture -> egs view map | here | route places/<p> | trail | session [id]
 pose wrong, robot at a saved place now (<= 2 m) -> egs init-pose --place places/<p> (waits)
-pose wrong, robot moved since or unsure where -> egs relocalize (searches the whole saved map)
+pose wrong, robot moved since or unsure where -> egs relocalize (a kidnap line in here: it searched already)
 no_match, or base low a minute after matched -> egs session rm <fed id> (plan, --yes), then again
 on disk now -> egs checkpoint; when did corrections land -> egs events; map health -> egs status
 look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words> [--path <p>]

@@ -233,8 +233,13 @@ kept here yet.
 - No dynamic-object filtering. Odometry has no remedy for degenerate geometry (long corridors,
   open halls); loop closure rejects ambiguous matches in corridors.
 - One robot, one map. No multi-robot support.
-- A robot carried elsewhere has to be told: `egs init-pose` or `egs relocalize`. There is no
-  automatic kidnap detection.
+- Kidnap detection starts a global search on its own when the frontend's tracking broke, the scan
+  disagrees with the frozen base and no base closure came for 3 m (`lifelong.kidnap_detector`,
+  `kidnap` line in `egs here`). It finds a robot booted onto the wrong spot of the base; a robot
+  carried mid-run is detected, but its session is already pinned to the base and the search's
+  few edges are outvoted, so `egs here` names the recovery (`egs session rm`, then `egs
+  relocalize`). A robot put down where the base has no map reads as exploring, and goes unnoticed.
+  Thresholds come from one replay and the simulated room, not from robots carried on purpose.
 - The freeze thresholds have not been calibrated against a reference trajectory.
 - One known odometry defect: in the simulated room, a straight run from rest along a wall-aligned
   axis has been observed to stay at the origin. The regression test is disabled until the cause is
