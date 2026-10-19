@@ -132,6 +132,10 @@ std::optional<double> DriftTracker::SinceBaseMatch(SessionId session) const {
   return std::max(0.0, FindPath(path_length_, session).value_or(0.0) - *mark);
 }
 
+std::optional<double> DriftTracker::PathLength(SessionId session) const {
+  return FindPath(path_length_, session);
+}
+
 void DriftTracker::Sweep(const PoseGraphData& graph) {
   const auto has_session = [&graph](SessionId id) { return graph.HasSession(id); };
   SweepMap(path_at_node_, [&graph](const NodeId& id) { return graph.HasNode(id); });

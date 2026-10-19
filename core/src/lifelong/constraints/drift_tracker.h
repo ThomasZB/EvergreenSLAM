@@ -35,6 +35,8 @@ class DriftTracker {
   void InheritSession(SessionId from, SessionId to, const std::map<SubmapId, SubmapId>& submaps,
                       const std::map<NodeId, NodeId>& nodes);
   std::optional<double> SinceBaseMatch(SessionId session) const;
+  // Keyframe-polyline length the session has driven; empty before its first recorded node.
+  std::optional<double> PathLength(SessionId session) const;
 
  private:
   bool IsValidClosure(const PoseGraphData& graph, const NodeId& node_id,

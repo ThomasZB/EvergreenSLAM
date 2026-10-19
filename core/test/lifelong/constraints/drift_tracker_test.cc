@@ -289,6 +289,22 @@ TEST(DriftTracker, TheSuccessorContinuesThePredecessorsOdometerUnderTheNewIds) {
   EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(next), 5.0);
 }
 
+TEST(DriftTracker, PathLengthCountsFromTheFirstNodeWithOrWithoutABaseMatch) {
+  BaseScene scene;
+  BuildBaseScene(scene);
+  PoseGraphData& graph = scene.graph;
+  DriftTracker& tracker = scene.tracker;
+  EXPECT_FALSE(tracker.PathLength(scene.fed).has_value());
+  RecordNode(graph, tracker, scene.fed, 1.0, scene.fed_submap);
+  EXPECT_DOUBLE_EQ(*tracker.PathLength(scene.fed), 0.0);
+  const NodeId node = RecordNode(graph, tracker, scene.fed, 3.5, scene.fed_submap);
+  EXPECT_DOUBLE_EQ(*tracker.PathLength(scene.fed), 2.5);
+  tracker.NoteClosure(graph, node, scene.base_submap);
+  RecordNode(graph, tracker, scene.fed, 4.5, scene.fed_submap);
+  EXPECT_DOUBLE_EQ(*tracker.PathLength(scene.fed), 3.5);
+  EXPECT_DOUBLE_EQ(*tracker.SinceBaseMatch(scene.fed), 1.0);
+}
+
 TEST(DriftTracker, ASweptSessionLosesItsBaseMatch) {
   BaseScene scene;
   BuildBaseScene(scene);
