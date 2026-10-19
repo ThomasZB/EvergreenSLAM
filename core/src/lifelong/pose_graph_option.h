@@ -20,6 +20,7 @@
 
 #include "common/time.h"
 #include "lifelong/constraints/constraint_builder_option.h"
+#include "lifelong/kidnap_detector_option.h"
 #include "lifelong/optimization/optimization_option.h"
 #include "lifelong/pose_graph_trimmer/pose_graph_trimmer_option.h"
 #include "lifelong/sessions/session_manager.h"
@@ -33,6 +34,7 @@ struct PoseGraphOption {
   SessionManagerOption session_manager;
   ConstraintBuilderOption constraint_builder;
   PoseGraphTrimmerOption trimmer;
+  KidnapDetectorOption kidnap_detector;
   bool trim = true;
   int trim_every_n_optimizations = 1;
   // Sensor time; Finish, freeze and rotation write regardless.
@@ -57,6 +59,7 @@ struct PoseGraphOption {
     os << option.session_manager;
     os << option.constraint_builder;
     os << option.trimmer;
+    os << option.kidnap_detector;
     return os;
   }
 };

@@ -34,6 +34,18 @@ struct PoseCorrection {
   double rotation = 0.0;
 };
 
+// What the kidnap detector saw over the keyframes that made it start a global search.
+struct KidnapEvidence {
+  int keyframes = 0;
+  // Lowest frontend match score since the fed session's last closure onto the frozen base;
+  // empty when it never had one, which counts as a break in continuity by itself.
+  std::optional<double> lowest_match_score;
+  // The newest keyframe against the frozen base.
+  double base_score = 0.0;
+  double base_coverage = 0.0;
+  double distance_without_base_match = 0.0;
+};
+
 struct PoseGraphEvent {
   enum class Kind {
     RELOCALIZATION,

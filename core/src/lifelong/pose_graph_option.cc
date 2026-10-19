@@ -27,7 +27,7 @@ const utils::config::Schema& LifelongSchema() {
        {"optimization", "constraint_weight", "session_manager", "constraint_builder", "trimmer",
         "trim", "trim_every_n_optimizations", "checkpoint_min_interval",
         "gc_unfrozen_after_n_boots", "pose_correction_event_translation",
-        "pose_correction_event_rotation"}},
+        "pose_correction_event_rotation", "kidnap_detector"}},
       {"optimization", {"optimize_every_n_nodes", "max_num_iterations", "num_threads"}},
       {"constraint_weight",
        {"odometry_translation_stddev", "odometry_rotation_stddev",
@@ -55,6 +55,10 @@ const utils::config::Schema& LifelongSchema() {
       {"trimmer",
        {"selector", "max_submaps_per_round", "min_recovered_stddev", "max_binary_constraint_length",
         "prior_max_translation_stddev", "prior_max_rotation_stddev"}},
+      {"kidnap_detector",
+       {"enabled", "max_match_score", "max_base_score", "min_base_coverage",
+        "min_distance_without_base_match", "min_suspect_keyframes", "cooldown_keyframes",
+        "max_cooldown_keyframes"}},
       {"trimmer/selector",
        {"submap_coverage_resolution", "node_coverage_resolution", "min_covered_fraction",
         "min_covering_newer_submaps", "min_covered_node_fraction", "coverage_mode",
@@ -82,6 +86,7 @@ PoseGraphOption LoadPoseGraphOption(const YAML::Node& root) {
       utils::scan_matching::LoadFastCorrelativeScanMatcherOption(
           Child(Child(root, "global_scan_matcher"), "fast_correlative"));
   option.trimmer = LoadPoseGraphTrimmerOption(Child(node, "trimmer"));
+  option.kidnap_detector = LoadKidnapDetectorOption(Child(node, "kidnap_detector"));
   option.trim = LoadOption(node, "trim", option.trim);
   option.trim_every_n_optimizations =
       LoadOption(node, "trim_every_n_optimizations", option.trim_every_n_optimizations);

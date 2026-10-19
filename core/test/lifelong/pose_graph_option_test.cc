@@ -238,6 +238,19 @@ void ExpectMatchesDefaults(const PoseGraphOption& option) {
   EXPECT_DOUBLE_EQ(option.pose_correction_event_translation,
                    defaults.pose_correction_event_translation);
   EXPECT_DOUBLE_EQ(option.pose_correction_event_rotation, defaults.pose_correction_event_rotation);
+  EXPECT_EQ(option.kidnap_detector.enabled, defaults.kidnap_detector.enabled);
+  EXPECT_DOUBLE_EQ(option.kidnap_detector.max_match_score,
+                   defaults.kidnap_detector.max_match_score);
+  EXPECT_DOUBLE_EQ(option.kidnap_detector.max_base_score, defaults.kidnap_detector.max_base_score);
+  EXPECT_DOUBLE_EQ(option.kidnap_detector.min_base_coverage,
+                   defaults.kidnap_detector.min_base_coverage);
+  EXPECT_DOUBLE_EQ(option.kidnap_detector.min_distance_without_base_match,
+                   defaults.kidnap_detector.min_distance_without_base_match);
+  EXPECT_EQ(option.kidnap_detector.min_suspect_keyframes,
+            defaults.kidnap_detector.min_suspect_keyframes);
+  EXPECT_EQ(option.kidnap_detector.cooldown_keyframes, defaults.kidnap_detector.cooldown_keyframes);
+  EXPECT_EQ(option.kidnap_detector.max_cooldown_keyframes,
+            defaults.kidnap_detector.max_cooldown_keyframes);
 }
 
 std::string ConfigPath(const std::string& name) {
