@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "lifelong/sessions/frozen_links.h"
+#include "service/graph/relocalization_report.h"
 #include "utils/transform/transform.h"
 
 namespace evergreenslam::agent {
@@ -31,6 +32,8 @@ RobotReading ReadRobotOnTask(const lifelong::PoseGraph& pose_graph, const AgentS
   }
   const lifelong::PoseGraphData& graph = pose_graph.graph();
   reading.since_base_match_m = pose_graph.constraint_builder().drift_tracker().SinceBaseMatch(*fed);
+  reading.kidnap = pose_graph.latest_kidnap();
+  reading.continuity_broken = pose_graph.kidnap_detector().status().continuity_broken;
   const std::vector<lifelong::NodeId>& fed_nodes = graph.session(*fed).node_ids;
   if (!fed_nodes.empty()) {
     const lifelong::Node& newest = graph.node(fed_nodes.back());
@@ -236,6 +239,7 @@ void WriteLocalization(JsonWriter& writer, const RobotReading& reading) {
   } else {
     writer.Null();
   }
+  WriteKidnap(writer, reading.kidnap, reading.continuity_broken);
   writer.EndObject();
 }
 

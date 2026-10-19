@@ -43,6 +43,9 @@ struct RobotReading {
   std::optional<ScanMatch> scan_match;
   std::optional<lifelong::FrozenBaseMap::Agreement> base;
   std::optional<double> since_base_match_m;
+  // PoseGraph::latest_kidnap() and whether the detector still finds continuity broken.
+  std::optional<lifelong::PoseGraphEvent> kidnap;
+  bool continuity_broken = false;
 };
 
 struct RobotAtReading {

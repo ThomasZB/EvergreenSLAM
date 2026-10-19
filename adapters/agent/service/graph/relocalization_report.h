@@ -43,6 +43,9 @@ void WriteRelocalization(JsonWriter& writer,
                          const std::optional<lifelong::RelocalizationStatus>& status,
                          const RelocalizationRequests& requests);
 void WriteEvent(JsonWriter& writer, const lifelong::PoseGraphEvent& event);
+// `localization.kidnap` in /here and /status: the newest KIDNAP_SUSPECTED event, or null.
+void WriteKidnap(JsonWriter& writer, const std::optional<lifelong::PoseGraphEvent>& kidnap,
+                 bool continuity_broken);
 
 }  // namespace evergreenslam::agent
 

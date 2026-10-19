@@ -61,6 +61,24 @@ std::optional<int64_t> SessionIndex(const std::optional<lifelong::SessionId>& id
   return id->session_index;
 }
 
+void WriteKidnapEvidence(JsonWriter& writer, const lifelong::PoseGraphEvent& event) {
+  OptionalInt(writer, "request_id", event.relocalization_id);
+  OptionalInt(writer, "session", SessionIndex(event.session));
+  const lifelong::KidnapEvidence evidence = event.kidnap.value_or(lifelong::KidnapEvidence{});
+  writer.Field("keyframes", evidence.keyframes)
+      .OptionalField("lowest_match_score", evidence.lowest_match_score)
+      .Field("base_score", evidence.base_score)
+      .Field("base_coverage", evidence.base_coverage)
+      .Field("since_base_match_m", evidence.distance_without_base_match);
+}
+
+std::string FallbackKind(const lifelong::RelocalizationStatus& status) {
+  if (status.trigger == lifelong::RelocalizationTrigger::KIDNAP) {
+    return "kidnap";
+  }
+  return status.has_prior ? "pose" : "global";
+}
+
 }  // namespace
 
 void RelocalizationRequests::Remember(lifelong::RelocalizationId id,
@@ -91,10 +109,9 @@ void WriteRelocalization(JsonWriter& writer,
     return;
   }
   const std::optional<RelocalizationRequest> request = requests.Find(status->id);
-  const std::string fallback_kind = status->has_prior ? "pose" : "global";
   writer.BeginObject()
       .Field("id", static_cast<int64_t>(status->id))
-      .Field("kind", request.has_value() ? request->kind : fallback_kind);
+      .Field("kind", request.has_value() ? request->kind : FallbackKind(*status));
   OptionalInt(writer, "anchor",
               request.has_value() && request->anchor.has_value()
                   ? std::optional<int64_t>(static_cast<int64_t>(*request->anchor))
@@ -138,8 +155,23 @@ void WriteEvent(JsonWriter& writer, const lifelong::PoseGraphEvent& event) {
       OptionalInt(writer, "session", SessionIndex(event.session));
       OptionalInt(writer, "fed_now", SessionIndex(event.fed_now));
       break;
+    case Kind::KIDNAP_SUSPECTED:
+      WriteKidnapEvidence(writer, event);
+      break;
   }
   writer.EndObject();
+}
+
+void WriteKidnap(JsonWriter& writer, const std::optional<lifelong::PoseGraphEvent>& kidnap,
+                 bool continuity_broken) {
+  writer.Key("kidnap");
+  if (!kidnap.has_value()) {
+    writer.Null();
+    return;
+  }
+  writer.BeginObject().Field("time_ns", common::ToUnixNanos(kidnap->time));
+  WriteKidnapEvidence(writer, *kidnap);
+  writer.Field("continuity_broken", continuity_broken).EndObject();
 }
 
 }  // namespace evergreenslam::agent
