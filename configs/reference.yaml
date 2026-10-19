@@ -190,7 +190,7 @@ lifelong:
   # Starts a global relocalization on its own when the robot was carried off. Per fed-session
   # keyframe, three signals must hold together for min_suspect_keyframes in a row: continuity
   # broken (a frontend match score at or below max_match_score since the last closure onto the
-  # frozen base, or no such closure yet), the keyframe disagreeing with the frozen base (score
+  # frozen base that the base agreed with, or no such closure yet), the keyframe disagreeing with the frozen base (score
   # below max_base_score over at least min_base_coverage of its points), and
   # min_distance_without_base_match driven without a base closure. Never with no frozen base or
   # while a relocalization is open; logs a kidnap_suspected event.
@@ -201,6 +201,7 @@ lifelong:
     min_base_coverage: 0.5
     min_distance_without_base_match: 3.0  # m
     min_suspect_keyframes: 8
-    # Keyframes after a search settles before another; doubles per no_match up to the max.
+    # Keyframes after a search settles before another; doubles per search up to the max, and
+    # returns to cooldown_keyframes once a base closure the base agrees with mends continuity.
     cooldown_keyframes: 50
     max_cooldown_keyframes: 800

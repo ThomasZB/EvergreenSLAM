@@ -29,11 +29,18 @@ std::optional<KidnapEvidence> KidnapDetector::Observe(const KidnapSignals& signa
   if (!option_.enabled) {
     return std::nullopt;
   }
+  const bool disagrees = signals.base.has_value() && signals.base->score.has_value() &&
+                         signals.base->coverage >= option_.min_base_coverage &&
+                         *signals.base->score < option_.max_base_score;
+  // A closure the graph outvotes still lands, so only one the base agrees with mends continuity.
   if (signals.since_base_match.has_value()) {
     const double mark = signals.path_length - *signals.since_base_match;
     if (!base_match_mark_.has_value() || mark > *base_match_mark_ + kMarkEpsilon) {
-      lowest_match_score_.reset();
       base_match_mark_ = mark;
+      if (!disagrees) {
+        lowest_match_score_.reset();
+        mended_ = true;
+      }
     }
   }
   if (signals.match_score.has_value()) {
@@ -42,17 +49,17 @@ std::optional<KidnapEvidence> KidnapDetector::Observe(const KidnapSignals& signa
   }
   status_.cooldown_keyframes_left = std::max(0, status_.cooldown_keyframes_left - 1);
   status_.continuity_broken =
-      !signals.since_base_match.has_value() ||
+      !mended_ ||
       (lowest_match_score_.has_value() && *lowest_match_score_ <= option_.max_match_score);
+  if (!status_.continuity_broken) {
+    cooldown_keyframes_ = option_.cooldown_keyframes;
+  }
   if (relocalization_open) {
     status_.suspect_keyframes = 0;
     return std::nullopt;
   }
 
   const double distance = signals.since_base_match.value_or(signals.path_length);
-  const bool disagrees = signals.base.has_value() && signals.base->score.has_value() &&
-                         signals.base->coverage >= option_.min_base_coverage &&
-                         *signals.base->score < option_.max_base_score;
   if (!status_.continuity_broken || !disagrees ||
       distance < option_.min_distance_without_base_match) {
     status_.suspect_keyframes = 0;
@@ -66,8 +73,7 @@ std::optional<KidnapEvidence> KidnapDetector::Observe(const KidnapSignals& signa
 
   KidnapEvidence evidence;
   evidence.keyframes = status_.suspect_keyframes;
-  evidence.lowest_match_score =
-      signals.since_base_match.has_value() ? lowest_match_score_ : std::nullopt;
+  evidence.lowest_match_score = mended_ ? lowest_match_score_ : std::nullopt;
   evidence.base_score = *signals.base->score;
   evidence.base_coverage = signals.base->coverage;
   evidence.distance_without_base_match = distance;
@@ -75,12 +81,11 @@ std::optional<KidnapEvidence> KidnapDetector::Observe(const KidnapSignals& signa
   return evidence;
 }
 
+// MATCHED backs off too: on a session the base already pins, a round's few edges can be outvoted
+// and leave the pose where it was. Only mended continuity restores the short wait.
 void KidnapDetector::OnSearchSettled(RelocalizationState state) {
-  if (state == RelocalizationState::MATCHED) {
-    cooldown_keyframes_ = option_.cooldown_keyframes;
-  }
   status_.cooldown_keyframes_left = cooldown_keyframes_;
-  if (state == RelocalizationState::NO_MATCH) {
+  if (state != RelocalizationState::SUPERSEDED) {
     cooldown_keyframes_ = std::min(2 * cooldown_keyframes_, option_.max_cooldown_keyframes);
   }
 }
@@ -90,6 +95,7 @@ void KidnapDetector::Reset() {
   status_.continuity_broken = false;
   lowest_match_score_.reset();
   base_match_mark_.reset();
+  mended_ = false;
 }
 
 }  // namespace evergreenslam::lifelong

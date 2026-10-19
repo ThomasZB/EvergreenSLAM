@@ -111,6 +111,18 @@ TEST(KidnapDetectorTest, ABaseClosureAfterTheBreakMendsContinuity) {
   EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), -1);
 }
 
+// The carry ended next to the base's own walls: a closure lands but the graph outvotes it, so the
+// keyframes still disagree and continuity stays broken.
+TEST(KidnapDetectorTest, ABaseClosureTheBaseDisagreesWithMendsNothing) {
+  Drive drive = Localized();
+  drive.Step(kBrokenMatch, kBadBase);
+  drive.MatchBase();
+  drive.Step(kGoodMatch, kBadBase);
+  EXPECT_TRUE(drive.detector().status().continuity_broken);
+  const int steps = drive.StepsToFire(kGoodMatch, kBadBase);
+  EXPECT_GT(steps, 0);
+}
+
 TEST(KidnapDetectorTest, NoStreakBeforeTheDistanceWithoutABaseClosure) {
   Drive drive = Localized();
   drive.MatchBase();
@@ -196,7 +208,8 @@ TEST(KidnapDetectorTest, ResetRestartsTheStreak) {
   EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 8);
 }
 
-// Each no_match doubles the wait up to the cap; a match restores it.
+// Each search doubles the wait up to the cap, a match included: an outvoted round leaves the pose
+// where it was. Mended continuity restores it.
 TEST(KidnapDetectorTest, TheCooldownBacksOffAfterEachNoMatch) {
   KidnapDetectorOption option;
   option.min_suspect_keyframes = 2;
@@ -212,9 +225,19 @@ TEST(KidnapDetectorTest, TheCooldownBacksOffAfterEachNoMatch) {
   EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 8);
   drive.detector().OnSearchSettled(RelocalizationState::NO_MATCH);
   EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 10);
-  drive.detector().OnSearchSettled(RelocalizationState::NO_MATCH);
-  EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 10);
   drive.detector().OnSearchSettled(RelocalizationState::MATCHED);
+  EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 10);
+  drive.detector().OnSearchSettled(RelocalizationState::NO_MATCH);
+  // A closure the base agrees with: the robot is found again.
+  drive.MatchBase();
+  drive.Step(kGoodMatch, kGoodBase);
+  EXPECT_FALSE(drive.detector().status().continuity_broken);
+  for (int i = 0; i < 10; ++i) {
+    drive.Step(kGoodMatch, kGoodBase);
+  }
+  drive.Step(kBrokenMatch, kBadBase);
+  EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 1);
+  drive.detector().OnSearchSettled(RelocalizationState::NO_MATCH);
   EXPECT_EQ(drive.StepsToFire(kGoodMatch, kBadBase), 4);
 }
 

@@ -31,8 +31,8 @@ struct KidnapDetectorOption {
   double min_distance_without_base_match = 3.0;
   // Consecutive keyframes all three must hold for.
   int min_suspect_keyframes = 8;
-  // Keyframes after a search settles before the next may start; doubled after each no_match up
-  // to max_cooldown_keyframes, back to cooldown_keyframes after a match.
+  // Keyframes after a search settles before the next may start; doubled after each search up to
+  // max_cooldown_keyframes, back to cooldown_keyframes once a base closure mends continuity.
   int cooldown_keyframes = 50;
   int max_cooldown_keyframes = 800;
 

@@ -31,8 +31,8 @@ struct KidnapSignals {
 };
 
 // Three signals must hold together, since each alone has an innocent reading: the frontend lost
-// continuity (a low match score since the last base closure, or no base closure ever: a boot
-// seed is a guess), the newest keyframe disagrees with the frozen base where it can be checked,
+// continuity (a low match score since the last base closure the base agreed with, or no such
+// closure ever: a boot seed is a guess), the newest keyframe disagrees with the frozen base where it can be checked,
 // and no closure onto the base came for a while. Ground the base never mapped leaves coverage
 // low, so exploring is not a kidnap. Backend task only.
 class KidnapDetector {
@@ -49,7 +49,8 @@ class KidnapDetector {
   // correction is on its way, and the signals still describe the pose before it. Returns the
   // evidence when this keyframe completes a streak and no cooldown runs.
   std::optional<KidnapEvidence> Observe(const KidnapSignals& signals, bool relocalization_open);
-  // The search the last verdict started settled; starts the cooldown.
+  // The search the last verdict started settled; starts the cooldown, and unless superseded
+  // doubles the next one. Mended continuity resets it.
   void OnSearchSettled(RelocalizationState state);
   // The fed session was replaced by a fresh one: its marks mean nothing for the next.
   void Reset();
@@ -63,6 +64,8 @@ class KidnapDetector {
   std::optional<double> lowest_match_score_;
   // PathLength - SinceBaseMatch: where the last base closure happened; it only moves forward.
   std::optional<double> base_match_mark_;
+  // A base closure landed while the base agreed with the keyframe: the pose was confirmed.
+  bool mended_ = false;
   int cooldown_keyframes_;
 };
 
