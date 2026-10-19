@@ -78,6 +78,7 @@ class FakeState:
             "since_base_match_m": 3.2,
             "base": {"score": 0.72, "coverage": 0.85},
             "scan_match": {"score": 0.82, "avg": 0.8},
+            "kidnap": None,
         }
         self.base_reads = []
         self.offset_free = True  # False: every --offset target is a wall

@@ -84,6 +84,77 @@ class RelocalizationTest(EgsTestCase):
         self.assertIn(line, self.egs("status")[1].splitlines())
 
 
+KIDNAP = {
+    "time_ns": 5,
+    "request_id": 4,
+    "session": 2,
+    "keyframes": 8,
+    "lowest_match_score": 0.1,
+    "base_score": 0.31,
+    "base_coverage": 0.78,
+    "since_base_match_m": 4.9,
+}
+
+
+class KidnapTest(EgsTestCase):
+    def kidnap(self, request_state, continuity_broken):
+        self.state.localization["kidnap"] = dict(KIDNAP, continuity_broken=continuity_broken)
+        self.state.relocalizations[4] = {
+            "id": 4,
+            "kind": "kidnap",
+            "anchor": None,
+            "state": request_state,
+            "candidates": 12,
+            "constraints": 0,
+            "correction_m": None,
+            "correction_rad": None,
+            "requested_ns": None,
+            "resolved_ns": None,
+            "superseded_by": None,
+        }
+
+    def kidnap_line(self, command="here"):
+        lines = [l for l in self.egs(command)[1].splitlines() if l.startswith("kidnap")]
+        self.assertEqual(len(lines), 1)
+        return lines[0]
+
+    def test_no_line_without_a_kidnap(self):
+        self.assertNotIn("kidnap", self.egs("here")[1])
+        self.assertNotIn("kidnap", self.egs("status")[1])
+
+    def test_a_running_search_says_so(self):
+        self.kidnap("pending", True)
+        self.assertEqual(
+            self.kidnap_line(),
+            "kidnap suspected: base 0.31 (cover 78%), 4.9m without base match, match dipped to "
+            "0.10; request 4, searching",
+        )
+        self.assertIn("relocalization 4 kidnap pending", self.egs("here")[1].splitlines())
+
+    def test_found_again(self):
+        self.kidnap("matched", False)
+        self.assertTrue(self.kidnap_line("status").endswith("; request 4, found again"))
+
+    def test_still_unconfirmed_points_at_the_recovery(self):
+        self.kidnap("matched", True)
+        self.assertTrue(
+            self.kidnap_line().endswith(
+                "not confirmed by the base since: if egs here --sample 20 stays below 0.45, "
+                "egs session rm 2 (plan, then --yes), then egs relocalize"
+            )
+        )
+
+    def test_a_boot_that_never_matched_the_base(self):
+        self.kidnap("no_match", True)
+        self.state.localization["kidnap"]["lowest_match_score"] = None
+        self.assertIn("never matched the base", self.kidnap_line())
+
+    def test_json_carries_the_object(self):
+        self.kidnap("matched", False)
+        obj = json.loads(self.egs("here", "--json")[1])
+        self.assertEqual(obj["localization"]["kidnap"]["request_id"], 4)
+
+
 class EventsTest(EgsTestCase):
     def setUp(self):
         super().setUp()
@@ -114,6 +185,14 @@ class EventsTest(EgsTestCase):
         self.assertEqual(out.splitlines()[0], "3 fed_session_dropped session 2, fed now 3")
         obj = json.loads(self.egs("events", "--since", "4", "--json")[1])
         self.assertEqual((obj["events"], obj["next_seq"], obj["lost"]), ([], 4, False))
+
+    def test_a_kidnap_names_its_evidence_and_search(self):
+        self.state.events.append(dict(KIDNAP, kind="kidnap_suspected"))
+        self.assertEqual(
+            self.egs("events", "--since", "4")[1].splitlines()[0],
+            "4 kidnap_suspected session 2: base 0.31 (cover 78%), 4.9m without base match, "
+            "match dipped to 0.10; searching as request 4",
+        )
 
     def test_lost_events_are_reported(self):
         self.state.events_first_seq = 10

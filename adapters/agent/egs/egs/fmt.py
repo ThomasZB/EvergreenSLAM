@@ -85,7 +85,37 @@ def event(e):
         return "%s session %s moved %s" % (head, e.get("session"), correction(e))
     if kind == "fed_session_dropped":
         return "%s session %s, fed now %s" % (head, e.get("session"), e.get("fed_now"))
+    if kind == "kidnap_suspected":
+        return "%s session %s: %s; searching as request %s" % (
+            head,
+            e.get("session"),
+            _kidnap_evidence(e),
+            e.get("request_id"),
+        )
     return "%s session %s" % (head, e.get("session"))
+
+
+def _kidnap_evidence(k):
+    lowest = k.get("lowest_match_score")
+    return "base %.2f (cover %d%%), %s without base match, %s" % (
+        k["base_score"],
+        round(100 * k["base_coverage"]),
+        meters(k.get("since_base_match_m")),
+        "never matched the base" if lowest is None else "match dipped to %.2f" % lowest,
+    )
+
+
+def kidnap(k, r=None):
+    """The newest kidnap the process suspected on its own, and where its search stands."""
+    head = "kidnap suspected: %s; request %s" % (_kidnap_evidence(k), k.get("request_id"))
+    if r and r.get("id") == k.get("request_id") and r.get("state") == "pending":
+        return head + ", searching"
+    if not k.get("continuity_broken"):
+        return head + ", found again"
+    return head + (
+        ", not confirmed by the base since: if egs here --sample 20 stays below 0.45, "
+        "egs session rm %s (plan, then --yes), then egs relocalize" % k.get("session")
+    )
 
 
 def clock_hour(robot, p):

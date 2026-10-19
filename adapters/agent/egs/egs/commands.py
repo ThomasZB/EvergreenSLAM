@@ -93,10 +93,17 @@ def cmd_here(ctx, args):
     ctx.print(fmt.localization(j.get("localization")))
     if sample is not None:
         ctx.print(fmt.base_sample(sample))
+    _print_kidnap(ctx, j)
     if j.get("relocalization"):
         ctx.print(fmt.relocalization(j["relocalization"]))
     ctx.result(dict(j, robot=jsonout.pose(robot), base_sample=sample))
     return EXIT_OK
+
+
+def _print_kidnap(ctx, j):
+    k = (j.get("localization") or {}).get("kidnap")
+    if k:
+        ctx.print(fmt.kidnap(k, j.get("relocalization")))
 
 
 class _Corrections:
@@ -173,6 +180,7 @@ def cmd_status(ctx, args):
         "anchors %s (orphans %s)  place.yaml files %s"
         % (j.get("num_anchors"), j.get("num_orphans"), j.get("num_place_files")),
     )
+    _print_kidnap(ctx, j)
     if j.get("relocalization"):
         ctx.print(fmt.relocalization(j["relocalization"]))
     dups = j.get("duplicate_anchor_paths") or []
