@@ -387,7 +387,8 @@ process) and return it; the search runs later on the backend task. The object in
 constraints, correction_m|null, correction_rad|null, requested_ns|null, resolved_ns|null,
 superseded_by|null}`.
 - The request's task supersedes every older request still pending (`superseded_by` = its id). A
-  superseded round's matches still land as ordinary constraints but no longer count.
+  superseded round's matches still waiting for a worker are skipped; those already running land
+  as ordinary constraints but no longer count. A fed-session drop skips them the same way.
 - With no node in the fed session yet the request stays `pending` (`requested_ns` null) until the
   first keyframe runs it. Otherwise one candidate round runs against the fed session's newest node
   (`requested_ns` = that node's sensor time): every finished submap of another session the prior

@@ -202,6 +202,7 @@ RelocalizationId PoseGraph::RelocalizeGlobally() {
 }
 
 void PoseGraph::RelocalizeOnTask(RelocalizationId id, const std::optional<Eigen::Affine2d>& prior) {
+  CancelRelocalizationMatches();
   for (const RelocalizationStatus& status : relocalization_.SupersedePending(id, SensorNow())) {
     AppendRelocalizationEvent(status);
   }
@@ -226,8 +227,10 @@ void PoseGraph::StartRelocalizationRound(RelocalizationId id, const NodeId& node
       data_.ComputeSessionToGlobal(session).value_or(data_.session(session).local_to_global) *
       round.node_local);
   relocalization_.BeginRound(round, node.constant_data.time);
+  relocalization_cancel_ = std::make_shared<std::atomic<bool>>(false);
   const int candidates = constraint_builder_.SearchForNodeAroundOnTask(
-      node_id, prior, -1, [this, id](bool accepted) { OnRelocalizationMatch(id, accepted); });
+      node_id, prior, -1, [this, id](bool accepted) { OnRelocalizationMatch(id, accepted); },
+      relocalization_cancel_);
   if (relocalization_.SetCandidates(id, candidates)) {
     SettleRelocalization();
   }
@@ -239,7 +242,15 @@ void PoseGraph::OnRelocalizationMatch(RelocalizationId id, bool accepted) {
   }
 }
 
+void PoseGraph::CancelRelocalizationMatches() {
+  if (relocalization_cancel_ != nullptr) {
+    relocalization_cancel_->store(true);
+    relocalization_cancel_.reset();
+  }
+}
+
 void PoseGraph::SettleRelocalization() {
+  relocalization_cancel_.reset();
   const RelocalizationTracker::Round round = *relocalization_.round();
   RelocalizationState state = RelocalizationState::NO_MATCH;
   std::optional<PoseCorrection> correction;
@@ -611,6 +622,7 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
   last_ingested_node_index_ = -1;
   nodes_since_cadence_ = 0;
   pending_relocalization_.reset();
+  CancelRelocalizationMatches();
   last_checkpoint_time_ = time;
   RepublishActiveSessionToGlobal();
   PoseGraphEvent event;

@@ -14,6 +14,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -161,6 +162,8 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   void StartRelocalizationRound(RelocalizationId id, const NodeId& node_id,
                                 const std::optional<Eigen::Affine2d>& prior);
   void OnRelocalizationMatch(RelocalizationId id, bool accepted);
+  // Superseded or dropped rounds only: their queued matches would hold the workers for nothing.
+  void CancelRelocalizationMatches();
   void SettleRelocalization();
   void AppendRelocalizationEvent(const RelocalizationStatus& status);
   common::Time SensorNow() const;
@@ -201,6 +204,8 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   std::map<int, std::shared_ptr<const mapping::Submap>> watched_submaps_;
   // Backend-task state.
   std::optional<PendingRelocalization> pending_relocalization_;
+  // The open round's flag; workers read it, so it outlives the round in their jobs.
+  std::shared_ptr<std::atomic<bool>> relocalization_cancel_;
   int solves_before_last_add_ = 0;
   // The only solve trigger; freeze and first-anchoring solves neither reset nor shift it.
   int nodes_since_cadence_ = 0;

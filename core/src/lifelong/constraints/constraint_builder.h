@@ -42,6 +42,9 @@ namespace evergreenslam::lifelong {
 class ConstraintBuilder {
  public:
   using MatchObserver = std::function<void(bool accepted)>;
+  // Once set, matches of the round still waiting for a worker are skipped and reported rejected;
+  // running ones finish and land.
+  using CancelFlag = std::shared_ptr<const std::atomic<bool>>;
 
   explicit ConstraintBuilder(ConstraintHandle& handle,
                              const ConstraintBuilderOption& option = ConstraintBuilderOption(),
@@ -56,7 +59,8 @@ class ConstraintBuilder {
   // With a prior, finished submaps of other sessions whose footprint reaches it within the
   // relocalization window are matched from the prior; without one, whole grids over every heading.
   int SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
-                                int budget = -1, MatchObserver observer = nullptr);
+                                int budget = -1, MatchObserver observer = nullptr,
+                                CancelFlag cancel = nullptr);
 
   // Results already enqueued still need a queue drain; WaitUntilQuiescent alternates the two.
   void WaitForMatches() const;
@@ -66,6 +70,8 @@ class ConstraintBuilder {
   int num_constraints_added() const { return num_constraints_added_.load(); }
   // Results whose endpoint was trimmed before they landed.
   int num_constraints_dropped() const { return num_constraints_dropped_.load(); }
+  // Worker matches skipped because their round was cancelled before they started.
+  int num_matches_cancelled() const { return num_matches_cancelled_.load(); }
   int num_precomputation_builds() const { return num_precomputation_builds_.load(); }
   // Backend task state; only meaningful to a caller that has drained the queue.
   int num_cached_precomputations() const { return static_cast<int>(precomputation_cache_.size()); }
@@ -110,7 +116,7 @@ class ConstraintBuilder {
   int RunRound(std::vector<LoopCandidate> candidates, int budget,
                PriorSource source = PriorSource::GRAPH,
                const Eigen::Affine2d& external_prior = Eigen::Affine2d::Identity(),
-               const MatchObserver& observer = nullptr);
+               const MatchObserver& observer = nullptr, const CancelFlag& cancel = nullptr);
   std::optional<MatchInput> PrepareMatch(const LoopCandidate& candidate, PriorSource source,
                                          const Eigen::Affine2d& external_prior);
   std::shared_ptr<const utils::scan_matching::PrecomputationGridStack> PrecomputationFor(
@@ -138,6 +144,7 @@ class ConstraintBuilder {
   std::atomic<int> num_matches_attempted_{0};
   std::atomic<int> num_constraints_added_{0};
   std::atomic<int> num_constraints_dropped_{0};
+  std::atomic<int> num_matches_cancelled_{0};
   std::atomic<int> num_precomputation_builds_{0};
 };
 

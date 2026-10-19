@@ -13,6 +13,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -81,7 +82,8 @@ struct TwoSessions {
 };
 
 std::vector<Report> RunRound(int num_match_workers, const std::optional<Eigen::Affine2d>& prior,
-                             int& selected) {
+                             int& selected, ConstraintBuilder::CancelFlag cancel = nullptr,
+                             int* cancelled = nullptr) {
   TwoSessions world;
   ConstraintBuilderOption option;
   option.num_match_workers = num_match_workers;
@@ -91,12 +93,16 @@ std::vector<Report> RunRound(int num_match_workers, const std::optional<Eigen::A
   world.pose_graph.Enqueue([&] {
     selected = builder.SearchForNodeAroundOnTask(
         world.query, prior, -1,
-        [&reports, &returned](bool accepted) { reports.push_back({accepted, returned}); });
+        [&reports, &returned](bool accepted) { reports.push_back({accepted, returned}); },
+        cancel);
     returned = true;
   });
   world.pose_graph.WaitUntilQuiescent();
   builder.WaitForMatches();
   world.pose_graph.WaitUntilQuiescent();
+  if (cancelled != nullptr) {
+    *cancelled = builder.num_matches_cancelled();
+  }
   return reports;
 }
 
@@ -119,6 +125,31 @@ TEST(RelocalizationRoundE2eTest, WorkerMatchesReportOnTheBackendTaskAfterTheRoun
   ASSERT_EQ(reports.size(), 1u);
   EXPECT_TRUE(reports[0].accepted);
   EXPECT_TRUE(reports[0].after_return);
+}
+
+// Set before the round, so no worker can have started a match ahead of it.
+TEST(RelocalizationRoundE2eTest, ACancelledRoundSkipsItsQueuedMatchesAndReportsThemRejected) {
+  int selected = -1;
+  int cancelled = -1;
+  const std::vector<Report> reports =
+      RunRound(2, kPrior, selected, std::make_shared<const std::atomic<bool>>(true), &cancelled);
+  ASSERT_EQ(selected, 1);
+  EXPECT_EQ(cancelled, 1);
+  ASSERT_EQ(reports.size(), 1u);
+  EXPECT_FALSE(reports[0].accepted);
+  EXPECT_TRUE(reports[0].after_return);
+}
+
+// Inline matches run inside the round itself: there is nothing queued to skip.
+TEST(RelocalizationRoundE2eTest, InlineMatchesIgnoreTheCancelFlag) {
+  int selected = -1;
+  int cancelled = -1;
+  const std::vector<Report> reports =
+      RunRound(0, kPrior, selected, std::make_shared<const std::atomic<bool>>(true), &cancelled);
+  ASSERT_EQ(selected, 1);
+  EXPECT_EQ(cancelled, 0);
+  ASSERT_EQ(reports.size(), 1u);
+  EXPECT_TRUE(reports[0].accepted);
 }
 
 TEST(RelocalizationRoundE2eTest, APriorOutsideEverySubmapSelectsNothingAndReportsNothing) {

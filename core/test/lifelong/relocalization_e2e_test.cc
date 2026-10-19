@@ -321,6 +321,9 @@ TEST_F(RelocalizationE2eTest, ASecondRequestBeforeTheFirstResolvesSupersedesIt) 
   EXPECT_EQ(StatusOf(second).state, RelocalizationState::MATCHED);
   ExpectSnappedOntoTruth(14);
 
+  // Whatever of the first round had not reached a worker never ran.
+  EXPECT_LE(backend_->constraint_builder().num_matches_cancelled(), superseded.candidates);
+
   const std::vector<PoseGraphEvent> outcomes =
       EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION);
   ASSERT_EQ(outcomes.size(), 2u);

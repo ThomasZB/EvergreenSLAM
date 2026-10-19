@@ -121,16 +121,17 @@ void ConstraintBuilder::SearchForSubmapOnTask(const SubmapId& submap_id, int bud
 
 int ConstraintBuilder::SearchForNodeAroundOnTask(const NodeId& node_id,
                                                  const std::optional<Eigen::Affine2d>& prior,
-                                                 int budget, MatchObserver observer) {
+                                                 int budget, MatchObserver observer,
+                                                 CancelFlag cancel) {
   if (!handle_.graph().HasNode(node_id)) {
     return 0;
   }
   if (prior.has_value()) {
     return RunRound(CandidatesAround(node_id, prior), budget, PriorSource::EXTERNAL, *prior,
-                    observer);
+                    observer, cancel);
   }
   return RunRound(CandidatesAround(node_id, std::nullopt), std::numeric_limits<int>::max(),
-                  PriorSource::NONE, Eigen::Affine2d::Identity(), observer);
+                  PriorSource::NONE, Eigen::Affine2d::Identity(), observer, cancel);
 }
 
 void ConstraintBuilder::WaitForMatches() const {
@@ -255,7 +256,7 @@ bool ConstraintBuilder::IsEligiblePair(const NodeId& node_id, const SubmapId& su
 
 int ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budget,
                                 PriorSource source, const Eigen::Affine2d& external_prior,
-                                const MatchObserver& observer) {
+                                const MatchObserver& observer, const CancelFlag& cancel) {
   const std::vector<LoopCandidate> selected = sampler_.Select(std::move(candidates), budget);
   for (const LoopCandidate& candidate : selected) {
     attempted_pairs_.insert({candidate.node_id, candidate.submap_id});
@@ -274,7 +275,14 @@ int ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budge
       }
       continue;
     }
-    pool_->Submit([this, input = std::move(*input), observer] {
+    pool_->Submit([this, input = std::move(*input), observer, cancel] {
+      if (cancel != nullptr && cancel->load()) {
+        num_matches_cancelled_.fetch_add(1);
+        if (observer) {
+          handle_.Enqueue([observer] { observer(false); });
+        }
+        return;
+      }
       const std::optional<Constraint> constraint = RunMatch(input);
       // Graph writes happen on the backend task, never on a worker.
       handle_.Enqueue([this, constraint, observer] {
