@@ -80,7 +80,7 @@ def event(e):
     kind = e.get("kind")
     head = "%s %s" % (e.get("seq"), kind)
     if kind == "relocalization":
-        return "%s request %s %s%s" % (head, e.get("request_id"), e.get("state"), _outcome_tail(e))
+        return "%s %s%s" % (head, e.get("state"), _outcome_tail(e))
     if kind == "pose_correction":
         return "%s session %s moved %s" % (head, e.get("session"), correction(e))
     if kind == "fed_session_dropped":

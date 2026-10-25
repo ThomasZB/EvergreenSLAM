@@ -36,12 +36,32 @@ class TrimmingHandle {
   virtual void Enqueue(TaskQueue::Task task) = 0;
 };
 
+struct ScoredPose {
+  Eigen::Affine2d global_pose = Eigen::Affine2d::Identity();
+  double score = 0.0;
+};
+
+struct MatchRoundSummary {
+  enum class Source { GRAPH, EXTERNAL, NONE };
+
+  Source source = Source::GRAPH;
+  // Absent for a round around a finished submap.
+  std::optional<NodeId> node_id;
+  Eigen::Affine2d node_global_pose = Eigen::Affine2d::Identity();
+  std::optional<Eigen::Affine2d> prior;
+  int candidates = 0;
+  int constraints_added = 0;
+  // Highest refined score of the round, accepted or not.
+  std::optional<ScoredPose> best;
+};
+
 class ConstraintHandle {
  public:
   virtual ~ConstraintHandle() = default;
 
   virtual const PoseGraphData& graph() const = 0;
   virtual bool AddConstraintIfEndpointsLive(const Constraint& constraint) = 0;
+  virtual void OnMatchRoundFinished(const MatchRoundSummary& summary) = 0;
   virtual void Enqueue(TaskQueue::Task task) = 0;
 };
 

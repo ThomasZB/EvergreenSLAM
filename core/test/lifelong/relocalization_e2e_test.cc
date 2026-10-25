@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -131,6 +132,10 @@ class RelocalizationE2eTest : public ::testing::Test {
     PoseGraphOption boot_option = option_;
     boot_option.session_manager.auto_freeze = false;
     backend_ = std::make_unique<PoseGraph>(boot_option, directory_);
+    backend_->AddRelocalizationListener([this](const RelocalizationResult& result) {
+      std::lock_guard<std::mutex> lock(results_mutex_);
+      results_.push_back(result);
+    });
     backend_->Start(TestTime(kTotalSteps), Eigen::Affine2d::Identity());
     session_ = *backend_->session_manager().fed_session();
     frontend_ = std::make_unique<Frontend>(*backend_, local_odometry_);
@@ -144,10 +149,9 @@ class RelocalizationE2eTest : public ::testing::Test {
     next_step_ = last_step + 1;
   }
 
-  RelocalizationStatus StatusOf(RelocalizationId id) const {
-    const std::optional<RelocalizationStatus> status = backend_->relocalization(id);
-    CHECK(status.has_value()) << "request " << id << " is not tracked";
-    return *status;
+  std::vector<RelocalizationResult> Results() {
+    std::lock_guard<std::mutex> lock(results_mutex_);
+    return results_;
   }
 
   NodeId NewestNode() const { return backend_->graph().session(session_).node_ids.back(); }
@@ -199,6 +203,8 @@ class RelocalizationE2eTest : public ::testing::Test {
   std::unique_ptr<Frontend> frontend_;
   SessionId session_;
   int next_step_ = 0;
+  std::mutex results_mutex_;
+  std::vector<RelocalizationResult> results_;
 };
 
 TEST_F(RelocalizationE2eTest, ACorrectHintSnapsTheSessionOntoTheBaseWithoutAKeyframe) {
@@ -210,34 +216,33 @@ TEST_F(RelocalizationE2eTest, ACorrectHintSnapsTheSessionOntoTheBaseWithoutAKeyf
   const int solves_before = backend_->optimization().num_solves();
   const Eigen::Affine2d lost_pose = NewestPose();
   const NodeId hinted_node = NewestNode();
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(hint_step));
-  EXPECT_EQ(id, 1);
-  EXPECT_EQ(StatusOf(id).state, RelocalizationState::PENDING);
+  backend_->SetInitialPose(LoopGroundTruth(hint_step));
   backend_->WaitUntilQuiescent();
   EXPECT_GT(backend_->optimization().num_solves(), solves_before);
   ExpectSnappedOntoTruth(hint_step);
 
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::MATCHED);
-  EXPECT_TRUE(status.has_prior);
-  EXPECT_GT(status.candidates, 0);
-  EXPECT_GT(status.constraints_added, 0);
-  EXPECT_LE(status.constraints_added, status.candidates);
-  ASSERT_TRUE(status.requested_at.has_value());
-  EXPECT_EQ(*status.requested_at, backend_->graph().node(hinted_node).constant_data.time);
-  ASSERT_TRUE(status.resolved_at.has_value());
-  ASSERT_TRUE(status.correction.has_value());
-  EXPECT_NEAR(status.correction->translation,
+  const std::vector<RelocalizationResult> results = Results();
+  ASSERT_EQ(results.size(), 1u);
+  const RelocalizationResult& result = results[0];
+  EXPECT_EQ(result.node_id, hinted_node);
+  ASSERT_TRUE(result.prior.has_value());
+  EXPECT_LT(PoseDistance(*result.prior, LoopGroundTruth(hint_step)), 1e-12);
+  EXPECT_GT(result.candidates, 0);
+  EXPECT_GT(result.constraints_added, 0);
+  EXPECT_LE(result.constraints_added, result.candidates);
+  ASSERT_TRUE(result.correction.has_value());
+  EXPECT_NEAR(result.correction->translation,
               (NewestPose().translation() - lost_pose.translation()).norm(), 0.05);
-  EXPECT_GT(status.correction->translation, 20.0);
-  EXPECT_NEAR(status.correction->rotation, RotationError(lost_pose, hint_step), 0.05);
-  EXPECT_EQ(backend_->latest_relocalization()->id, id);
+  EXPECT_GT(result.correction->translation, 20.0);
+  EXPECT_NEAR(result.correction->rotation, RotationError(lost_pose, hint_step), 0.05);
+  ASSERT_TRUE(result.best.has_value());
+  EXPECT_LT(TranslationError(result.best->global_pose, hint_step), 0.15);
 
   const std::vector<PoseGraphEvent> outcomes =
       EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION);
   ASSERT_EQ(outcomes.size(), 1u);
-  EXPECT_EQ(outcomes[0].relocalization_id, id);
-  EXPECT_EQ(outcomes[0].outcome, RelocalizationState::MATCHED);
+  EXPECT_EQ(outcomes[0].candidates, result.candidates);
+  EXPECT_EQ(outcomes[0].constraints_added, result.constraints_added);
   ASSERT_TRUE(outcomes[0].correction.has_value());
   EXPECT_GT(outcomes[0].correction->translation, 20.0);
   const std::vector<PoseGraphEvent> jumps =
@@ -257,138 +262,127 @@ TEST_F(RelocalizationE2eTest, AWrongHintMovesNothingAndTheResentHintSucceeds) {
 
   const Eigen::Affine2d wrong =
       Eigen::Affine2d(LoopGroundTruth(14) * transform::FromXYTheta(-3.5, 2.5, 1.3));
-  const RelocalizationId wrong_id = backend_->SetInitialPose(wrong);
+  backend_->SetInitialPose(wrong);
   backend_->WaitUntilQuiescent();
   EXPECT_GT(backend_->constraint_builder().num_matches_attempted(), 0)
       << "the wrong hint still lies inside the room, so candidates exist";
   ExpectLost(14);
-  const RelocalizationStatus rejected = StatusOf(wrong_id);
-  EXPECT_EQ(rejected.state, RelocalizationState::NO_MATCH);
+  ASSERT_EQ(Results().size(), 1u);
+  const RelocalizationResult rejected = Results()[0];
   EXPECT_GT(rejected.candidates, 0);
   EXPECT_EQ(rejected.constraints_added, 0);
   EXPECT_FALSE(rejected.correction.has_value());
 
   FeedThrough(20);
   ExpectLost(20);
-  const RelocalizationId resent_id = backend_->SetInitialPose(LoopGroundTruth(20));
-  EXPECT_EQ(resent_id, wrong_id + 1);
+  backend_->SetInitialPose(LoopGroundTruth(20));
   backend_->WaitUntilQuiescent();
   ExpectSnappedOntoTruth(20);
-  EXPECT_EQ(StatusOf(resent_id).state, RelocalizationState::MATCHED);
-  EXPECT_EQ(StatusOf(wrong_id).state, RelocalizationState::NO_MATCH);
+  ASSERT_EQ(Results().size(), 2u);
+  EXPECT_GT(Results()[1].constraints_added, 0);
 }
 
-TEST_F(RelocalizationE2eTest, AHintOutsideEveryFinishedSubmapIsNoMatchWithZeroCandidates) {
+TEST_F(RelocalizationE2eTest, AHintOutsideEveryFinishedSubmapReportsZeroCandidates) {
   Boot();
   FeedThrough(14);
   const int attempted_before = backend_->constraint_builder().num_matches_attempted();
-  const RelocalizationId id = backend_->SetInitialPose(transform::FromXYTheta(400.0, -250.0, 0.3));
+  backend_->SetInitialPose(transform::FromXYTheta(400.0, -250.0, 0.3));
   backend_->WaitUntilQuiescent();
   EXPECT_EQ(backend_->constraint_builder().num_matches_attempted(), attempted_before);
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::NO_MATCH);
-  EXPECT_EQ(status.candidates, 0);
-  EXPECT_TRUE(status.resolved_at.has_value());
+  ASSERT_EQ(Results().size(), 1u);
+  EXPECT_EQ(Results()[0].candidates, 0);
+  EXPECT_EQ(Results()[0].constraints_added, 0);
+  EXPECT_FALSE(Results()[0].best.has_value());
   ExpectLost(14);
 }
 
-TEST_F(RelocalizationE2eTest, AGlobalSearchWithoutAPriorResolvesToo) {
+TEST_F(RelocalizationE2eTest, AGlobalSearchWithoutAPriorReportsToo) {
   Boot();
   FeedThrough(14);
-  const RelocalizationId id = backend_->RelocalizeGlobally();
+  backend_->RelocalizeGlobally();
   backend_->WaitUntilQuiescent();
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_FALSE(status.has_prior);
-  EXPECT_NE(status.state, RelocalizationState::PENDING);
-  EXPECT_GT(status.candidates, 0);
-  if (status.state == RelocalizationState::MATCHED) {
+  ASSERT_EQ(Results().size(), 1u);
+  const RelocalizationResult result = Results()[0];
+  EXPECT_FALSE(result.prior.has_value());
+  EXPECT_GT(result.candidates, 0);
+  if (result.constraints_added > 0) {
     ExpectSnappedOntoTruth(14);
   }
 }
 
-// The second request's task runs before any worker result of the first is applied.
-TEST_F(RelocalizationE2eTest, ASecondRequestBeforeTheFirstResolvesSupersedesIt) {
+// The second request's task runs before any worker result of the first is applied; the rounds
+// still report one result each, in request order.
+TEST_F(RelocalizationE2eTest, BackToBackRequestsReportOneResultEachInOrder) {
   Boot();
   FeedThrough(14);
-  const RelocalizationId first = backend_->SetInitialPose(LoopGroundTruth(14));
-  const RelocalizationId second = backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->RelocalizeGlobally();
   backend_->WaitUntilQuiescent();
-
-  const RelocalizationStatus superseded = StatusOf(first);
-  EXPECT_EQ(superseded.state, RelocalizationState::SUPERSEDED);
-  EXPECT_EQ(superseded.superseded_by, second);
-  EXPECT_GT(superseded.candidates, 0);
-  EXPECT_EQ(StatusOf(second).state, RelocalizationState::MATCHED);
   ExpectSnappedOntoTruth(14);
-
-  const std::vector<PoseGraphEvent> outcomes =
-      EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION);
-  ASSERT_EQ(outcomes.size(), 2u);
-  EXPECT_EQ(outcomes[0].relocalization_id, first);
-  EXPECT_EQ(outcomes[0].outcome, RelocalizationState::SUPERSEDED);
-  EXPECT_EQ(outcomes[1].relocalization_id, second);
-  EXPECT_EQ(outcomes[1].outcome, RelocalizationState::MATCHED);
+  const std::vector<RelocalizationResult> results = Results();
+  ASSERT_EQ(results.size(), 2u);
+  EXPECT_TRUE(results[0].prior.has_value());
+  EXPECT_FALSE(results[1].prior.has_value());
+  EXPECT_EQ(results[0].node_id, results[1].node_id);
+  EXPECT_EQ(EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION).size(), 2u);
 }
 
+// Only the newest hint waits for the first keyframe; the older one never runs.
 TEST_F(RelocalizationE2eTest, AHintSentBeforeTheFirstKeyframeIsAppliedToIt) {
   Boot();
-  const RelocalizationId stale = backend_->SetInitialPose(
+  backend_->SetInitialPose(
       Eigen::Affine2d(LoopGroundTruth(0) * transform::FromXYTheta(-3.5, 2.5, 1.3)));
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(0));
+  backend_->SetInitialPose(LoopGroundTruth(0));
   backend_->WaitUntilQuiescent();
   EXPECT_EQ(backend_->constraint_builder().num_matches_attempted(), 0);
-  EXPECT_EQ(StatusOf(stale).state, RelocalizationState::SUPERSEDED);
-  EXPECT_EQ(StatusOf(stale).superseded_by, id);
-  EXPECT_EQ(StatusOf(id).state, RelocalizationState::PENDING);
-  EXPECT_FALSE(StatusOf(id).requested_at.has_value());
+  EXPECT_TRUE(Results().empty());
 
   FeedThrough(0);
   ExpectSnappedOntoTruth(0);
-  EXPECT_EQ(StatusOf(id).state, RelocalizationState::MATCHED);
-  EXPECT_EQ(StatusOf(id).requested_at, TestTime(0));
-  ASSERT_TRUE(StatusOf(id).correction.has_value());
-  EXPECT_GT(StatusOf(id).correction->translation, 20.0);
+  ASSERT_EQ(Results().size(), 1u);
+  const RelocalizationResult result = Results()[0];
+  ASSERT_TRUE(result.prior.has_value());
+  EXPECT_LT(PoseDistance(*result.prior, LoopGroundTruth(0)), 1e-12);
+  EXPECT_EQ(backend_->graph().node(result.node_id).constant_data.time, TestTime(0));
+  ASSERT_TRUE(result.correction.has_value());
+  EXPECT_GT(result.correction->translation, 20.0);
 }
 
-TEST_F(RelocalizationE2eTest, DroppingTheFedSessionSupersedesAWaitingRequest) {
+TEST_F(RelocalizationE2eTest, DroppingTheFedSessionDiscardsAWaitingRequest) {
   Boot();
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(0));
+  backend_->SetInitialPose(LoopGroundTruth(0));
   backend_->WaitUntilQuiescent();
   const PoseGraph::DropFedSessionResult dropped = backend_->DropFedSession(session_);
   ASSERT_TRUE(dropped.fed_now.has_value());
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::SUPERSEDED);
-  EXPECT_FALSE(status.superseded_by.has_value());
+  backend_->WaitUntilQuiescent();
+  EXPECT_TRUE(Results().empty());
 
   const std::vector<PoseGraphEvent> events = backend_->EventsSince(0).events;
-  ASSERT_GE(events.size(), 3u);
-  const PoseGraphEvent& removed = events[events.size() - 3];
+  ASSERT_GE(events.size(), 2u);
+  const PoseGraphEvent& removed = events[events.size() - 2];
   EXPECT_EQ(removed.kind, PoseGraphEvent::Kind::SESSION_REMOVED);
   EXPECT_EQ(removed.session, session_);
-  const PoseGraphEvent& drop = events[events.size() - 2];
+  const PoseGraphEvent& drop = events.back();
   EXPECT_EQ(drop.kind, PoseGraphEvent::Kind::FED_SESSION_DROPPED);
   EXPECT_EQ(drop.session, session_);
   EXPECT_EQ(drop.fed_now, dropped.fed_now);
-  EXPECT_EQ(events.back().kind, PoseGraphEvent::Kind::RELOCALIZATION);
-  EXPECT_EQ(events.back().outcome, RelocalizationState::SUPERSEDED);
 }
 
 // The drop task is queued behind the request's, so its worker matches land on a removed node.
-TEST_F(RelocalizationE2eTest, DroppingTheFedSessionMidRoundDiscardsTheRoundsMatches) {
+TEST_F(RelocalizationE2eTest, DroppingTheFedSessionMidRoundDiscardsTheRound) {
   Boot();
   FeedThrough(14);
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->SetInitialPose(LoopGroundTruth(14));
   const PoseGraph::DropFedSessionResult dropped = backend_->DropFedSession(session_);
   ASSERT_TRUE(dropped.fed_now.has_value());
   backend_->WaitUntilQuiescent();
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::SUPERSEDED);
-  EXPECT_GT(status.candidates, 0);
-  EXPECT_FALSE(status.superseded_by.has_value());
+  EXPECT_TRUE(Results().empty());
+  EXPECT_TRUE(EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION).empty());
   EXPECT_EQ(CountClosuresOntoOtherSessions(backend_->graph(), *dropped.fed_now), 0);
 }
 
-TEST_F(RelocalizationE2eTest, AHintOnAnAnchoredSessionAddsAClosureAndOneSolveWithoutReseeding) {
+// Only the first anchoring solves at once; later closures wait for the cadence.
+TEST_F(RelocalizationE2eTest, AHintOnAnAnchoredSessionAddsAClosureWithoutReseedingOrSolving) {
   Boot();
   FeedThrough(14);
   backend_->SetInitialPose(LoopGroundTruth(14));
@@ -400,18 +394,19 @@ TEST_F(RelocalizationE2eTest, AHintOnAnAnchoredSessionAddsAClosureAndOneSolveWit
   const int closures_before = NumClosuresOntoOtherSessions();
   const int solves_before = backend_->optimization().num_solves();
   const Eigen::Affine2d alignment_before = backend_->graph().session(session_).local_to_global;
-  const RelocalizationId id = backend_->SetInitialPose(
+  backend_->SetInitialPose(
       Eigen::Affine2d(LoopGroundTruth(20) * transform::FromXYTheta(0.2, -0.1, 0.05)));
   backend_->WaitUntilQuiescent();
   EXPECT_GT(NumClosuresOntoOtherSessions(), closures_before);
-  EXPECT_EQ(backend_->optimization().num_solves(), solves_before + 1);
+  EXPECT_EQ(backend_->optimization().num_solves(), solves_before);
   EXPECT_LT(PoseDistance(backend_->graph().session(session_).local_to_global, alignment_before),
             1e-12);
   ExpectSnappedOntoTruth(20);
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::MATCHED);
-  ASSERT_TRUE(status.correction.has_value());
-  EXPECT_LT(status.correction->translation, 0.1);
+  ASSERT_EQ(Results().size(), 2u);
+  const RelocalizationResult result = Results()[1];
+  EXPECT_GT(result.constraints_added, 0);
+  ASSERT_TRUE(result.correction.has_value());
+  EXPECT_LT(result.correction->translation, 0.1);
 }
 
 // An anchored session pinned to a wrong pose by `count` closures onto the base, newest nodes first.
@@ -449,30 +444,30 @@ TEST_F(RelocalizationE2eTest, AHintOnASessionPinnedByOneWrongClosureOutvotesIt) 
   PinWithWrongClosures(*backend_, session_, 1, option_.constraint_weight);
   ASSERT_GT(TranslationError(NewestPose(), 14), 1.5);
 
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->SetInitialPose(LoopGroundTruth(14));
   backend_->WaitUntilQuiescent();
-  EXPECT_EQ(StatusOf(id).state, RelocalizationState::MATCHED);
-  EXPECT_GT(StatusOf(id).constraints_added, 1);
+  ASSERT_EQ(Results().size(), 1u);
+  EXPECT_GT(Results()[0].constraints_added, 1);
+  backend_->Optimize();
+  backend_->WaitUntilQuiescent();
   EXPECT_LT(TranslationError(NewestPose(), 14), 0.15);
 }
 
-// What `session rm <fed>` then `init-pose` is for: MATCHED, yet the robot stays where it was.
+// What `session rm <fed>` then `init-pose` is for: closures land, yet the robot stays where it was.
 TEST_F(RelocalizationE2eTest, AHintOnASessionPinnedBySixWrongClosuresMatchesButLeavesItWrong) {
   Boot();
   FeedThrough(14);
   PinWithWrongClosures(*backend_, session_, 6, option_.constraint_weight);
-  const double error_before = TranslationError(NewestPose(), 14);
-  ASSERT_GT(error_before, 1.5);
+  ASSERT_GT(TranslationError(NewestPose(), 14), 1.5);
 
-  const RelocalizationId id = backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->SetInitialPose(LoopGroundTruth(14));
   backend_->WaitUntilQuiescent();
-  const RelocalizationStatus status = StatusOf(id);
-  EXPECT_EQ(status.state, RelocalizationState::MATCHED);
-  EXPECT_GT(status.constraints_added, 0);
-  EXPECT_LT(status.constraints_added, 6);
+  ASSERT_EQ(Results().size(), 1u);
+  EXPECT_GT(Results()[0].constraints_added, 0);
+  EXPECT_LT(Results()[0].constraints_added, 6);
+  backend_->Optimize();
+  backend_->WaitUntilQuiescent();
   EXPECT_GT(TranslationError(NewestPose(), 14), 1.0);
-  ASSERT_TRUE(status.correction.has_value());
-  EXPECT_LT(status.correction->translation, error_before - 1.0);
 }
 
 }  // namespace

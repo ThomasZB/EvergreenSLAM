@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "lifelong/pose_graph.h"
@@ -50,7 +51,8 @@ struct ServiceContext {
   std::atomic<bool> stopping{false};
   // Set once switch_map accepted a request; this service is torn down before it would clear.
   std::atomic<bool> switch_pending{false};
-  RelocalizationRequests relocalizations;
+  // Shared with the backend's relocalization listener, which may outlive this service.
+  const std::shared_ptr<RelocalizationRequests> relocalizations;
 
   // Serial-executor state: only one handler runs at a time, so none of this is shared.
   HereTracker here;

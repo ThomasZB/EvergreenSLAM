@@ -41,6 +41,7 @@ ServiceContext::ServiceContext(lifelong::PoseGraph& pose_graph, AgentServiceHook
       zones(this->places.memory_dir()),
       map_root(std::move(map_root)),
       map_name(std::move(map_name)),
+      relocalizations(RelocalizationRequests::Attach(pose_graph)),
       snapshots((std::filesystem::path(this->places.map_dir()) / "snapshots").string()),
       next_view_seq(NextSequenceNumber(views_dir())) {}
 

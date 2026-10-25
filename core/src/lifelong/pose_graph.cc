@@ -13,8 +13,6 @@
 
 #include <glog/logging.h>
 
-#include <algorithm>
-#include <cmath>
 #include <future>
 #include <optional>
 #include <set>
@@ -26,7 +24,6 @@
 #include "lifelong/global_map.h"
 #include "lifelong/sessions/frozen_links.h"
 #include "mapping/grid_mapping/probability_values.h"
-#include "utils/transform/transform.h"
 
 namespace evergreenslam::lifelong {
 namespace {
@@ -47,12 +44,6 @@ bool IsKnownFree(const PoseGraphData& graph, const SubmapId& submap_id,
   // Read from a snapshot to avoid racing with frontend updates.
   const uint8_t value = submap->SnapshotCopy().GetValueAtPoint(point_in_submap);
   return mapping::IsKnownValue(value) && mapping::ValueToProbability(value) < 0.5;
-}
-
-PoseCorrection CorrectionBetween(const Eigen::Affine2d& before, const Eigen::Affine2d& after) {
-  return PoseCorrection{(after.translation() - before.translation()).norm(),
-                        std::abs(utils::transform::NormalizeAngle(
-                            utils::transform::GetYaw(after) - utils::transform::GetYaw(before)))};
 }
 
 }  // namespace
@@ -76,12 +67,15 @@ PoseGraph::PoseGraph(const PoseGraphOption& option, const std::string& map_direc
       optimization_(option_.optimization, option_.constraint_weight),
       session_manager_(*this, option_.session_manager),
       constraint_builder_(*this, option_.constraint_builder, option_.constraint_weight),
-      trimmer_(*this, option_.trimmer) {
+      trimmer_(*this, option_.trimmer),
+      event_reporter_(std::make_shared<EventReporter>(data_, option_.reporting)),
+      relocalization_reporter_(data_, *event_reporter_) {
   if (!map_directory.empty()) {
     map_manager_ = std::make_shared<MapManager>(map_directory, anchor_store_);
     session_manager_.AddObserver(map_manager_);
   }
   session_manager_.AddObserver(std::make_shared<SessionAlignmentObserver>(*this));
+  session_manager_.AddObserver(event_reporter_);
 }
 
 PoseGraph::~PoseGraph() {
@@ -187,95 +181,27 @@ void PoseGraph::Finish() {
   RepublishActiveSessionToGlobal();
 }
 
-RelocalizationId PoseGraph::SetInitialPose(const Eigen::Affine2d& global_pose) {
+void PoseGraph::SetInitialPose(const Eigen::Affine2d& global_pose) {
   CHECK(started_) << "boot through Start first";
-  const RelocalizationId id = relocalization_.Mint(/*has_prior=*/true);
-  task_queue_.Enqueue([this, id, global_pose] { RelocalizeOnTask(id, global_pose); });
-  return id;
+  task_queue_.Enqueue([this, global_pose] { RelocalizeOnTask(global_pose); });
 }
 
-RelocalizationId PoseGraph::RelocalizeGlobally() {
+void PoseGraph::RelocalizeGlobally() {
   CHECK(started_) << "boot through Start first";
-  const RelocalizationId id = relocalization_.Mint(/*has_prior=*/false);
-  task_queue_.Enqueue([this, id] { RelocalizeOnTask(id, std::nullopt); });
-  return id;
+  task_queue_.Enqueue([this] { RelocalizeOnTask(std::nullopt); });
 }
 
-void PoseGraph::RelocalizeOnTask(RelocalizationId id, const std::optional<Eigen::Affine2d>& prior) {
-  for (const RelocalizationStatus& status : relocalization_.SupersedePending(id, SensorNow())) {
-    AppendRelocalizationEvent(status);
-  }
-  pending_relocalization_.reset();
-  relocalization_.MarkStarted(id);
+void PoseGraph::RelocalizeOnTask(const std::optional<Eigen::Affine2d>& prior) {
   const std::vector<NodeId>& node_ids = data_.session(*session_manager_.fed_session()).node_ids;
   if (node_ids.empty()) {
-    pending_relocalization_ = PendingRelocalization{id, prior};
+    pending_relocalization_ = PendingRelocalization{prior};
     return;
   }
-  StartRelocalizationRound(id, node_ids.back(), prior);
+  constraint_builder_.SearchForNodeAroundOnTask(node_ids.back(), prior);
 }
 
-void PoseGraph::StartRelocalizationRound(RelocalizationId id, const NodeId& node_id,
-                                         const std::optional<Eigen::Affine2d>& prior) {
-  const Node& node = data_.node(node_id);
-  RelocalizationTracker::Round round;
-  round.id = id;
-  round.node_local = node.constant_data.local_pose;
-  const SessionId session = SessionOf(node_id);
-  round.robot_before = Eigen::Affine2d(
-      data_.ComputeSessionToGlobal(session).value_or(data_.session(session).local_to_global) *
-      round.node_local);
-  relocalization_.BeginRound(round, node.constant_data.time);
-  const int candidates = constraint_builder_.SearchForNodeAroundOnTask(
-      node_id, prior, -1, [this, id](bool accepted) { OnRelocalizationMatch(id, accepted); });
-  if (relocalization_.SetCandidates(id, candidates)) {
-    SettleRelocalization();
-  }
-}
-
-void PoseGraph::OnRelocalizationMatch(RelocalizationId id, bool accepted) {
-  if (relocalization_.NoteMatch(id, accepted, solves_before_last_add_)) {
-    SettleRelocalization();
-  }
-}
-
-void PoseGraph::SettleRelocalization() {
-  const RelocalizationTracker::Round round = *relocalization_.round();
-  RelocalizationState state = RelocalizationState::NO_MATCH;
-  std::optional<PoseCorrection> correction;
-  if (round.accepted > 0) {
-    state = RelocalizationState::MATCHED;
-    if (optimization_.num_solves() == round.solves_before_last_accept) {
-      OptimizeOnTask();
-    }
-    RepublishActiveSessionToGlobal();
-    const std::optional<Eigen::Affine2d> published = ActiveSessionToGlobal();
-    if (published.has_value()) {
-      correction = CorrectionBetween(round.robot_before, *published * round.node_local);
-    }
-  }
-  AppendRelocalizationEvent(relocalization_.Resolve(state, correction, SensorNow()));
-}
-
-void PoseGraph::AppendRelocalizationEvent(const RelocalizationStatus& status) {
-  PoseGraphEvent event;
-  event.time = status.resolved_at.value_or(SensorNow());
-  event.kind = PoseGraphEvent::Kind::RELOCALIZATION;
-  event.relocalization_id = status.id;
-  event.outcome = status.state;
-  event.candidates = status.candidates;
-  event.constraints_added = status.constraints_added;
-  event.superseded_by = status.superseded_by;
-  event.correction = status.correction;
-  events_.Append(std::move(event));
-}
-
-common::Time PoseGraph::SensorNow() const {
-  common::Time newest;
-  for (const auto& [id, session] : data_.sessions()) {
-    newest = std::max(newest, session.last_node_time);
-  }
-  return newest;
+void PoseGraph::AddRelocalizationListener(RelocalizationReporter::Listener listener) {
+  relocalization_reporter_.AddListener(std::move(listener));
 }
 
 // A floating session seeded at identity can sit tens of metres and a right angle from where its
@@ -463,9 +389,12 @@ bool PoseGraph::AddConstraintIfEndpointsLive(const Constraint& constraint) {
       (constraint.to.has_value() && !data_.HasVariable(*constraint.to))) {
     return false;
   }
-  solves_before_last_add_ = optimization_.num_solves();
   HandleConstraint(constraint);
   return true;
+}
+
+void PoseGraph::OnMatchRoundFinished(const MatchRoundSummary& summary) {
+  relocalization_reporter_.OnMatchRoundFinished(summary);
 }
 
 TrimReport PoseGraph::ApplyTrim(const TrimRequest& request) {
@@ -497,7 +426,7 @@ TrimReport PoseGraph::ApplyTrim(const TrimRequest& request) {
 }
 
 void PoseGraph::RemoveSession(SessionId id) {
-  const common::Time time = SensorNow();
+  event_reporter_->OnSessionRemoved(id);
   // Collected before the graph erases the SessionData that lists them.
   const SessionData& session = data_.session(id);
   std::vector<VariableId> variables;
@@ -516,11 +445,6 @@ void PoseGraph::RemoveSession(SessionId id) {
   if (map_manager_ != nullptr) {
     map_manager_->RemoveSession(data_, id);
   }
-  PoseGraphEvent event;
-  event.time = time;
-  event.kind = PoseGraphEvent::Kind::SESSION_REMOVED;
-  event.session = id;
-  events_.Append(std::move(event));
 }
 
 void PoseGraph::Optimize() {
@@ -613,15 +537,7 @@ PoseGraph::DropFedSessionResult PoseGraph::DropFedSessionOnTask(SessionId id) {
   pending_relocalization_.reset();
   last_checkpoint_time_ = time;
   RepublishActiveSessionToGlobal();
-  PoseGraphEvent event;
-  event.time = time;
-  event.kind = PoseGraphEvent::Kind::FED_SESSION_DROPPED;
-  event.session = id;
-  event.fed_now = next;
-  events_.Append(std::move(event));
-  for (const RelocalizationStatus& status : relocalization_.SupersedePending(std::nullopt, time)) {
-    AppendRelocalizationEvent(status);
-  }
+  event_reporter_->OnFedSessionDropped(id, next, time);
   LOG(INFO) << "fed session " << id.session_index << " dropped; session " << next.session_index
             << " is fed now";
   return DropFedSessionResult{next, Refusal::NONE};
@@ -737,9 +653,9 @@ void PoseGraph::HandleInsertionResult(
   }
 
   if (pending_relocalization_.has_value()) {
-    const PendingRelocalization pending = *pending_relocalization_;
+    const std::optional<Eigen::Affine2d> prior = pending_relocalization_->prior;
     pending_relocalization_.reset();
-    StartRelocalizationRound(pending.id, node.id, pending.prior);
+    constraint_builder_.SearchForNodeAroundOnTask(node.id, prior);
   }
   ++nodes_since_cadence_;
 }
@@ -783,11 +699,6 @@ void PoseGraph::CheckAndFreezeSession(SessionId id) {
   } else {
     data_.FreezeSession(id);
     optimization_.FreezeSession(id);
-    PoseGraphEvent event;
-    event.time = SensorNow();
-    event.kind = PoseGraphEvent::Kind::SESSION_FROZEN;
-    event.session = id;
-    events_.Append(std::move(event));
   }
 }
 
@@ -795,34 +706,10 @@ void PoseGraph::RepublishActiveSessionToGlobal() {
   const std::optional<SessionId> fed = session_manager_.fed_session();
   CHECK(fed.has_value());
   const std::optional<Eigen::Affine2d> session_to_global = data_.ComputeSessionToGlobal(*fed);
-  std::optional<Eigen::Affine2d> previous;
-  {
-    std::lock_guard<std::mutex> lock(active_session_to_global_mutex_);
-    previous = active_session_to_global_;
-    // The alignment moves with every solve even when the session does not.
-    active_session_to_global_ = session_to_global;
-  }
-  const bool same_session = published_fed_ == fed;
-  published_fed_ = fed;
-  const std::vector<NodeId>& node_ids = data_.session(*fed).node_ids;
-  if (!same_session || !previous.has_value() || !session_to_global.has_value() ||
-      node_ids.empty()) {
-    return;
-  }
-  const Node& newest = data_.node(node_ids.back());
-  const Eigen::Affine2d& local = newest.constant_data.local_pose;
-  const PoseCorrection correction =
-      CorrectionBetween(*previous * local, *session_to_global * local);
-  if (correction.translation <= option_.pose_correction_event_translation &&
-      correction.rotation <= option_.pose_correction_event_rotation) {
-    return;
-  }
-  PoseGraphEvent event;
-  event.time = newest.constant_data.time;
-  event.kind = PoseGraphEvent::Kind::POSE_CORRECTION;
-  event.session = *fed;
-  event.correction = correction;
-  events_.Append(std::move(event));
+  event_reporter_->OnAlignmentPublished(*fed, session_to_global);
+  std::lock_guard<std::mutex> lock(active_session_to_global_mutex_);
+  // The alignment moves with every solve even when the session does not.
+  active_session_to_global_ = session_to_global;
 }
 
 void PoseGraph::SearchForFinishedSubmaps(

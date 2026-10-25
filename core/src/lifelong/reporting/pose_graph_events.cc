@@ -9,24 +9,19 @@
  *
  */
 
-#include "lifelong/pose_graph_events.h"
+#include "lifelong/reporting/pose_graph_events.h"
 
+#include <cmath>
 #include <utility>
+
+#include "utils/transform/transform.h"
 
 namespace evergreenslam::lifelong {
 
-const char* ToString(RelocalizationState state) {
-  switch (state) {
-    case RelocalizationState::PENDING:
-      return "PENDING";
-    case RelocalizationState::MATCHED:
-      return "MATCHED";
-    case RelocalizationState::NO_MATCH:
-      return "NO_MATCH";
-    case RelocalizationState::SUPERSEDED:
-      return "SUPERSEDED";
-  }
-  return "PENDING";
+PoseCorrection CorrectionBetween(const Eigen::Affine2d& before, const Eigen::Affine2d& after) {
+  return PoseCorrection{(after.translation() - before.translation()).norm(),
+                        std::abs(utils::transform::NormalizeAngle(
+                            utils::transform::GetYaw(after) - utils::transform::GetYaw(before)))};
 }
 
 const char* ToString(PoseGraphEvent::Kind kind) {

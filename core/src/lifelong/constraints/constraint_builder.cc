@@ -107,7 +107,8 @@ void ConstraintBuilder::SearchForNodeOnTask(const NodeId& node_id, int budget) {
   if (!sampler_.ShouldSampleRound()) {
     return;
   }
-  RunRound(CandidatesForNode(node_id), budget);
+  RunRound(CandidatesForNode(node_id), budget,
+           NodeRound(node_id, PriorSource::GRAPH, std::nullopt));
 }
 
 void ConstraintBuilder::SearchForSubmapOnTask(const SubmapId& submap_id, int budget) {
@@ -116,21 +117,22 @@ void ConstraintBuilder::SearchForSubmapOnTask(const SubmapId& submap_id, int bud
       graph.submap(submap_id).submap->grid().empty()) {
     return;
   }
-  RunRound(CandidatesForSubmap(submap_id), budget);
+  RunRound(CandidatesForSubmap(submap_id), budget, MatchRoundSummary{});
 }
 
-int ConstraintBuilder::SearchForNodeAroundOnTask(const NodeId& node_id,
-                                                 const std::optional<Eigen::Affine2d>& prior,
-                                                 int budget, MatchObserver observer) {
+void ConstraintBuilder::SearchForNodeAroundOnTask(const NodeId& node_id,
+                                                  const std::optional<Eigen::Affine2d>& prior,
+                                                  int budget) {
   if (!handle_.graph().HasNode(node_id)) {
-    return 0;
+    return;
   }
   if (prior.has_value()) {
-    return RunRound(CandidatesAround(node_id, prior), budget, PriorSource::EXTERNAL, *prior,
-                    observer);
+    RunRound(CandidatesAround(node_id, prior), budget,
+             NodeRound(node_id, PriorSource::EXTERNAL, prior));
+    return;
   }
-  return RunRound(CandidatesAround(node_id, std::nullopt), std::numeric_limits<int>::max(),
-                  PriorSource::NONE, Eigen::Affine2d::Identity(), observer);
+  RunRound(CandidatesAround(node_id, std::nullopt), std::numeric_limits<int>::max(),
+           NodeRound(node_id, PriorSource::NONE, std::nullopt));
 }
 
 void ConstraintBuilder::WaitForMatches() const {
@@ -253,39 +255,48 @@ bool ConstraintBuilder::IsEligiblePair(const NodeId& node_id, const SubmapId& su
   return attempted_pairs_.count({node_id, submap_id}) == 0;
 }
 
-int ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budget,
-                                PriorSource source, const Eigen::Affine2d& external_prior,
-                                const MatchObserver& observer) {
+MatchRoundSummary ConstraintBuilder::NodeRound(const NodeId& node_id, PriorSource source,
+                                               const std::optional<Eigen::Affine2d>& prior) const {
+  MatchRoundSummary summary;
+  summary.source = source;
+  summary.node_id = node_id;
+  summary.node_global_pose = handle_.graph().node(node_id).global_pose;
+  summary.prior = prior;
+  return summary;
+}
+
+void ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budget,
+                                 MatchRoundSummary summary) {
   const std::vector<LoopCandidate> selected = sampler_.Select(std::move(candidates), budget);
+  const auto round = std::make_shared<Round>();
+  round->summary = std::move(summary);
+  round->summary.candidates = static_cast<int>(selected.size());
+  // Held by this call, so a round with nothing to match still finishes.
+  round->unfinished = 1;
+  const PriorSource source = round->summary.source;
+  const Eigen::Affine2d external_prior = round->summary.prior.value_or(Eigen::Affine2d::Identity());
   for (const LoopCandidate& candidate : selected) {
     attempted_pairs_.insert({candidate.node_id, candidate.submap_id});
     num_matches_attempted_.fetch_add(1);
     std::optional<MatchInput> input = PrepareMatch(candidate, source, external_prior);
     if (!input.has_value()) {
-      if (observer) {
-        observer(false);
-      }
       continue;
     }
     if (pool_ == nullptr) {
-      const bool accepted = ApplyMatchResult(RunMatch(*input));
-      if (observer) {
-        observer(accepted);
-      }
+      ApplyMatchResult(RunMatch(*input), *round);
       continue;
     }
-    pool_->Submit([this, input = std::move(*input), observer] {
-      const std::optional<Constraint> constraint = RunMatch(input);
+    ++round->unfinished;
+    pool_->Submit([this, input = std::move(*input), round] {
+      const MatchResult result = RunMatch(input);
       // Graph writes happen on the backend task, never on a worker.
-      handle_.Enqueue([this, constraint, observer] {
-        const bool accepted = ApplyMatchResult(constraint);
-        if (observer) {
-          observer(accepted);
-        }
+      handle_.Enqueue([this, result, round] {
+        ApplyMatchResult(result, *round);
+        FinishMatch(*round);
       });
     });
   }
-  return static_cast<int>(selected.size());
+  FinishMatch(*round);
 }
 
 std::optional<ConstraintBuilder::MatchInput> ConstraintBuilder::PrepareMatch(
@@ -356,7 +367,7 @@ ConstraintBuilder::PrecomputationFor(const SubmapId& submap_id,
   return stack;
 }
 
-std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) const {
+ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& input) const {
   const mapping::GridMapu8& grid = input.submap->Snapshot();
   const sensor::PointCloud& cloud = input.cloud;
 
@@ -370,7 +381,7 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
   const std::optional<utils::scan_matching::GlobalMatchResult> coarse =
       coarse_matcher_.Match(cloud, search_grids, input.prior, params);
   if (!coarse.has_value()) {
-    return std::nullopt;
+    return {};
   }
 
   const Eigen::Affine2d coarse_in_grid =
@@ -380,6 +391,9 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
   // coarse result would only ratify whatever the coarse stage picked.
   utils::scan_matching::CeresScanMatcher refiner;
   refiner.Match(cloud, grid, refined_in_grid);
+  const double refined_score = ScoreAtPose(grid, cloud, refined_in_grid);
+  MatchResult result;
+  result.refined = ScoredPose{input.grid_to_global * refined_in_grid, refined_score};
 
   const double refinement_translation =
       (refined_in_grid.translation() - coarse_in_grid.translation()).norm();
@@ -387,12 +401,10 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
       transform::GetYaw(refined_in_grid) - transform::GetYaw(coarse_in_grid)));
   if (refinement_translation > option_.max_refinement_translation ||
       refinement_rotation > option_.max_refinement_rotation) {
-    return std::nullopt;
+    return result;
   }
-
-  const double refined_score = ScoreAtPose(grid, cloud, refined_in_grid);
   if (refined_score < input.gates.min_refined_score) {
-    return std::nullopt;
+    return result;
   }
 
   // A corridor alias is a genuine local optimum and sails through every other gate.
@@ -410,7 +422,7 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
     best_alias_score = std::max(best_alias_score, ScoreAtPose(grid, cloud, rotated));
   }
   if (refined_score - best_alias_score < option_.min_score_prominence) {
-    return std::nullopt;
+    return result;
   }
 
   // A mean score cannot tell "half the scan contradicts the map" from "everything matches
@@ -424,7 +436,7 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
     }
   }
   if (free_points / static_cast<double>(cloud.size()) > input.gates.max_free_space_fraction) {
-    return std::nullopt;
+    return result;
   }
 
   Constraint constraint;
@@ -434,20 +446,32 @@ std::optional<Constraint> ConstraintBuilder::RunMatch(const MatchInput& input) c
   constraint.relative_pose = refined_in_grid;
   constraint.sqrt_information =
       LeverArmSqrtInformation(loop_closure_sqrt_information_, refined_in_grid.translation().norm());
-  return constraint;
+  result.constraint = constraint;
+  return result;
 }
 
-bool ConstraintBuilder::ApplyMatchResult(const std::optional<Constraint>& constraint) {
-  if (!constraint.has_value()) {
-    return false;
+void ConstraintBuilder::ApplyMatchResult(const MatchResult& result, Round& round) {
+  std::optional<ScoredPose>& best = round.summary.best;
+  if (result.refined.has_value() && (!best.has_value() || result.refined->score > best->score)) {
+    best = result.refined;
   }
-  if (!handle_.AddConstraintIfEndpointsLive(*constraint)) {
+  if (!result.constraint.has_value()) {
+    return;
+  }
+  const Constraint& constraint = *result.constraint;
+  if (!handle_.AddConstraintIfEndpointsLive(constraint)) {
     num_constraints_dropped_.fetch_add(1);
-    return false;
+    return;
   }
   num_constraints_added_.fetch_add(1);
-  drift_.NoteClosure(handle_.graph(), constraint->to->node_id(), constraint->from.submap_id());
-  return true;
+  ++round.summary.constraints_added;
+  drift_.NoteClosure(handle_.graph(), constraint.to->node_id(), constraint.from.submap_id());
+}
+
+void ConstraintBuilder::FinishMatch(Round& round) {
+  if (--round.unfinished == 0) {
+    handle_.OnMatchRoundFinished(round.summary);
+  }
 }
 
 }  // namespace evergreenslam::lifelong

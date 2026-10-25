@@ -61,7 +61,8 @@ lifelong:
       min_surviving_submaps: 9
   trim: false
   checkpoint_min_interval: 2.5
-  pose_correction_event_translation: 0.45
+  reporting:
+    pose_correction_translation: 0.45
 )");
   const PoseGraphOption option = LoadPoseGraphOption(root);
   EXPECT_EQ(option.optimization.optimize_every_n_nodes, 17);
@@ -90,9 +91,9 @@ lifelong:
   EXPECT_EQ(option.constraint_builder.num_match_workers, 3);
   EXPECT_FALSE(option.trim);
   EXPECT_EQ(option.checkpoint_min_interval, common::FromSeconds(2.5));
-  EXPECT_DOUBLE_EQ(option.pose_correction_event_translation, 0.45);
-  EXPECT_DOUBLE_EQ(option.pose_correction_event_rotation,
-                   PoseGraphOption().pose_correction_event_rotation);
+  EXPECT_DOUBLE_EQ(option.reporting.pose_correction_translation, 0.45);
+  EXPECT_DOUBLE_EQ(option.reporting.pose_correction_rotation,
+                   PoseGraphOption().reporting.pose_correction_rotation);
 }
 
 TEST(PoseGraphOptionTest, MissingSectionsKeepDefaults) {
@@ -235,9 +236,10 @@ void ExpectMatchesDefaults(const PoseGraphOption& option) {
   EXPECT_EQ(option.trim_every_n_optimizations, defaults.trim_every_n_optimizations);
   EXPECT_EQ(option.checkpoint_min_interval, defaults.checkpoint_min_interval);
   EXPECT_EQ(option.gc_unfrozen_after_n_boots, defaults.gc_unfrozen_after_n_boots);
-  EXPECT_DOUBLE_EQ(option.pose_correction_event_translation,
-                   defaults.pose_correction_event_translation);
-  EXPECT_DOUBLE_EQ(option.pose_correction_event_rotation, defaults.pose_correction_event_rotation);
+  EXPECT_DOUBLE_EQ(option.reporting.pose_correction_translation,
+                   defaults.reporting.pose_correction_translation);
+  EXPECT_DOUBLE_EQ(option.reporting.pose_correction_rotation,
+                   defaults.reporting.pose_correction_rotation);
 }
 
 std::string ConfigPath(const std::string& name) {

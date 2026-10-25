@@ -62,8 +62,8 @@ class CommandTest(EgsTestCase):
             {"score": 0.70, "coverage": 0.9},
             {"score": 0.72, "coverage": 0.9},
         ]
-        no_match = {"kind": "relocalization", "request_id": 1, "state": "no_match"}
-        matched = {"kind": "relocalization", "request_id": 2, "state": "matched"}
+        no_match = {"kind": "relocalization", "state": "no_match"}
+        matched = {"kind": "relocalization", "state": "matched"}
         self.state.here_events = {1: no_match, 2: matched}
         code, out, _ = self.egs("here", "--sample", "2", "--json")
         self.assertEqual(code, 0, out)
@@ -78,7 +78,7 @@ class CommandTest(EgsTestCase):
         self.assertIn("base over 1s: median 0.30", out)
         self.assertNotIn("restarted", out)
         self.state.here_polls = 0
-        self.state.here_events = {1: dict(matched, request_id=3)}
+        self.state.here_events = {1: matched}
         code, out, _ = self.egs("here", "--sample", "1")
         self.assertIn("restarted 1: a correction landed", out)
 

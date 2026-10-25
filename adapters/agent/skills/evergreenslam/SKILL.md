@@ -138,8 +138,10 @@ the PNG path on this machine;
      that the pose is now right.
    - `no_match (0 candidates)`: that place or pose lies outside the saved map; check the place
      name, or `egs relocalize` to search the whole map.
-   - `no_match (N candidates)`, or `matched` but `base` low after a minute: the session holds a
-     wrong constraint that one hint cannot pull back. Go to step 2.
+   - `no_match (N candidates)` with `linked to base no`: the scan fit nothing from here; turn or
+     move the robot to face mapped walls and send it again.
+   - `no_match (N candidates)` with `linked to base yes`, or `matched` but `base` low after a
+     minute: the session holds a wrong constraint that one hint cannot pull back. Go to step 2.
    - `superseded by request M`: a newer request replaced it; `egs here` shows the newest.
    - `outcome unknown`: still pending; the `relocalization` line of `egs here` shows it later.
 2. `egs session rm <fed id>` (the `fed` id from `egs session ls`), then the same with `--yes`. You

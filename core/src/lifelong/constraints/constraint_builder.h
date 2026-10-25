@@ -15,7 +15,6 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <atomic>
-#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -41,8 +40,6 @@ namespace evergreenslam::lifelong {
 // stateless per-pair match chain fans out to workers.
 class ConstraintBuilder {
  public:
-  using MatchObserver = std::function<void(bool accepted)>;
-
   explicit ConstraintBuilder(ConstraintHandle& handle,
                              const ConstraintBuilderOption& option = ConstraintBuilderOption(),
                              const ConstraintWeightOption& weight = ConstraintWeightOption());
@@ -52,11 +49,8 @@ class ConstraintBuilder {
   void SearchForSubmap(const SubmapId& submap_id, int budget = -1);
   void SearchForNodeOnTask(const NodeId& node_id, int budget = -1);
   void SearchForSubmapOnTask(const SubmapId& submap_id, int budget = -1);
-  // Operator relocalization, so no attempted_pairs_ or drift gate: a resent pose retries pairs.
-  // With a prior, finished submaps of other sessions whose footprint reaches it within the
-  // relocalization window are matched from the prior; without one, whole grids over every heading.
-  int SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
-                                int budget = -1, MatchObserver observer = nullptr);
+  void SearchForNodeAroundOnTask(const NodeId& node_id, const std::optional<Eigen::Affine2d>& prior,
+                                 int budget = -1);
 
   // Results already enqueued still need a queue drain; WaitUntilQuiescent alternates the two.
   void WaitForMatches() const;
@@ -73,7 +67,17 @@ class ConstraintBuilder {
   DriftTracker& mutable_drift_tracker() { return drift_; }
 
  private:
-  enum class PriorSource { GRAPH, EXTERNAL, NONE };
+  using PriorSource = MatchRoundSummary::Source;
+
+  struct MatchResult {
+    std::optional<ScoredPose> refined;
+    std::optional<Constraint> constraint;
+  };
+  // Backend task only.
+  struct Round {
+    MatchRoundSummary summary;
+    int unfinished = 0;
+  };
 
   // Resolved on the backend task: a worker must never touch graph state it cannot pin.
   struct MatchInput {
@@ -107,17 +111,17 @@ class ConstraintBuilder {
                                             const SubmapRecord& record) const;
   bool IsEligiblePair(const NodeId& node_id, const SubmapId& submap_id,
                       const SubmapRecord& record) const;
-  int RunRound(std::vector<LoopCandidate> candidates, int budget,
-               PriorSource source = PriorSource::GRAPH,
-               const Eigen::Affine2d& external_prior = Eigen::Affine2d::Identity(),
-               const MatchObserver& observer = nullptr);
+  MatchRoundSummary NodeRound(const NodeId& node_id, PriorSource source,
+                              const std::optional<Eigen::Affine2d>& prior) const;
+  void RunRound(std::vector<LoopCandidate> candidates, int budget, MatchRoundSummary summary);
   std::optional<MatchInput> PrepareMatch(const LoopCandidate& candidate, PriorSource source,
                                          const Eigen::Affine2d& external_prior);
   std::shared_ptr<const utils::scan_matching::PrecomputationGridStack> PrecomputationFor(
       const SubmapId& submap_id, const std::shared_ptr<const mapping::Submap>& submap);
   // Thread safe: reads only the input and the stateless coarse matcher.
-  std::optional<Constraint> RunMatch(const MatchInput& input) const;
-  bool ApplyMatchResult(const std::optional<Constraint>& constraint);
+  MatchResult RunMatch(const MatchInput& input) const;
+  void ApplyMatchResult(const MatchResult& result, Round& round);
+  void FinishMatch(Round& round);
 
   ConstraintHandle& handle_;
   ConstraintBuilderOption option_;

@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -174,6 +175,36 @@ TEST_F(RelocalizationEventsE2eTest, RequestIdsReportTheirOutcomeInHereAndStatus)
   EXPECT_EQ(JsonRaw(client_->Post("/init-pose", {{"anchor", "999"}}).body, "request_id"), "null");
 }
 
+// Core reports rounds, not requests; the service owns superseding.
+TEST_F(RelocalizationEventsE2eTest, ANewerRequestOrAFedSessionDropSupersedesTheOpenOne) {
+  ASSERT_EQ(JsonRaw(client_->Post("/init-pose", PoseParams(LoopGroundTruth(0))).body, "request_id"),
+            "1");
+  ASSERT_EQ(JsonRaw(client_->Post("/relocalize").body, "request_id"), "2");
+  std::string body = Relocalization("1");
+  EXPECT_EQ(JsonRaw(body, "relocalization.state"), "superseded");
+  EXPECT_EQ(JsonRaw(body, "relocalization.superseded_by"), "2");
+  EXPECT_EQ(JsonRaw(Relocalization("2"), "relocalization.state"), "pending");
+
+  FeedThrough(14);
+  body = Relocalization("2");
+  EXPECT_NE(JsonRaw(body, "relocalization.state"), "pending") << body;
+  EXPECT_EQ(JsonRaw(Relocalization("1"), "relocalization.state"), "superseded");
+
+  // A fresh fed session has no node, so the request waits in core until the drop discards it.
+  const std::optional<lifelong::SessionId> fresh =
+      backend_->DropFedSession(*backend_->session_manager().fed_session()).fed_now;
+  ASSERT_TRUE(fresh.has_value());
+  ASSERT_EQ(
+      JsonRaw(client_->Post("/init-pose", PoseParams(LoopGroundTruth(14))).body, "request_id"),
+      "3");
+  EXPECT_EQ(JsonRaw(Relocalization("3"), "relocalization.state"), "pending");
+  ASSERT_TRUE(backend_->DropFedSession(*fresh).fed_now.has_value());
+  body = Relocalization("3");
+  EXPECT_EQ(JsonRaw(body, "relocalization.state"), "superseded") << body;
+  EXPECT_EQ(JsonRaw(body, "relocalization.superseded_by"), "null");
+  EXPECT_NE(JsonRaw(body, "relocalization.resolved_ns"), "null");
+}
+
 TEST_F(RelocalizationEventsE2eTest, EventsPageBySequenceAndReportLoss) {
   EXPECT_EQ(client_->Get("/events?since=-1").status, 400);
   Reply events = client_->Get("/events");
@@ -187,7 +218,7 @@ TEST_F(RelocalizationEventsE2eTest, EventsPageBySequenceAndReportLoss) {
   events = client_->Get("/events?since=" + boot_next);
   EXPECT_EQ(JsonRaw(events.body, "lost"), "false");
   EXPECT_NE(events.body.find("\"kind\":\"pose_correction\""), std::string::npos) << events.body;
-  EXPECT_NE(events.body.find("\"kind\":\"relocalization\",\"request_id\":1,\"state\":\"matched\""),
+  EXPECT_NE(events.body.find("\"kind\":\"relocalization\",\"state\":\"matched\""),
             std::string::npos)
       << events.body;
   const std::string next = JsonRaw(events.body, "next_seq");

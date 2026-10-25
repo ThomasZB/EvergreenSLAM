@@ -22,6 +22,7 @@
 #include "lifelong/constraints/constraint_builder_option.h"
 #include "lifelong/optimization/optimization_option.h"
 #include "lifelong/pose_graph_trimmer/pose_graph_trimmer_option.h"
+#include "lifelong/reporting/event_reporter.h"
 #include "lifelong/sessions/session_manager.h"
 #include "utils/config/yaml_utils.h"
 
@@ -33,13 +34,12 @@ struct PoseGraphOption {
   SessionManagerOption session_manager;
   ConstraintBuilderOption constraint_builder;
   PoseGraphTrimmerOption trimmer;
+  ReportingOption reporting;
   bool trim = true;
   int trim_every_n_optimizations = 1;
   // Sensor time; Finish, freeze and rotation write regardless.
   common::Duration checkpoint_min_interval = common::FromSeconds(30.0);
   int gc_unfrozen_after_n_boots = 5;
-  double pose_correction_event_translation = 0.3;
-  double pose_correction_event_rotation = 0.2;
 
   friend std::ostream& operator<<(std::ostream& os, const PoseGraphOption& option) {
     os << "PoseGraphOption:" << std::endl;
@@ -48,15 +48,12 @@ struct PoseGraphOption {
     os << "  checkpoint_min_interval: " << common::ToSeconds(option.checkpoint_min_interval)
        << std::endl;
     os << "  gc_unfrozen_after_n_boots: " << option.gc_unfrozen_after_n_boots << std::endl;
-    os << "  pose_correction_event_translation: " << option.pose_correction_event_translation
-       << std::endl;
-    os << "  pose_correction_event_rotation: " << option.pose_correction_event_rotation
-       << std::endl;
     os << option.optimization;
     os << option.constraint_weight;
     os << option.session_manager;
     os << option.constraint_builder;
     os << option.trimmer;
+    os << option.reporting;
     return os;
   }
 };

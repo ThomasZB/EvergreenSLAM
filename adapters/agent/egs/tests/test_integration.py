@@ -236,7 +236,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("no_match (0 candidates)", out)
         self.assertRegex(self.ok("here"), r"(?m)^relocalization 1 place \(anchor \d+\) no_match")
         events = self.ok("events")
-        self.assertRegex(events, r"(?m)^\d+ relocalization request 1 no_match \(0 candidates\)$")
+        self.assertRegex(events, r"(?m)^\d+ relocalization no_match \(0 candidates\)$")
         page = json.loads(self.ok("events", "--json"))
         self.assertFalse(page["lost"])
         self.assertEqual(

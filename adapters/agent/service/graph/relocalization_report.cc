@@ -1,7 +1,7 @@
 /**
  * @file relocalization_report.cc
  * @author hang chen (chen@hang.plus)
- * @brief Relocalization outcomes and backend events as agents read them.
+ * @brief Relocalization requests and their outcomes, and backend events as agents read them.
  * @version 0.1
  * @date 2026-10-16
  *
@@ -11,6 +11,7 @@
 
 #include "service/graph/relocalization_report.h"
 
+#include <algorithm>
 #include <cctype>
 #include <string_view>
 #include <utility>
@@ -26,6 +27,20 @@ std::string Lowercase(std::string_view text) {
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
   return lower;
+}
+
+const char* StateName(RelocalizationStatus::State state) {
+  switch (state) {
+    case RelocalizationStatus::State::PENDING:
+      return "pending";
+    case RelocalizationStatus::State::MATCHED:
+      return "matched";
+    case RelocalizationStatus::State::NO_MATCH:
+      return "no_match";
+    case RelocalizationStatus::State::SUPERSEDED:
+      return "superseded";
+  }
+  return "pending";
 }
 
 void OptionalInt(JsonWriter& writer, std::string_view key, const std::optional<int64_t>& value) {
@@ -61,45 +76,121 @@ std::optional<int64_t> SessionIndex(const std::optional<lifelong::SessionId>& id
   return id->session_index;
 }
 
+common::Time SensorNow(const lifelong::PoseGraphData& graph) {
+  common::Time newest;
+  for (const auto& [id, session] : graph.sessions()) {
+    newest = std::max(newest, session.last_node_time);
+  }
+  return newest;
+}
+
+bool SamePrior(const std::optional<Eigen::Affine2d>& a, const std::optional<Eigen::Affine2d>& b) {
+  if (a.has_value() != b.has_value()) {
+    return false;
+  }
+  return !a.has_value() || a->matrix() == b->matrix();
+}
+
 }  // namespace
 
-void RelocalizationRequests::Remember(lifelong::RelocalizationId id,
-                                      RelocalizationRequest request) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requests_[id] = std::move(request);
-  while (requests_.size() > kRememberedRequests) {
-    requests_.erase(requests_.begin());
-  }
+std::shared_ptr<RelocalizationRequests> RelocalizationRequests::Attach(
+    lifelong::PoseGraph& pose_graph) {
+  std::shared_ptr<RelocalizationRequests> requests(new RelocalizationRequests(pose_graph));
+  requests->next_event_seq_ = pose_graph.EventsSince(0).next_seq;
+  pose_graph.AddRelocalizationListener([weak = std::weak_ptr<RelocalizationRequests>(requests)](
+                                           const lifelong::RelocalizationResult& result) {
+    if (const std::shared_ptr<RelocalizationRequests> alive = weak.lock()) {
+      alive->OnResult(result);
+    }
+  });
+  return requests;
 }
 
-std::optional<RelocalizationRequest> RelocalizationRequests::Find(
-    lifelong::RelocalizationId id) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = requests_.find(id);
-  if (it == requests_.end()) {
+RelocalizationId RelocalizationRequests::Open(std::string kind,
+                                              std::optional<lifelong::AnchorId> anchor,
+                                              const std::optional<Eigen::Affine2d>& prior) {
+  CatchUpOnDrops();
+  RelocalizationStatus status;
+  status.id = next_id_++;
+  status.kind = std::move(kind);
+  status.anchor = anchor;
+  status.prior = prior;
+  SupersedeOpen(status.id, SensorNow(pose_graph_.graph()));
+  recent_.push_back(std::move(status));
+  while (recent_.size() > kRememberedRequests) {
+    recent_.pop_front();
+  }
+  return recent_.back().id;
+}
+
+std::optional<RelocalizationStatus> RelocalizationRequests::Find(RelocalizationId id) {
+  CatchUpOnDrops();
+  for (const RelocalizationStatus& status : recent_) {
+    if (status.id == id) {
+      return status;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<RelocalizationStatus> RelocalizationRequests::Latest() {
+  CatchUpOnDrops();
+  if (recent_.empty()) {
     return std::nullopt;
   }
-  return it->second;
+  return recent_.back();
 }
 
-void WriteRelocalization(JsonWriter& writer,
-                         const std::optional<lifelong::RelocalizationStatus>& status,
-                         const RelocalizationRequests& requests) {
+void RelocalizationRequests::OnResult(const lifelong::RelocalizationResult& result) {
+  CatchUpOnDrops();
+  if (recent_.empty()) {
+    return;
+  }
+  RelocalizationStatus& open = recent_.back();
+  if (open.state != RelocalizationStatus::State::PENDING || !SamePrior(open.prior, result.prior)) {
+    return;
+  }
+  open.state = result.constraints_added > 0 ? RelocalizationStatus::State::MATCHED
+                                            : RelocalizationStatus::State::NO_MATCH;
+  open.candidates = result.candidates;
+  open.constraints_added = result.constraints_added;
+  open.correction = result.correction;
+  open.requested_at = pose_graph_.graph().node(result.node_id).constant_data.time;
+  open.resolved_at = result.time;
+}
+
+void RelocalizationRequests::CatchUpOnDrops() {
+  const lifelong::PoseGraphEvents::Page page = pose_graph_.EventsSince(next_event_seq_);
+  next_event_seq_ = page.next_seq;
+  for (const lifelong::PoseGraphEvent& event : page.events) {
+    if (event.kind == lifelong::PoseGraphEvent::Kind::FED_SESSION_DROPPED) {
+      SupersedeOpen(std::nullopt, event.time);
+    }
+  }
+}
+
+void RelocalizationRequests::SupersedeOpen(std::optional<RelocalizationId> by, common::Time time) {
+  for (RelocalizationStatus& status : recent_) {
+    if (status.state == RelocalizationStatus::State::PENDING) {
+      status.state = RelocalizationStatus::State::SUPERSEDED;
+      status.superseded_by = by;
+      status.resolved_at = time;
+    }
+  }
+}
+
+void WriteRelocalization(JsonWriter& writer, const std::optional<RelocalizationStatus>& status) {
   writer.Key("relocalization");
   if (!status.has_value()) {
     writer.Null();
     return;
   }
-  const std::optional<RelocalizationRequest> request = requests.Find(status->id);
-  const std::string fallback_kind = status->has_prior ? "pose" : "global";
-  writer.BeginObject()
-      .Field("id", static_cast<int64_t>(status->id))
-      .Field("kind", request.has_value() ? request->kind : fallback_kind);
+  writer.BeginObject().Field("id", status->id).Field("kind", status->kind);
   OptionalInt(writer, "anchor",
-              request.has_value() && request->anchor.has_value()
-                  ? std::optional<int64_t>(static_cast<int64_t>(*request->anchor))
+              status->anchor.has_value()
+                  ? std::optional<int64_t>(static_cast<int64_t>(*status->anchor))
                   : std::nullopt);
-  writer.Field("state", Lowercase(lifelong::ToString(status->state)))
+  writer.Field("state", StateName(status->state))
       .Field("candidates", status->candidates)
       .Field("constraints", status->constraints_added);
   WriteCorrection(writer, status->correction);
@@ -117,14 +208,10 @@ void WriteEvent(JsonWriter& writer, const lifelong::PoseGraphEvent& event) {
       .Field("kind", Lowercase(lifelong::ToString(event.kind)));
   switch (event.kind) {
     case Kind::RELOCALIZATION:
-      OptionalInt(writer, "request_id", event.relocalization_id);
-      writer
-          .Field("state", event.outcome.has_value() ? Lowercase(lifelong::ToString(*event.outcome))
-                                                    : std::string("pending"))
+      writer.Field("state", event.constraints_added > 0 ? "matched" : "no_match")
           .Field("candidates", event.candidates)
           .Field("constraints", event.constraints_added);
       WriteCorrection(writer, event.correction);
-      OptionalInt(writer, "superseded_by", event.superseded_by);
       break;
     case Kind::POSE_CORRECTION:
       OptionalInt(writer, "session", SessionIndex(event.session));

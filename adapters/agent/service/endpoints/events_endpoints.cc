@@ -13,7 +13,7 @@
 #include <optional>
 #include <string>
 
-#include "lifelong/pose_graph_events.h"
+#include "lifelong/reporting/pose_graph_events.h"
 #include "service/graph/relocalization_report.h"
 #include "service/http/endpoints.h"
 #include "service/http/http_reply.h"

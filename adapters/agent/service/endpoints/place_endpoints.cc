@@ -104,15 +104,15 @@ void HandleHere(ServiceContext& context, const httplib::Request& request,
     std::vector<lifelong::ResolvedAnchor> resolved;
     BaseAlignment alignment;
     int num_solves = 0;
-    std::optional<lifelong::RelocalizationStatus> relocalization;
+    std::optional<RelocalizationStatus> relocalization;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
   const Reading reading = RunOnBackend(pose_graph, [&] {
     return Reading{ReadRobotOnTask(pose_graph, context.hooks),
                    pose_graph.anchors().ResolveAll(pose_graph.graph()),
                    ReadBaseAlignmentOnTask(pose_graph), NumSolves(pose_graph),
-                   relocalization_id.has_value() ? pose_graph.relocalization(*relocalization_id)
-                                                 : pose_graph.latest_relocalization()};
+                   relocalization_id.has_value() ? context.relocalizations->Find(*relocalization_id)
+                                                 : context.relocalizations->Latest()};
   });
 
   struct Candidate {
@@ -147,7 +147,7 @@ void HandleHere(ServiceContext& context, const httplib::Request& request,
       .Field("has_frozen_base", reading.alignment.has_frozen_base)
       .Field("aligned_to_base", reading.alignment.aligned_to_base);
   WriteLocalization(writer, reading.robot);
-  WriteRelocalization(writer, reading.relocalization, context.relocalizations);
+  WriteRelocalization(writer, reading.relocalization);
   writer.Key("current");
   if (current.has_value()) {
     const Candidate& place = candidates[*current];
@@ -364,7 +364,7 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
   struct Outcome {
     std::optional<std::string> refusal;
     std::optional<Eigen::Affine2d> pose;
-    std::optional<lifelong::RelocalizationId> request_id;
+    std::optional<RelocalizationId> request_id;
     int num_solves = 0;
   };
   lifelong::PoseGraph& pose_graph = context.pose_graph;
@@ -386,9 +386,9 @@ void HandleInitPose(ServiceContext& context, const httplib::Request& request,
     } else {
       result.pose = given;
     }
-    result.request_id = pose_graph.SetInitialPose(*result.pose);
-    context.relocalizations.Remember(
-        *result.request_id, RelocalizationRequest{anchor.has_value() ? "place" : "pose", anchor});
+    pose_graph.SetInitialPose(*result.pose);
+    result.request_id =
+        context.relocalizations->Open(anchor.has_value() ? "place" : "pose", anchor, result.pose);
     return result;
   });
 

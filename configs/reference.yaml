@@ -183,6 +183,8 @@ lifelong:
   checkpoint_min_interval: 30.0
   # Boot-time GC: deletes a session with no frozen link left unfed this many boots. 0 disables.
   gc_unfrozen_after_n_boots: 5
-  # A republish that moves the robot's pose more than this logs a pose_correction event.
-  pose_correction_event_translation: 0.3  # m
-  pose_correction_event_rotation: 0.2     # rad
+
+  reporting:
+    # A republish that moves the robot's pose more than this logs a pose_correction event.
+    pose_correction_translation: 0.3  # m
+    pose_correction_rotation: 0.2     # rad

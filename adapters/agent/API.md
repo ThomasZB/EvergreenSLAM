@@ -380,52 +380,54 @@ request_id}`, kind `global`.
 
 ### Relocalization outcome
 
-`SetInitialPose` / `RelocalizeGlobally` mint the id on the calling thread (counter from 1 per
-process) and return it; the search runs later on the backend task. The object in `/here` and
-`/status`:
+Core's `SetInitialPose` / `RelocalizeGlobally` return nothing; the service mints the id (counter
+from 1 per process) in the same task and owns the request's state (`RelocalizationRequests`, the
+last 64). The object in `/here` and `/status`:
 `{id, kind: pose|place|global, anchor|null, state: pending|matched|no_match|superseded, candidates,
 constraints, correction_m|null, correction_rad|null, requested_ns|null, resolved_ns|null,
 superseded_by|null}`.
-- The request's task supersedes every older request still pending (`superseded_by` = its id). A
-  superseded round's matches still land as ordinary constraints but no longer count.
+- A new request supersedes the open one (`superseded_by` = its id). Its round still runs; its
+  matches land as ordinary constraints but no longer count.
 - With no node in the fed session yet the request stays `pending` (`requested_ns` null) until the
-  first keyframe runs it. Otherwise one candidate round runs against the fed session's newest node
-  (`requested_ns` = that node's sensor time): every finished submap of another session the prior
-  reaches within the relocalization window, or all of them without a prior. `candidates` = pairs
-  selected after sampling. 0 candidates → `no_match` at once (the prior is outside the saved map).
-  Each match, inline or from a worker, reports on the backend task whether
-  `AddConstraintIfEndpointsLive` accepted it; when all have reported: ≥ 1 accepted → `matched`,
-  else `no_match`.
-- `matched`: unless a solve already ran after the last accepted constraint (the first-anchoring
-  reseed solves), one `OptimizeOnTask()`, then `RepublishActiveSessionToGlobal()`. `correction_m` /
-  `correction_rad` = how far the newest node at request time moved (its local pose under the
-  session-to-global before the round vs after the solve). `matched` means applied and republished,
-  not that the pose is right: on a session already linked to the base the round adds only a few
-  Huber-lossed edges, which a session pinned by more wrong closures outvotes (core test
-  `AHintOnASessionPinnedBySixWrongClosuresMatchesButLeavesItWrong`); the recovery is `session rm`
-  of the fed session, then `init-pose`.
-- A fed-session drop marks the open request `superseded` with `superseded_by` null.
+  first keyframe runs it; a newer request before then replaces it in core. Otherwise one candidate
+  round runs against the fed session's newest node (`requested_ns` = that node's sensor time):
+  every finished submap of another session the prior reaches within the relocalization window, or
+  all of them without a prior. `candidates` = pairs selected after sampling. 0 candidates →
+  `no_match` at once (the prior is outside the saved map).
+- When the round's last match is applied, core's `RelocalizationReporter` (`lifelong/reporting/`)
+  calls the service's listener on the backend task with the round's result (prior, candidates,
+  constraints added, correction). Core reports rounds, not requests: the service settles the open
+  request with it when the priors agree (both absent for `global`), so of two back-to-back requests
+  with one prior the newer may take the older's round. ≥ 1 constraint → `matched`, else `no_match`.
+- `correction_m` / `correction_rad` = how far the round moved that node (its global pose at round
+  start vs after the last apply). Only a session's first closure onto the base reseeds and solves at
+  once; on a session already linked to the base the closures act at the next cadence solve, so
+  `correction` is near 0 and the move shows up later as a `pose_correction` event. `matched` means
+  applied, not that the pose is right: a session pinned by more wrong closures outvotes the few new
+  Huber-lossed edges (core test `AHintOnASessionPinnedBySixWrongClosuresMatchesButLeavesItWrong`);
+  the recovery is `session rm` of the fed session, then `init-pose`.
+- A `fed_session_dropped` event marks the open request `superseded` with `superseded_by` null: core
+  forgets a waiting request on a drop and does not report a round whose node went with it.
 - Times are sensor time (`resolved_ns` = newest node time across sessions at settlement).
-- Core reads `relocalization(id)` / `latest_relocalization()` are thread safe (own mutex; the last 16
-  requests); the service reads them inside its task so they match `robot`.
 
 **GET /events** — no task (the log has its own mutex), 503 before start like task routes.
 `{since: seq = 0}` (negative → 400). `→ {ok, reason, instance_id, first_seq, next_seq, lost, events: [{seq,
 time_ns, kind, ...}]}`: the `PoseGraph` event ring (256, `EventsSince`), events with `seq ≥ since`.
 `lost` = `since < first_seq` (overrun) or `since > next_seq` (a restarted process); then every held
 event is returned; a changed `instance_id` (a map switch or restart) also means start over from 0. `time_ns` is sensor time. Kinds and fields:
-- `relocalization`: `request_id, state, candidates, constraints, correction_m, correction_rad,
-  superseded_by` — on every settlement, `superseded` included.
+- `relocalization`: `state: matched|no_match, candidates, constraints, correction_m,
+  correction_rad` — one per finished relocalization round, with no request id (see above).
 - `pose_correction`: `session, correction_m, correction_rad` — a `RepublishActiveSessionToGlobal()`
-  moved the fed session's newest node by more than `lifelong.pose_correction_event_translation`
-  (0.3 m) or `pose_correction_event_rotation` (0.2 rad), comparing the previous and new transform of
+  moved the fed session's newest node by more than `lifelong.reporting.pose_correction_translation`
+  (0.3 m) or `pose_correction_rotation` (0.2 rad), comparing the previous and new transform of
   the same fed session (a rotation or drop to a new fed session never logs one).
 - `session_frozen`, `session_removed`: `session`. A drop logs `session_removed` then
-  `fed_session_dropped` (`session, fed_now`), then `relocalization` for a superseded request.
+  `fed_session_dropped` (`session, fed_now`).
 
 egs: `init-pose` / `relocalize` poll `/here?relocalization=<id>` every 0.5 s up to `--wait S`
 (default 30; `--no-wait` returns at once). Printed outcome: `matched: corrected D m A°; check egs
-here` (exit 0), `no_match (N candidates): ...` with the next step, `superseded by request M`
+here` (exit 0), `no_match (N candidates): ...` with the next step (`session rm` of the fed session only when
+`aligned_to_base`; otherwise turn or move and send it again), `superseded by request M`
 (exit 1 for both); still pending at the deadline, or the id unknown to the process → `outcome
 unknown` (exit 3). `--json` adds the status object as `relocalization` (`ok` false and `reason` the
 state unless matched). `egs here` / `egs status` print a `relocalization ...` line when there is a
@@ -617,8 +619,8 @@ new row); `next_id` stays past the refused id, which is never issued.
   `DropFedSessionOnTask` is the task-side body).
   Anywhere: `FreezeFedSession(std::optional<SessionId> expected = std::nullopt)` → the new
   `SessionManager::FreezeFedSession(expected)`; `Start(..., bool seed_from_previous_boot = true)`.
-- `PoseGraph`, any thread: `RelocalizationId SetInitialPose(pose)`, `RelocalizationId
-  RelocalizeGlobally()`, `relocalization(id)`, `latest_relocalization()`, `EventsSince(seq)`.
+- `PoseGraph`, any thread: `EventsSince(seq)`, `AddRelocalizationListener(listener)` (the
+  listener runs on the backend task and must not block it).
 - `AnchorStore::Rebind`. `AssembleGlobalMap(..., std::optional<SessionId>)` already exists.
 - Zones (`service/memory/zone_store.h`), for a host's own backend task, never a host thread waiting on
   one: `std::optional<std::vector<ResolvedZone>> ResolveZones(const PoseGraph&, const ZoneStore&)`

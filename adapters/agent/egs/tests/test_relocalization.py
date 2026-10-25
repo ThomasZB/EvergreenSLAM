@@ -46,6 +46,14 @@ class RelocalizationTest(EgsTestCase):
         self.assertIn("no_match (4 candidates)", out)
         self.assertIn("egs session rm <fed id>", out)
 
+    def test_no_match_on_a_session_not_linked_to_the_base_asks_for_a_better_view(self):
+        self.state.aligned_to_base = False
+        self.state.relocalization_outcome = {"state": "no_match", "candidates": 4}
+        code, out, _ = self.egs("relocalize")
+        self.assertEqual(code, 1)
+        self.assertIn("move or turn the robot", out)
+        self.assertNotIn("session rm", out)
+
     def test_superseded(self):
         self.state.relocalization_outcome = {"state": "superseded", "superseded_by": 7}
         code, out, _ = self.egs("init-pose", "1", "2", "0")
@@ -87,11 +95,11 @@ class RelocalizationTest(EgsTestCase):
 class EventsTest(EgsTestCase):
     def setUp(self):
         super().setUp()
-        matched = {"state": "matched", "candidates": 2, "constraints": 1, "superseded_by": None}
+        matched = {"state": "matched", "candidates": 2, "constraints": 1}
         self.state.events = [
             {"time_ns": 1, "kind": "session_frozen", "session": 1},
             {"time_ns": 2, "kind": "pose_correction", "session": 2, "correction_m": 0.45},
-            dict(matched, time_ns=3, kind="relocalization", request_id=3, correction_m=1.1),
+            dict(matched, time_ns=3, kind="relocalization", correction_m=1.1),
             {"time_ns": 4, "kind": "fed_session_dropped", "session": 2, "fed_now": 3},
         ]
         self.state.events[1]["correction_rad"] = 0.0
@@ -105,7 +113,7 @@ class EventsTest(EgsTestCase):
             [
                 "0 session_frozen session 1",
                 "1 pose_correction session 2 moved 0.45 m 0°",
-                "2 relocalization request 3 matched: corrected 1.10 m 164°",
+                "2 relocalization matched: corrected 1.10 m 164°",
                 "3 fed_session_dropped session 2, fed now 3",
                 "next_seq 4",
             ],

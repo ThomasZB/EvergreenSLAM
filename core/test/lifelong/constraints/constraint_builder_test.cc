@@ -294,6 +294,131 @@ TEST(ConstraintBuilder, DoesNotRetryAnAttemptedPair) {
   EXPECT_EQ(builder.num_constraints_added(), 1);
 }
 
+// Forwards to the facade and records each finished round with the closures the graph held then.
+class RecordingHandle : public ConstraintHandle {
+ public:
+  explicit RecordingHandle(PoseGraph& backend) : backend_(backend) {}
+
+  const PoseGraphData& graph() const override { return backend_.graph(); }
+  bool AddConstraintIfEndpointsLive(const Constraint& constraint) override {
+    return backend_.AddConstraintIfEndpointsLive(constraint);
+  }
+  void OnMatchRoundFinished(const MatchRoundSummary& summary) override {
+    summaries.push_back(summary);
+    closures_at_finish.push_back(CountClosures(backend_.graph()));
+  }
+  void Enqueue(TaskQueue::Task task) override { backend_.Enqueue(std::move(task)); }
+
+  static int CountClosures(const PoseGraphData& graph) {
+    return static_cast<int>(std::count_if(
+        graph.constraints().begin(), graph.constraints().end(),
+        [](const Constraint& c) { return c.type == Constraint::Type::INTER_SUBMAP; }));
+  }
+
+  std::vector<MatchRoundSummary> summaries;
+  std::vector<int> closures_at_finish;
+
+ private:
+  PoseGraph& backend_;
+};
+
+class ConstraintBuilderRoundTest : public ::testing::TestWithParam<int> {};
+
+TEST_P(ConstraintBuilderRoundTest, ARoundReportsOnceAfterItsLastResult) {
+  RoomFixture fixture;
+  FeedRoomFixture(fixture);
+  AddQueryNode(fixture, 2, transform::FromXYTheta(4.21, 3.13, -0.5));
+  AddQueryNode(fixture, 3, transform::FromXYTheta(3.04, 4.47, 2.0));
+  ConstraintBuilderOption option;
+  option.num_match_workers = GetParam();
+  RecordingHandle handle(fixture.pose_graph);
+  ConstraintBuilder builder(handle, option);
+
+  builder.SearchForSubmap(fixture.room_submap_id);
+  fixture.pose_graph.WaitUntilQuiescent();
+  builder.WaitForMatches();
+  fixture.pose_graph.WaitUntilQuiescent();
+
+  ASSERT_EQ(handle.summaries.size(), 1u);
+  const MatchRoundSummary& summary = handle.summaries[0];
+  EXPECT_EQ(summary.source, MatchRoundSummary::Source::GRAPH);
+  EXPECT_FALSE(summary.node_id.has_value());
+  EXPECT_EQ(summary.candidates, 3);
+  EXPECT_GT(summary.constraints_added, 0);
+  EXPECT_EQ(summary.constraints_added, builder.num_constraints_added());
+  EXPECT_EQ(handle.closures_at_finish[0],
+            RecordingHandle::CountClosures(fixture.pose_graph.graph()))
+      << "the round reported before its last result landed";
+  EXPECT_TRUE(summary.best.has_value());
+}
+
+INSTANTIATE_TEST_SUITE_P(InlineAndOnWorkers, ConstraintBuilderRoundTest, ::testing::Values(0, 2));
+
+TEST(ConstraintBuilder, ANodeRoundReportsTheNodeItsStartPoseAndTheBestMatch) {
+  RoomFixture fixture;
+  FeedRoomFixture(fixture);
+  RecordingHandle handle(fixture.pose_graph);
+  ConstraintBuilder builder(handle, ConstraintBuilderOption());
+  const Eigen::Affine2d start_pose =
+      fixture.pose_graph.graph().node(fixture.query_node_id).global_pose;
+
+  builder.SearchForNode(fixture.query_node_id);
+  fixture.pose_graph.WaitUntilQuiescent();
+
+  ASSERT_EQ(handle.summaries.size(), 1u);
+  const MatchRoundSummary& summary = handle.summaries[0];
+  ASSERT_TRUE(summary.node_id.has_value());
+  EXPECT_TRUE(*summary.node_id == fixture.query_node_id);
+  EXPECT_TRUE(summary.node_global_pose.isApprox(start_pose));
+  EXPECT_FALSE(summary.prior.has_value());
+  EXPECT_EQ(summary.candidates, 1);
+  EXPECT_EQ(summary.constraints_added, 1);
+  ASSERT_TRUE(summary.best.has_value());
+  EXPECT_LT((summary.best->global_pose.translation() - fixture.true_node_pose.translation()).norm(),
+            0.1);
+  EXPECT_GT(summary.best->score, ConstraintBuilderOption().tight_gates.min_refined_score);
+}
+
+// A rejected match still names its best pose: what a caller falls back on is not a gate's call.
+TEST(ConstraintBuilder, ARoundWithNothingAcceptedStillReportsItsBestMatch) {
+  RoomFixture fixture;
+  FeedRoomFixture(fixture);
+  ConstraintBuilderOption option;
+  option.tight_gates.min_refined_score = 0.99;
+  option.wide_gates.min_refined_score = 0.99;
+  RecordingHandle handle(fixture.pose_graph);
+  ConstraintBuilder builder(handle, option);
+
+  builder.SearchForNode(fixture.query_node_id);
+  fixture.pose_graph.WaitUntilQuiescent();
+
+  ASSERT_EQ(handle.summaries.size(), 1u);
+  EXPECT_EQ(handle.summaries[0].constraints_added, 0);
+  ASSERT_TRUE(handle.summaries[0].best.has_value());
+  EXPECT_LT(handle.summaries[0].best->score, 0.99);
+}
+
+TEST(ConstraintBuilder, ARoundWithoutCandidatesReportsAtOnce) {
+  RoomFixture fixture;
+  FeedRoomFixture(fixture);
+  RecordingHandle handle(fixture.pose_graph);
+  ConstraintBuilder builder(handle, ConstraintBuilderOption());
+  const Eigen::Affine2d prior = transform::FromXYTheta(400.0, -250.0, 0.3);
+
+  fixture.pose_graph.Enqueue(
+      [&] { builder.SearchForNodeAroundOnTask(fixture.query_node_id, prior); });
+  fixture.pose_graph.WaitUntilQuiescent();
+
+  ASSERT_EQ(handle.summaries.size(), 1u);
+  const MatchRoundSummary& summary = handle.summaries[0];
+  EXPECT_EQ(summary.source, MatchRoundSummary::Source::EXTERNAL);
+  ASSERT_TRUE(summary.prior.has_value());
+  EXPECT_TRUE(summary.prior->isApprox(prior));
+  EXPECT_EQ(summary.candidates, 0);
+  EXPECT_EQ(summary.constraints_added, 0);
+  EXPECT_FALSE(summary.best.has_value());
+}
+
 TEST(ConstraintBuilder, SkipsOwnUnfinishedAndFarSubmaps) {
   PoseGraph pose_graph;
   const SessionId session = pose_graph.StartNewSession(TestTime(0));

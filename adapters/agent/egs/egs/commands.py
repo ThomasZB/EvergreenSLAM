@@ -684,7 +684,7 @@ def _await_relocalization(ctx, args, j, queued):
                 "outcome_unknown",
             )
         time.sleep(min(RELOCALIZATION_POLL_S, left))
-    ctx.print(_relocalization_outcome(r))
+    ctx.print(_relocalization_outcome(r, h.get("aligned_to_base")))
     if r["state"] == "matched":
         ctx.result(dict(j, relocalization=r))
         return EXIT_OK
@@ -692,7 +692,7 @@ def _await_relocalization(ctx, args, j, queued):
     return EXIT_REFUSED
 
 
-def _relocalization_outcome(r):
+def _relocalization_outcome(r, linked):
     state = r.get("state")
     if state == "matched":
         return "matched: corrected %s; check egs here" % fmt.correction(r)
@@ -705,6 +705,12 @@ def _relocalization_outcome(r):
         return (
             "no_match (0 candidates): nothing saved lies around that pose; the place or pose is "
             "outside the saved map"
+        )
+    if not linked:
+        return (
+            "no_match (%d candidates): the scan fits none of them; move or turn the robot to face "
+            "mapped structure and send it again, or egs init-pose --place <path> if it stands at a "
+            "saved place" % n
         )
     return (
         "no_match (%d candidates): the scan fits none of them; if the robot really is there, the "

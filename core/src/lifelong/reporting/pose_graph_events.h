@@ -9,9 +9,11 @@
  *
  */
 
-#ifndef EVERGREENSLAM_LIFELONG_POSE_GRAPH_EVENTS_H_
-#define EVERGREENSLAM_LIFELONG_POSE_GRAPH_EVENTS_H_
+#ifndef EVERGREENSLAM_LIFELONG_REPORTING_POSE_GRAPH_EVENTS_H_
+#define EVERGREENSLAM_LIFELONG_REPORTING_POSE_GRAPH_EVENTS_H_
 
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -24,15 +26,11 @@
 
 namespace evergreenslam::lifelong {
 
-using RelocalizationId = int64_t;
-
-enum class RelocalizationState { PENDING, MATCHED, NO_MATCH, SUPERSEDED };
-const char* ToString(RelocalizationState state);
-
 struct PoseCorrection {
   double translation = 0.0;
   double rotation = 0.0;
 };
+PoseCorrection CorrectionBetween(const Eigen::Affine2d& before, const Eigen::Affine2d& after);
 
 struct PoseGraphEvent {
   enum class Kind {
@@ -46,11 +44,8 @@ struct PoseGraphEvent {
   int64_t seq = 0;
   common::Time time;
   Kind kind = Kind::RELOCALIZATION;
-  std::optional<RelocalizationId> relocalization_id;
-  std::optional<RelocalizationState> outcome;
   int candidates = 0;
   int constraints_added = 0;
-  std::optional<RelocalizationId> superseded_by;
   std::optional<PoseCorrection> correction;
   std::optional<SessionId> session;
   std::optional<SessionId> fed_now;
@@ -80,4 +75,4 @@ class PoseGraphEvents {
 
 }  // namespace evergreenslam::lifelong
 
-#endif  // EVERGREENSLAM_LIFELONG_POSE_GRAPH_EVENTS_H_
+#endif  // EVERGREENSLAM_LIFELONG_REPORTING_POSE_GRAPH_EVENTS_H_
