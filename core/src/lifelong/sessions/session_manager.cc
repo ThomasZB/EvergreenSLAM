@@ -19,7 +19,7 @@
 #include <unordered_set>
 #include <utility>
 
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 #include "lifelong/sessions/frozen_links.h"
 #include "utils/config/yaml_utils.h"
 

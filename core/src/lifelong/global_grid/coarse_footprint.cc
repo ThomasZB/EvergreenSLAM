@@ -9,7 +9,7 @@
  *
  */
 
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 
 #include <glog/logging.h>
 

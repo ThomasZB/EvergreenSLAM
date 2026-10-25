@@ -9,8 +9,8 @@
  *
  */
 
-#ifndef EVERGREENSLAM_LIFELONG_GLOBAL_MAP_H_
-#define EVERGREENSLAM_LIFELONG_GLOBAL_MAP_H_
+#ifndef EVERGREENSLAM_LIFELONG_GLOBAL_GRID_GLOBAL_MAP_H_
+#define EVERGREENSLAM_LIFELONG_GLOBAL_GRID_GLOBAL_MAP_H_
 
 #include <functional>
 
@@ -28,4 +28,4 @@ mapping::GridMapu8 AssembleGlobalMap(const PoseGraphData& graph, double resoluti
 
 }  // namespace evergreenslam::lifelong
 
-#endif  // EVERGREENSLAM_LIFELONG_GLOBAL_MAP_H_
+#endif  // EVERGREENSLAM_LIFELONG_GLOBAL_GRID_GLOBAL_MAP_H_

@@ -13,7 +13,7 @@
 
 #include <vector>
 
-#include "lifelong/global_map.h"
+#include "lifelong/global_grid/global_map.h"
 #include "mapping/grid_mapping/probability_values.h"
 
 namespace evergreenslam::lifelong {

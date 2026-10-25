@@ -9,8 +9,8 @@
  *
  */
 
-#ifndef EVERGREENSLAM_LIFELONG_COARSE_FOOTPRINT_H_
-#define EVERGREENSLAM_LIFELONG_COARSE_FOOTPRINT_H_
+#ifndef EVERGREENSLAM_LIFELONG_GLOBAL_GRID_COARSE_FOOTPRINT_H_
+#define EVERGREENSLAM_LIFELONG_GLOBAL_GRID_COARSE_FOOTPRINT_H_
 
 #include <Eigen/Core>
 #include <cstdint>
@@ -27,4 +27,4 @@ std::vector<std::int64_t> ComputeCoarseFootprint(const SubmapRecord& record, dou
 
 }  // namespace evergreenslam::lifelong
 
-#endif  // EVERGREENSLAM_LIFELONG_COARSE_FOOTPRINT_H_
+#endif  // EVERGREENSLAM_LIFELONG_GLOBAL_GRID_COARSE_FOOTPRINT_H_

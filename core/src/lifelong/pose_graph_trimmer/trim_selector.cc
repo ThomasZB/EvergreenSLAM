@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 #include "utils/transform/transform.h"
 
 namespace evergreenslam::lifelong {

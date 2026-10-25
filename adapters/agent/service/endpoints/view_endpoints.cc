@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "common/file.h"
-#include "lifelong/global_map.h"
+#include "lifelong/global_grid/global_map.h"
 #include "service/graph/graph_reads.h"
 #include "service/http/backend_task.h"
 #include "service/http/endpoints.h"

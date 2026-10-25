@@ -13,7 +13,7 @@
 
 #include <glog/logging.h>
 
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 
 namespace evergreenslam::lifelong {
 

@@ -9,7 +9,7 @@
  *
  */
 
-#include "lifelong/global_map.h"
+#include "lifelong/global_grid/global_map.h"
 
 #include <gtest/gtest.h>
 

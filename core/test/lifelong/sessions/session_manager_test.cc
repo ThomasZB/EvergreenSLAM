@@ -22,7 +22,7 @@
 
 #include "../testing/explicit_ingest.h"
 #include "common/time.h"
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 #include "lifelong/pose_graph.h"
 #include "lifelong/pose_graph_option.h"
 #include "lifelong/sessions/frozen_coverage.h"

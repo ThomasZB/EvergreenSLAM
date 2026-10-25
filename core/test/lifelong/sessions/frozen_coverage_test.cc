@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "common/time.h"
-#include "lifelong/coarse_footprint.h"
+#include "lifelong/global_grid/coarse_footprint.h"
 #include "mapping/grid_mapping/castrays_mapping.h"
 #include "utils/transform/transform.h"
 

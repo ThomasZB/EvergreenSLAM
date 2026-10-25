@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "lifelong/constraints/match_worker_pool.h"
-#include "lifelong/global_map.h"
+#include "lifelong/global_grid/global_map.h"
 #include "lifelong/sessions/frozen_links.h"
 #include "mapping/grid_mapping/probability_values.h"
 
