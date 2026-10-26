@@ -130,11 +130,9 @@ lifelong:
     tight_gates:
       min_coarse_score: 0.4
       min_refined_score: 0.45
-      max_free_space_fraction: 0.3
     wide_gates:
       min_coarse_score: 0.55
       min_refined_score: 0.55
-      max_free_space_fraction: 0.1
     # Refinement moving the coarse result further than this means the peak was not real.
     max_refinement_translation: 0.25
     max_refinement_rotation: 0.1
@@ -142,8 +140,6 @@ lifelong:
     prominence_translation: 0.5
     prominence_rotation: 0.3
     min_score_prominence: 0.1
-    # A cell at or below this counts as observed free; unknown cells do not count.
-    free_space_probability: 0.4
     # Cached branch-and-bound stacks; one costs about 7.7x its grid. 0 disables the cache.
     precomputation_cache_size: 32
     # Worker threads for the per-pair match chain; 0 picks a hardware default.

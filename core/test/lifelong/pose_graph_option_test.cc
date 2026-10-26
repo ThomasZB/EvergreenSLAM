@@ -48,7 +48,7 @@ lifelong:
     search_window_floor: 0.8
     tight_window_max: 1.5
     tight_gates:
-      max_free_space_fraction: 0.35
+      min_refined_score: 0.35
     wide_gates:
       min_refined_score: 0.7
     min_loop_node_gap: 7
@@ -77,7 +77,7 @@ lifelong:
   EXPECT_DOUBLE_EQ(option.constraint_builder.candidate_slack_per_meter, 0.02);
   EXPECT_DOUBLE_EQ(option.constraint_builder.search_window_floor, 0.8);
   EXPECT_DOUBLE_EQ(option.constraint_builder.tight_window_max, 1.5);
-  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_gates.max_free_space_fraction, 0.35);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_gates.min_refined_score, 0.35);
   EXPECT_DOUBLE_EQ(option.constraint_builder.tight_gates.min_coarse_score,
                    PoseGraphOption().constraint_builder.tight_gates.min_coarse_score);
   EXPECT_DOUBLE_EQ(option.constraint_builder.wide_gates.min_refined_score, 0.7);
@@ -140,7 +140,6 @@ trimm: true
 void ExpectSameGates(const AcceptanceGates& gates, const AcceptanceGates& expected) {
   EXPECT_DOUBLE_EQ(gates.min_coarse_score, expected.min_coarse_score);
   EXPECT_DOUBLE_EQ(gates.min_refined_score, expected.min_refined_score);
-  EXPECT_DOUBLE_EQ(gates.max_free_space_fraction, expected.max_free_space_fraction);
 }
 
 void ExpectMatchesDefaults(const PoseGraphOption& option) {
@@ -203,8 +202,6 @@ void ExpectMatchesDefaults(const PoseGraphOption& option) {
                    defaults.constraint_builder.prominence_rotation);
   EXPECT_DOUBLE_EQ(option.constraint_builder.min_score_prominence,
                    defaults.constraint_builder.min_score_prominence);
-  EXPECT_DOUBLE_EQ(option.constraint_builder.free_space_probability,
-                   defaults.constraint_builder.free_space_probability);
   EXPECT_EQ(option.constraint_builder.precomputation_cache_size,
             defaults.constraint_builder.precomputation_cache_size);
   EXPECT_EQ(option.constraint_builder.num_match_workers,

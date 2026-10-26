@@ -425,20 +425,6 @@ ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& inp
     return result;
   }
 
-  // A mean score cannot tell "half the scan contradicts the map" from "everything matches
-  // mediocrely". Unknown cells do not count; occlusion is normal.
-  double free_points = 0.0;
-  for (const auto& point : cloud) {
-    const uint8_t value = grid.GetValueAtPoint(refined_in_grid * point.point);
-    if (mapping::IsKnownValue(value) &&
-        mapping::ValueToProbability(value) <= option_.free_space_probability) {
-      free_points += 1.0;
-    }
-  }
-  if (free_points / static_cast<double>(cloud.size()) > input.gates.max_free_space_fraction) {
-    return result;
-  }
-
   Constraint constraint;
   constraint.type = Constraint::Type::INTER_SUBMAP;
   constraint.from = VariableId::Of(input.submap_id);

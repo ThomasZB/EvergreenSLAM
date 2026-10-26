@@ -24,12 +24,10 @@ namespace evergreenslam::lifelong {
 struct AcceptanceGates {
   double min_coarse_score;
   double min_refined_score;
-  double max_free_space_fraction;
 
   friend std::ostream& operator<<(std::ostream& os, const AcceptanceGates& gates) {
     return os << "{min_coarse_score: " << gates.min_coarse_score
-              << ", min_refined_score: " << gates.min_refined_score
-              << ", max_free_space_fraction: " << gates.max_free_space_fraction << "}";
+              << ", min_refined_score: " << gates.min_refined_score << "}";
   }
 };
 
@@ -54,17 +52,14 @@ struct ConstraintBuilderOption {
   // Per-pair search window at or below this uses tight_gates: a window that cannot alias far may
   // accept a scene that changed since the map was built. Wider windows keep the strict gates.
   double tight_window_max = 1.0;  // m
-  AcceptanceGates tight_gates{0.4, 0.45, 0.3};
-  AcceptanceGates wide_gates{0.55, 0.55, 0.1};
+  AcceptanceGates tight_gates{0.4, 0.45};
+  AcceptanceGates wide_gates{0.55, 0.55};
   double max_refinement_translation = 0.25;  // m
   double max_refinement_rotation = 0.1;      // rad
   // Corridor gate: an alias is a genuine local optimum, so no pointwise criterion sees it.
   double prominence_translation = 0.5;  // m
   double prominence_rotation = 0.3;     // rad
   double min_score_prominence = 0.1;
-  // A cell at or below this counts as observed free. Unknown cells must not count, or normal
-  // occlusion would reject true loops.
-  double free_space_probability = 0.4;
 
   int precomputation_cache_size = 32;
 
@@ -90,7 +85,6 @@ struct ConstraintBuilderOption {
     os << "  prominence_translation: " << option.prominence_translation << std::endl;
     os << "  prominence_rotation: " << option.prominence_rotation << std::endl;
     os << "  min_score_prominence: " << option.min_score_prominence << std::endl;
-    os << "  free_space_probability: " << option.free_space_probability << std::endl;
     os << "  precomputation_cache_size: " << option.precomputation_cache_size << std::endl;
     os << "  num_match_workers: " << option.num_match_workers << std::endl;
     os << "  sampling_ratio: " << option.sampler_option.sampling_ratio << std::endl;

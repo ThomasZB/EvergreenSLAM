@@ -24,8 +24,6 @@ AcceptanceGates LoadAcceptanceGates(const YAML::Node& node, const AcceptanceGate
   AcceptanceGates gates;
   gates.min_coarse_score = LoadOption(node, "min_coarse_score", defaults.min_coarse_score);
   gates.min_refined_score = LoadOption(node, "min_refined_score", defaults.min_refined_score);
-  gates.max_free_space_fraction =
-      LoadOption(node, "max_free_space_fraction", defaults.max_free_space_fraction);
   return gates;
 }
 
@@ -65,8 +63,6 @@ ConstraintBuilderOption LoadConstraintBuilderOption(const YAML::Node& node) {
   option.prominence_rotation = LoadOption(node, "prominence_rotation", option.prominence_rotation);
   option.min_score_prominence =
       LoadOption(node, "min_score_prominence", option.min_score_prominence);
-  option.free_space_probability =
-      LoadOption(node, "free_space_probability", option.free_space_probability);
   option.precomputation_cache_size =
       LoadOption(node, "precomputation_cache_size", option.precomputation_cache_size);
   option.num_match_workers = LoadOption(node, "num_match_workers", option.num_match_workers);

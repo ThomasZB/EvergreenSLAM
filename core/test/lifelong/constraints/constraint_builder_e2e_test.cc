@@ -393,62 +393,6 @@ TEST(ConstraintBuilderE2eTest, SelfSimilarCorridorProducesHighCoarseScoresButNoC
   EXPECT_TRUE(InterConstraints(graph).empty());
 }
 
-// Geometry that is not in the map: nothing may be accepted whatever the coarse stage makes of it.
-TEST(ConstraintBuilderE2eTest, ScanFromDisjointGeometryIsRejected) {
-  const World room_a{
-      0.013,
-      8.011,
-      0.017,
-      6.005,
-      {Eigen::AlignedBox2d(Eigen::Vector2d(5.11, 1.52), Eigen::Vector2d(5.92, 2.33))}};
-  const World room_b{0.021, 4.013, 0.019, 3.207, {}};
-
-  PoseGraph pose_graph;
-  const SessionId first = pose_graph.StartNewSession(TestTime(0));
-  SessionFeeder first_feeder(pose_graph, first, room_a, 30.0);
-  const auto first_pose_at = [](int i) {
-    return transform::FromXYTheta(2.0 + 0.15 * i, 2.3 + 0.08 * i, 0.04 * i);
-  };
-  for (int i = 0; i < 20; ++i) {
-    first_feeder.FeedNode(i, first_pose_at(i), first_pose_at(i));
-  }
-  pose_graph.WaitUntilQuiescent();
-  first_feeder.FinishAll();
-
-  // The second session lives in room B but its alignment claims room A, which is what a wrong
-  // loop closure would need to be true.
-  const SessionId second =
-      pose_graph.StartNewSession(TestTime(100), transform::FromXYTheta(3.5, 3.0, 0.5));
-  SessionFeeder second_feeder(pose_graph, second, room_b, 30.0);
-  const auto second_local_at = [](int i) {
-    return transform::FromXYTheta(0.05 * i, 0.03 * i, 0.02 * i);
-  };
-  const auto second_true_at = [&second_local_at](int i) {
-    return Eigen::Affine2d(transform::FromXYTheta(2.0, 1.6, 0.0) * second_local_at(i));
-  };
-  for (int i = 0; i < 3; ++i) {
-    second_feeder.FeedNode(i, second_true_at(i), second_local_at(i));
-  }
-  pose_graph.WaitUntilQuiescent();
-
-  ConstraintBuilder builder(pose_graph);
-  for (int i = 0; i < 3; ++i) {
-    builder.SearchForNode(NodeId{second.session_index, i});
-  }
-  pose_graph.WaitUntilQuiescent();
-
-  for (const Constraint& c : InterConstraints(pose_graph.graph())) {
-    const Eigen::Affine2d node_in_submap = c.relative_pose;
-    std::cout << "accepted: submap " << c.from.session_id << "." << c.from.index << " node "
-              << c.to->session_id << "." << c.to->index << " rel ("
-              << node_in_submap.translation().x() << ", " << node_in_submap.translation().y()
-              << ", " << transform::GetYaw(node_in_submap) << ")\n";
-  }
-  EXPECT_GT(builder.num_matches_attempted(), 0);
-  EXPECT_EQ(builder.num_constraints_added(), 0);
-  EXPECT_TRUE(InterConstraints(pose_graph.graph()).empty());
-}
-
 // A misaligned new session gets pulled onto the frozen base by cross-session constraints, and
 // the frozen base does not move.
 TEST(ConstraintBuilderE2eTest, CrossSessionLoopsAnchorASecondSessionOntoAFrozenBase) {

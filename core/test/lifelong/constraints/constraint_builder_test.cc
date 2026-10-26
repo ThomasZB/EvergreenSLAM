@@ -790,20 +790,18 @@ TEST(ConstraintBuilder, SearchForSubmapAndSearchForNodeAgreeOnPairs) {
   EXPECT_EQ(by_submap.num_constraints_added(), by_node.num_constraints_added());
 }
 
-// Moved furniture: a fifth of the scan lands in cells the map observed free. A window that
-// cannot alias far may accept the changed scene; the same pair under a wide window may not.
-// Twelve mapping scans leave free cells near the 0.4 threshold, so the map here is denser.
-// The room submap never records a path, so the pair's slack is exactly the cap.
-TEST(ConstraintBuilder, ATightWindowToleratesAChangedSceneAndAWideOneDoesNot) {
+// Moved furniture: a fifth of the scan lands in cells the map observed free, which a long-lived
+// map has to accept under either gate set. The room submap never records a path, so the pair's
+// slack is exactly the cap.
+TEST(ConstraintBuilder, AChangedSceneIsAcceptedUnderTightAndWideWindows) {
   const World moved{kRoom.min_x, kRoom.max_x, kRoom.min_y, kRoom.max_y,
                     Eigen::AlignedBox2d(Eigen::Vector2d(6.2, 3.95), Eigen::Vector2d(7.4, 4.9))};
-  const auto added = [&moved](double max_candidate_slack, double tight_window_max) {
+  const auto added = [&moved](double max_candidate_slack) {
     RoomFixture fixture;
     FeedRoomFixture(fixture, moved, /*num_map_scans=*/40);
     ConstraintBuilderOption option;
     option.search_window_floor = 0.5;
     option.max_candidate_slack = max_candidate_slack;
-    option.tight_window_max = tight_window_max;
     ConstraintBuilder builder(fixture.pose_graph, option);
     builder.SearchForNode(fixture.query_node_id);
     fixture.pose_graph.WaitUntilQuiescent();
@@ -821,10 +819,8 @@ TEST(ConstraintBuilder, ATightWindowToleratesAChangedSceneAndAWideOneDoesNot) {
   };
 
   // The window is the 0.5 m floor plus the slack: 0.9 m takes the tight gates, 1.1 m the wide.
-  EXPECT_EQ(added(/*max_candidate_slack=*/0.4, /*tight_window_max=*/1.0), 1);
-  EXPECT_EQ(added(/*max_candidate_slack=*/0.6, /*tight_window_max=*/1.0), 0);
-  // The wide window found the same pose; only the gate set rejected it.
-  EXPECT_EQ(added(/*max_candidate_slack=*/0.6, /*tight_window_max=*/1.5), 1);
+  EXPECT_EQ(added(/*max_candidate_slack=*/0.4), 1);
+  EXPECT_EQ(added(/*max_candidate_slack=*/0.6), 1);
 }
 
 TEST(ConstraintBuilder, FrozenAgainstFrozenIsNeverMatched) {
