@@ -18,17 +18,6 @@ namespace evergreenslam::lifelong {
 using utils::config::Child;
 using utils::config::LoadOption;
 
-namespace {
-
-AcceptanceGates LoadAcceptanceGates(const YAML::Node& node, const AcceptanceGates& defaults) {
-  AcceptanceGates gates;
-  gates.min_coarse_score = LoadOption(node, "min_coarse_score", defaults.min_coarse_score);
-  gates.min_refined_score = LoadOption(node, "min_refined_score", defaults.min_refined_score);
-  return gates;
-}
-
-}  // namespace
-
 ConstraintBuilderOption LoadConstraintBuilderOption(const YAML::Node& node) {
   ConstraintBuilderOption option;
   option.matcher_option = utils::scan_matching::LoadFastCorrelativeScanMatcherOption(
@@ -49,11 +38,13 @@ ConstraintBuilderOption LoadConstraintBuilderOption(const YAML::Node& node) {
       node, "relocalization_linear_search_window", option.relocalization_linear_search_window);
   option.relocalization_angular_search_window = LoadOption(
       node, "relocalization_angular_search_window", option.relocalization_angular_search_window);
+  option.relocalization_min_score =
+      LoadOption(node, "relocalization_min_score", option.relocalization_min_score);
   option.max_constraint_distance =
       LoadOption(node, "max_constraint_distance", option.max_constraint_distance);
   option.tight_window_max = LoadOption(node, "tight_window_max", option.tight_window_max);
-  option.tight_gates = LoadAcceptanceGates(Child(node, "tight_gates"), option.tight_gates);
-  option.wide_gates = LoadAcceptanceGates(Child(node, "wide_gates"), option.wide_gates);
+  option.tight_min_score = LoadOption(node, "tight_min_score", option.tight_min_score);
+  option.wide_min_score = LoadOption(node, "wide_min_score", option.wide_min_score);
   option.max_refinement_translation =
       LoadOption(node, "max_refinement_translation", option.max_refinement_translation);
   option.max_refinement_rotation =

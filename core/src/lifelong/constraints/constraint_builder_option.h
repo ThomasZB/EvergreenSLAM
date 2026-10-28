@@ -21,16 +21,6 @@
 
 namespace evergreenslam::lifelong {
 
-struct AcceptanceGates {
-  double min_coarse_score;
-  double min_refined_score;
-
-  friend std::ostream& operator<<(std::ostream& os, const AcceptanceGates& gates) {
-    return os << "{min_coarse_score: " << gates.min_coarse_score
-              << ", min_refined_score: " << gates.min_refined_score << "}";
-  }
-};
-
 struct ConstraintBuilderOption {
   utils::scan_matching::FastCorrelativeScanMatcherOption matcher_option;
   ConstraintSamplerOption sampler_option;
@@ -47,13 +37,15 @@ struct ConstraintBuilderOption {
   // Coarse windows around an operator hint, which replaces the graph's estimate as the prior.
   double relocalization_linear_search_window = 2.0;   // m
   double relocalization_angular_search_window = 0.5;  // rad
-  double max_constraint_distance = 15.0;              // m
+  // reseed threshold
+  double relocalization_min_score = 0.2;
+  double max_constraint_distance = 15.0;  // m
 
-  // Per-pair search window at or below this uses tight_gates: a window that cannot alias far may
-  // accept a scene that changed since the map was built. Wider windows keep the strict gates.
+  // Per-pair search window at or below this uses tight_min_score: a window that cannot alias far
+  // may accept a scene that changed since the map was built. Wider windows keep the strict score.
   double tight_window_max = 1.0;  // m
-  AcceptanceGates tight_gates{0.4, 0.45};
-  AcceptanceGates wide_gates{0.55, 0.55};
+  double tight_min_score = 0.4;
+  double wide_min_score = 0.55;
   double max_refinement_translation = 0.25;  // m
   double max_refinement_rotation = 0.1;      // rad
   // Corridor gate: an alias is a genuine local optimum, so no pointwise criterion sees it.
@@ -63,7 +55,7 @@ struct ConstraintBuilderOption {
 
   int precomputation_cache_size = 32;
 
-  // 0 runs matches inline on the backend task, the deterministic mode tests rely on.
+  // 0 runs matches inline on the backend task, PoseGraph replaces 0 with a hardware default.
   int num_match_workers = 0;
 
   friend std::ostream& operator<<(std::ostream& os, const ConstraintBuilderOption& option) {
@@ -76,10 +68,11 @@ struct ConstraintBuilderOption {
        << std::endl;
     os << "  relocalization_angular_search_window: " << option.relocalization_angular_search_window
        << std::endl;
+    os << "  relocalization_min_score: " << option.relocalization_min_score << std::endl;
     os << "  max_constraint_distance: " << option.max_constraint_distance << std::endl;
     os << "  tight_window_max: " << option.tight_window_max << std::endl;
-    os << "  tight_gates: " << option.tight_gates << std::endl;
-    os << "  wide_gates: " << option.wide_gates << std::endl;
+    os << "  tight_min_score: " << option.tight_min_score << std::endl;
+    os << "  wide_min_score: " << option.wide_min_score << std::endl;
     os << "  max_refinement_translation: " << option.max_refinement_translation << std::endl;
     os << "  max_refinement_rotation: " << option.max_refinement_rotation << std::endl;
     os << "  prominence_translation: " << option.prominence_translation << std::endl;

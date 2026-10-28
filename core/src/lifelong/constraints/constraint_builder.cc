@@ -12,6 +12,7 @@
 #include "lifelong/constraints/constraint_builder.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -42,6 +43,12 @@ double ScoreAtPose(const mapping::GridMapu8& grid, const sensor::PointCloud& clo
     sum += mapping::ValueToProbability(grid.GetValueAtPoint(pose * point.point));
   }
   return sum / static_cast<double>(cloud.size());
+}
+
+void RaiseTo(std::atomic<double>& value, double candidate) {
+  double current = value.load();
+  while (candidate > current && !value.compare_exchange_weak(current, candidate)) {
+  }
 }
 
 // Finished grids only: an unfinished known_area() moves under the frontend's inserts.
@@ -271,24 +278,25 @@ void ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budg
   const auto round = std::make_shared<Round>();
   round->summary = std::move(summary);
   round->summary.candidates = static_cast<int>(selected.size());
+  round->min_score = round->summary.source == PriorSource::GRAPH
+                         ? std::numeric_limits<double>::infinity()
+                         : option_.relocalization_min_score;
   // Held by this call, so a round with nothing to match still finishes.
   round->unfinished = 1;
-  const PriorSource source = round->summary.source;
-  const Eigen::Affine2d external_prior = round->summary.prior.value_or(Eigen::Affine2d::Identity());
   for (const LoopCandidate& candidate : selected) {
     attempted_pairs_.insert({candidate.node_id, candidate.submap_id});
     num_matches_attempted_.fetch_add(1);
-    std::optional<MatchInput> input = PrepareMatch(candidate, source, external_prior);
+    std::optional<MatchInput> input = PrepareMatch(candidate, round->summary);
     if (!input.has_value()) {
       continue;
     }
     if (pool_ == nullptr) {
-      ApplyMatchResult(RunMatch(*input), *round);
+      ApplyMatchResult(RunMatch(*input, round->min_score), *round);
       continue;
     }
     ++round->unfinished;
     pool_->Submit([this, input = std::move(*input), round] {
-      const MatchResult result = RunMatch(input);
+      const MatchResult result = RunMatch(input, round->min_score);
       // Graph writes happen on the backend task, never on a worker.
       handle_.Enqueue([this, result, round] {
         ApplyMatchResult(result, *round);
@@ -300,7 +308,7 @@ void ConstraintBuilder::RunRound(std::vector<LoopCandidate> candidates, int budg
 }
 
 std::optional<ConstraintBuilder::MatchInput> ConstraintBuilder::PrepareMatch(
-    const LoopCandidate& candidate, PriorSource source, const Eigen::Affine2d& external_prior) {
+    const LoopCandidate& candidate, const MatchRoundSummary& round) {
   const PoseGraphData& graph = handle_.graph();
   const Node& node = graph.node(candidate.node_id);
   const SubmapRecord& record = graph.submap(candidate.submap_id);
@@ -314,23 +322,23 @@ std::optional<ConstraintBuilder::MatchInput> ConstraintBuilder::PrepareMatch(
   // Force the lazy snapshot here, on the backend task; workers then only read it.
   record.submap->Snapshot();
   input.grid_to_global = record.global_pose;
-  switch (source) {
+  switch (round.source) {
     case PriorSource::GRAPH:
       input.prior = node.global_pose;
       input.linear_search_window = option_.search_window_floor + candidate.search_slack;
       break;
     case PriorSource::EXTERNAL:
-      input.prior = external_prior;
+      input.prior = round.prior;
       input.linear_search_window = option_.relocalization_linear_search_window;
       input.angular_search_window = option_.relocalization_angular_search_window;
       break;
     case PriorSource::NONE:
       break;
   }
-  input.gates =
-      source != PriorSource::NONE && input.linear_search_window <= option_.tight_window_max
-          ? option_.tight_gates
-          : option_.wide_gates;
+  input.min_score =
+      round.source != PriorSource::NONE && input.linear_search_window <= option_.tight_window_max
+          ? option_.tight_min_score
+          : option_.wide_min_score;
   input.cloud = node.constant_data.point_cloud;
   input.precomputation = PrecomputationFor(candidate.submap_id, record.submap);
   return input;
@@ -367,7 +375,8 @@ ConstraintBuilder::PrecomputationFor(const SubmapId& submap_id,
   return stack;
 }
 
-ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& input) const {
+ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(
+    const MatchInput& input, std::atomic<double>& round_min_score) const {
   const mapping::GridMapu8& grid = input.submap->Snapshot();
   const sensor::PointCloud& cloud = input.cloud;
 
@@ -375,7 +384,7 @@ ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& inp
       utils::scan_matching::CandidateSubmap{input.grid_to_global, grid}};
   utils::scan_matching::FastCorrelativeScanMatcher::MatchParams params;
   params.linear_search_window = input.linear_search_window;
-  params.min_score = input.gates.min_coarse_score;
+  params.min_score = std::min(input.min_score, round_min_score.load());
   params.angular_search_window = input.angular_search_window;
   params.stack = input.precomputation;
   const std::optional<utils::scan_matching::GlobalMatchResult> coarse =
@@ -394,6 +403,7 @@ ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& inp
   const double refined_score = ScoreAtPose(grid, cloud, refined_in_grid);
   MatchResult result;
   result.refined = ScoredPose{input.grid_to_global * refined_in_grid, refined_score};
+  RaiseTo(round_min_score, refined_score);
 
   const double refinement_translation =
       (refined_in_grid.translation() - coarse_in_grid.translation()).norm();
@@ -403,7 +413,7 @@ ConstraintBuilder::MatchResult ConstraintBuilder::RunMatch(const MatchInput& inp
       refinement_rotation > option_.max_refinement_rotation) {
     return result;
   }
-  if (refined_score < input.gates.min_refined_score) {
+  if (refined_score < input.min_score) {
     return result;
   }
 

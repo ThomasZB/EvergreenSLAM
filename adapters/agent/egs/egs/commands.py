@@ -123,7 +123,9 @@ class _Corrections:
 
 def _is_correction(e):
     kind = e.get("kind")
-    return kind == "pose_correction" or (kind == "relocalization" and e.get("state") == "matched")
+    return kind == "pose_correction" or (
+        kind == "relocalization" and e.get("state") in ("matched", "reseeded")
+    )
 
 
 def _sample_base(ctx, j, seconds, events):
@@ -685,7 +687,7 @@ def _await_relocalization(ctx, args, j, queued):
             )
         time.sleep(min(RELOCALIZATION_POLL_S, left))
     ctx.print(_relocalization_outcome(r, h.get("aligned_to_base")))
-    if r["state"] == "matched":
+    if r["state"] in ("matched", "reseeded"):
         ctx.result(dict(j, relocalization=r))
         return EXIT_OK
     ctx.result(dict(j, ok=False, reason=r["state"], relocalization=r))
@@ -696,6 +698,13 @@ def _relocalization_outcome(r, linked):
     state = r.get("state")
     if state == "matched":
         return "matched: corrected %s; check egs here" % fmt.correction(r)
+    if state == "reseeded":
+        score = r.get("best_score")
+        return (
+            "reseeded: moved %s (best score %s), not linked to the saved map; a closure links it "
+            "as the robot moves, check egs here"
+            % (fmt.correction(r), "-" if score is None else "%.2f" % score)
+        )
     if state == "superseded":
         if r.get("superseded_by") is None:
             return "superseded: the fed session was dropped; send it again"

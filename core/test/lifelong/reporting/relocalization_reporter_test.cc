@@ -57,7 +57,7 @@ struct Fixture {
 
 TEST(RelocalizationReporter, OrdinaryLoopClosureRoundsAreNotReported) {
   Fixture fixture;
-  fixture.reporter.OnMatchRoundFinished(fixture.Round(MatchRoundSummary::Source::GRAPH));
+  fixture.reporter.OnMatchRoundFinished(fixture.Round(MatchRoundSummary::Source::GRAPH), false);
   EXPECT_TRUE(fixture.results.empty());
   EXPECT_TRUE(fixture.events.Since(0).events.empty());
 }
@@ -70,7 +70,7 @@ TEST(RelocalizationReporter, AnAcceptedRoundReportsHowFarTheNodeMoved) {
   summary.best = ScoredPose{transform::FromXYTheta(3.0, 4.0, 0.5), 0.8};
   fixture.graph.SetNodeGlobalPose(fixture.node_id, transform::FromXYTheta(3.0, 4.0, 0.5));
 
-  fixture.reporter.OnMatchRoundFinished(summary);
+  fixture.reporter.OnMatchRoundFinished(summary, false);
 
   ASSERT_EQ(fixture.results.size(), 1u);
   const RelocalizationResult& result = fixture.results[0];
@@ -98,17 +98,35 @@ TEST(RelocalizationReporter, AnAcceptedRoundReportsHowFarTheNodeMoved) {
 TEST(RelocalizationReporter, ARoundWithoutAConstraintReportsNoCorrection) {
   Fixture fixture;
   fixture.graph.SetNodeGlobalPose(fixture.node_id, transform::FromXYTheta(3.0, 4.0, 0.5));
-  fixture.reporter.OnMatchRoundFinished(fixture.Round(MatchRoundSummary::Source::NONE));
+  fixture.reporter.OnMatchRoundFinished(fixture.Round(MatchRoundSummary::Source::NONE), false);
   ASSERT_EQ(fixture.results.size(), 1u);
   EXPECT_FALSE(fixture.results[0].prior.has_value());
   EXPECT_FALSE(fixture.results[0].correction.has_value());
+}
+
+TEST(RelocalizationReporter, AReseededRoundReportsItsMoveWithoutAConstraint) {
+  Fixture fixture;
+  MatchRoundSummary summary = fixture.Round(MatchRoundSummary::Source::EXTERNAL);
+  summary.prior = transform::FromXYTheta(3.0, 4.0, 0.5);
+  fixture.graph.SetNodeGlobalPose(fixture.node_id, *summary.prior);
+
+  fixture.reporter.OnMatchRoundFinished(summary, true);
+
+  ASSERT_EQ(fixture.results.size(), 1u);
+  EXPECT_TRUE(fixture.results[0].reseeded);
+  EXPECT_EQ(fixture.results[0].constraints_added, 0);
+  ASSERT_TRUE(fixture.results[0].correction.has_value());
+  EXPECT_NEAR(fixture.results[0].correction->translation, 5.0, 1e-9);
+  const std::vector<PoseGraphEvent> events = fixture.events.Since(0).events;
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_TRUE(events[0].reseeded);
 }
 
 TEST(RelocalizationReporter, ARoundWhoseNodeIsGoneIsNotReported) {
   Fixture fixture;
   MatchRoundSummary summary = fixture.Round(MatchRoundSummary::Source::EXTERNAL);
   summary.node_id = NodeId{fixture.session.session_index + 1, 0};
-  fixture.reporter.OnMatchRoundFinished(summary);
+  fixture.reporter.OnMatchRoundFinished(summary, false);
   EXPECT_TRUE(fixture.results.empty());
   EXPECT_TRUE(fixture.events.Since(0).events.empty());
 }

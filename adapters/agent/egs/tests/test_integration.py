@@ -230,13 +230,14 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn("removed places/dock/ramp/zone.yaml", self.ok("zone", "rm", "places/dock/ramp"))
         self.assertEqual(self.ok("zone", "ls").splitlines()[0], "no zones")
 
-        # One session and no other to match against: the request settles with nothing to try.
+        # One session and no other to match against: the floating session moves onto the place,
+        # where the robot already stands.
         code, out, _ = self.egs("init-pose", "--place", "places/dock")
-        self.assertEqual(code, 1, out)
-        self.assertIn("no_match (0 candidates)", out)
-        self.assertRegex(self.ok("here"), r"(?m)^relocalization 1 place \(anchor \d+\) no_match")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith("reseeded: moved 0.00 m 0° (best score -)"), out)
+        self.assertRegex(self.ok("here"), r"(?m)^relocalization 1 place \(anchor \d+\) reseeded")
         events = self.ok("events")
-        self.assertRegex(events, r"(?m)^\d+ relocalization no_match \(0 candidates\)$")
+        self.assertRegex(events, r"(?m)^\d+ relocalization reseeded: moved 0\.00 m 0°, not linked$")
         page = json.loads(self.ok("events", "--json"))
         self.assertFalse(page["lost"])
         self.assertEqual(

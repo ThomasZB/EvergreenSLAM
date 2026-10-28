@@ -44,7 +44,8 @@ egs status / here / session ls before retrying.
 --json (every command but fs cat, skill, help, mcp): one JSON object instead of text; prefer it.
 
 exit codes: 0 done (a session plan printed without --yes is done too), 1 refused or plan
-rejected (nothing changed unless stated), or a relocalization ended no_match or superseded,
+rejected (nothing changed unless stated), or a relocalization ended no_match or superseded
+(reseeded exits 0: the pose moved but is not linked to the saved map yet),
 2 usage or bad path, 3 process unreachable, not started, or outcome unknown.
 There is no goto: egs never moves the robot; hand `approach` from `egs where` to your navigator."""
 
@@ -77,7 +78,7 @@ look around memory/ -> egs fs tree places | ls <path> | cat <file> | grep <words
 new container, rename, re-parent, delete -> egs fs mkdir | mv | rm -r (bindings move along)
 notes and skills -> egs fs write places/<p>/notes.md --file F (or stdin); egs fs append ...
 
-exit 0 done, 1 refused, rejected or no_match, 2 bad usage or path, 3 unreachable or outcome unknown
+exit 0 done or reseeded (not linked yet), 1 refused, rejected or no_match, 2 bad usage, 3 unreachable or outcome unknown
 outcome unknown: a change may have happened; check egs status / here / session ls, then retry
 """
 
@@ -307,7 +308,7 @@ def build_parser():
     ip = add(
         "init-pose",
         commands.cmd_init_pose,
-        "tell the process where the robot is; waits for matched / no_match",
+        "tell the process where the robot is; waits for matched / reseeded / no_match",
     )
     ip.add_argument("pose", nargs="*", type=float, metavar="X Y THETA")
     ip.add_argument("--place", help="use the pose saved in <path>/place.yaml (no walk-up)")

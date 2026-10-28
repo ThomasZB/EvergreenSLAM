@@ -136,6 +136,11 @@ the PNG path on this machine;
    - `matched: corrected D m A°`: applied. `egs here --sample 20` until the median settles:
      `linked to base yes` and `base` healthy means done. `matched` says the hint was used, not
      that the pose is now right.
+   - `reseeded: moved D m A° (best score S), not linked to the saved map` (exit 0): the session
+     was not linked to the base, so it was moved onto the best weak match, or onto the given pose
+     when nothing matched. A guess, not a match: drive through mapped area and
+     `egs here --sample 20` until `linked to base yes`; still `no` after a minute, send it again
+     from a better spot or `egs relocalize`.
    - `no_match (0 candidates)`: that place or pose lies outside the saved map; check the place
      name, or `egs relocalize` to search the whole map.
    - `no_match (N candidates)` with `linked to base no`: the scan fit nothing from here; turn or
@@ -167,7 +172,8 @@ the PNG path on this machine;
   map, so `current` and `closest` are not to be trusted. Wait, drive through an area that is
   already mapped, or follow **Recovery**, then ask again.
 - `relocalization N <kind> <state>` in `egs here` / `egs status`: the latest `init-pose` or
-  `relocalize` and how it ended (`pending`, `matched: corrected ...`, `no_match`, `superseded`).
+  `relocalize` and how it ended (`pending`, `matched: corrected ...`, `reseeded: moved ...`,
+  `no_match`, `superseded`).
 - `egs events`: one line per backend event, oldest first: `relocalization`, `pose_correction` (a
   re-optimization moved the robot's pose more than 0.3 m or 0.2 rad), `session_frozen`,
   `session_removed`, `fed_session_dropped`. Resume with `--since <next_seq>`; `events lost` on
@@ -209,7 +215,8 @@ the PNG path on this machine;
 - `@solve N` says which optimization the numbers came from; they move when the map re-optimizes.
 - Times are ages (`35s`, `20m`, `6d`). `find` puts things last seen `absent` at the bottom and
   says what matched when it was not the name: `places/a/pallet-jack  (alias "hand truck")`.
-- Exit codes: 0 done (a session plan printed without `--yes` also exits 0: `plan only`), 1 refused,
+- Exit codes: 0 done (a session plan printed without `--yes` also exits 0: `plan only`; so does
+  `reseeded`, which moved the pose without linking it), 1 refused,
   plan rejected, `no_match` or `superseded`, 2 bad usage or path, 3 process unreachable. `outcome unknown`
   means a change may or may not have happened: check with `egs status`, `egs here` or
   `egs session ls` before retrying.

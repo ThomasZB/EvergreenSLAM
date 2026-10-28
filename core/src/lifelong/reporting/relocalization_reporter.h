@@ -34,7 +34,7 @@ struct RelocalizationResult {
   std::optional<Eigen::Affine2d> prior;
   int candidates = 0;
   int constraints_added = 0;
-  // How far the round moved the node; set when a constraint landed.
+  bool reseeded = false;
   std::optional<PoseCorrection> correction;
   std::optional<ScoredPose> best;
 };
@@ -47,7 +47,7 @@ class RelocalizationReporter {
   RelocalizationReporter(const PoseGraphData& graph, EventReporter& events);
 
   void AddListener(Listener listener);
-  void OnMatchRoundFinished(const MatchRoundSummary& summary);
+  void OnMatchRoundFinished(const MatchRoundSummary& summary, bool reseeded);
 
  private:
   const PoseGraphData& graph_;

@@ -32,7 +32,7 @@ namespace evergreenslam::agent {
 using RelocalizationId = int64_t;
 
 struct RelocalizationStatus {
-  enum class State { PENDING, MATCHED, NO_MATCH, SUPERSEDED };
+  enum class State { PENDING, MATCHED, RESEEDED, NO_MATCH, SUPERSEDED };
 
   RelocalizationId id = 0;
   std::string kind;
@@ -42,6 +42,7 @@ struct RelocalizationStatus {
   int candidates = 0;
   int constraints_added = 0;
   std::optional<lifelong::PoseCorrection> correction;
+  std::optional<double> best_score;
   std::optional<common::Time> requested_at;
   std::optional<common::Time> resolved_at;
   std::optional<RelocalizationId> superseded_by;

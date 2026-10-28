@@ -47,10 +47,8 @@ lifelong:
     candidate_slack_per_meter: 0.02
     search_window_floor: 0.8
     tight_window_max: 1.5
-    tight_gates:
-      min_refined_score: 0.35
-    wide_gates:
-      min_refined_score: 0.7
+    tight_min_score: 0.35
+    relocalization_min_score: 0.3
     min_loop_node_gap: 7
     num_match_workers: 3
     constraint_sampler:
@@ -77,10 +75,10 @@ lifelong:
   EXPECT_DOUBLE_EQ(option.constraint_builder.candidate_slack_per_meter, 0.02);
   EXPECT_DOUBLE_EQ(option.constraint_builder.search_window_floor, 0.8);
   EXPECT_DOUBLE_EQ(option.constraint_builder.tight_window_max, 1.5);
-  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_gates.min_refined_score, 0.35);
-  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_gates.min_coarse_score,
-                   PoseGraphOption().constraint_builder.tight_gates.min_coarse_score);
-  EXPECT_DOUBLE_EQ(option.constraint_builder.wide_gates.min_refined_score, 0.7);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_min_score, 0.35);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.wide_min_score,
+                   PoseGraphOption().constraint_builder.wide_min_score);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.relocalization_min_score, 0.3);
   EXPECT_EQ(option.constraint_builder.min_loop_node_gap, 7);
   EXPECT_EQ(option.constraint_builder.sampler_option.max_matches_per_round, 5);
   // The loop matcher comes from the shared global_scan_matcher section, not from lifelong.
@@ -121,25 +119,18 @@ trimmer:
   selector:
     keep_newest_submap: 1
 constraint_builder:
-  wide_gates:
-    min_refined_scor: 0.6
+  wide_min_scor: 0.6
 trimm: true
 )");
   const std::vector<std::string> unknown = FindUnknownLifelongKeys(node);
   ASSERT_EQ(unknown.size(), 4u);
-  EXPECT_NE(
-      std::find(unknown.begin(), unknown.end(), "constraint_builder/wide_gates/min_refined_scor"),
-      unknown.end());
+  EXPECT_NE(std::find(unknown.begin(), unknown.end(), "constraint_builder/wide_min_scor"),
+            unknown.end());
   EXPECT_NE(std::find(unknown.begin(), unknown.end(), "optimization/optimize_every_n_node"),
             unknown.end());
   EXPECT_NE(std::find(unknown.begin(), unknown.end(), "trimmer/selector/keep_newest_submap"),
             unknown.end());
   EXPECT_NE(std::find(unknown.begin(), unknown.end(), "trimm"), unknown.end());
-}
-
-void ExpectSameGates(const AcceptanceGates& gates, const AcceptanceGates& expected) {
-  EXPECT_DOUBLE_EQ(gates.min_coarse_score, expected.min_coarse_score);
-  EXPECT_DOUBLE_EQ(gates.min_refined_score, expected.min_refined_score);
 }
 
 void ExpectMatchesDefaults(const PoseGraphOption& option) {
@@ -190,8 +181,12 @@ void ExpectMatchesDefaults(const PoseGraphOption& option) {
                    defaults.constraint_builder.relocalization_angular_search_window);
   EXPECT_DOUBLE_EQ(option.constraint_builder.tight_window_max,
                    defaults.constraint_builder.tight_window_max);
-  ExpectSameGates(option.constraint_builder.tight_gates, defaults.constraint_builder.tight_gates);
-  ExpectSameGates(option.constraint_builder.wide_gates, defaults.constraint_builder.wide_gates);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.relocalization_min_score,
+                   defaults.constraint_builder.relocalization_min_score);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.tight_min_score,
+                   defaults.constraint_builder.tight_min_score);
+  EXPECT_DOUBLE_EQ(option.constraint_builder.wide_min_score,
+                   defaults.constraint_builder.wide_min_score);
   EXPECT_DOUBLE_EQ(option.constraint_builder.max_refinement_translation,
                    defaults.constraint_builder.max_refinement_translation);
   EXPECT_DOUBLE_EQ(option.constraint_builder.max_refinement_rotation,

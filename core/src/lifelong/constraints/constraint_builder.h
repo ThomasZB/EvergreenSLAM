@@ -73,10 +73,11 @@ class ConstraintBuilder {
     std::optional<ScoredPose> refined;
     std::optional<Constraint> constraint;
   };
-  // Backend task only.
   struct Round {
+    // Backend task only.
     MatchRoundSummary summary;
     int unfinished = 0;
+    std::atomic<double> min_score{0.0};
   };
 
   // Resolved on the backend task: a worker must never touch graph state it cannot pin.
@@ -89,7 +90,7 @@ class ConstraintBuilder {
     std::optional<Eigen::Affine2d> prior;
     double linear_search_window = 0.0;
     std::optional<double> angular_search_window;
-    AcceptanceGates gates{};
+    double min_score = 0.0;
     // Immutable and self-contained, so a worker holding this copy survives eviction.
     std::shared_ptr<const utils::scan_matching::PrecomputationGridStack> precomputation;
     // Copied: the node can be trimmed while the match runs.
@@ -114,12 +115,12 @@ class ConstraintBuilder {
   MatchRoundSummary NodeRound(const NodeId& node_id, PriorSource source,
                               const std::optional<Eigen::Affine2d>& prior) const;
   void RunRound(std::vector<LoopCandidate> candidates, int budget, MatchRoundSummary summary);
-  std::optional<MatchInput> PrepareMatch(const LoopCandidate& candidate, PriorSource source,
-                                         const Eigen::Affine2d& external_prior);
+  std::optional<MatchInput> PrepareMatch(const LoopCandidate& candidate,
+                                         const MatchRoundSummary& round);
   std::shared_ptr<const utils::scan_matching::PrecomputationGridStack> PrecomputationFor(
       const SubmapId& submap_id, const std::shared_ptr<const mapping::Submap>& submap);
-  // Thread safe: reads only the input and the stateless coarse matcher.
-  MatchResult RunMatch(const MatchInput& input) const;
+  // Thread safe: reads the input and the stateless coarse matcher, raises round_min_score.
+  MatchResult RunMatch(const MatchInput& input, std::atomic<double>& round_min_score) const;
   void ApplyMatchResult(const MatchResult& result, Round& round);
   void FinishMatch(Round& round);
 

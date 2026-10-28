@@ -253,9 +253,9 @@ TEST_F(RelocalizationE2eTest, ACorrectHintSnapsTheSessionOntoTheBaseWithoutAKeyf
   EXPECT_LT(jumps.front().seq, outcomes[0].seq);
 }
 
-// The operator's first guess is wrong; nothing moves, and the pose resent from an easier spot is
-// not refused.
-TEST_F(RelocalizationE2eTest, AWrongHintMovesNothingAndTheResentHintSucceeds) {
+// The operator's first guess is wrong: the floating session moves there, or onto the best match
+// near it, without a closure, and the pose resent from an easier spot is not refused.
+TEST_F(RelocalizationE2eTest, AWrongHintMovesTheFloatingSessionAndTheResentHintSnapsIt) {
   Boot();
   FeedThrough(14);
   ExpectLost(14);
@@ -266,37 +266,81 @@ TEST_F(RelocalizationE2eTest, AWrongHintMovesNothingAndTheResentHintSucceeds) {
   backend_->WaitUntilQuiescent();
   EXPECT_GT(backend_->constraint_builder().num_matches_attempted(), 0)
       << "the wrong hint still lies inside the room, so candidates exist";
-  ExpectLost(14);
+  EXPECT_EQ(NumClosuresOntoOtherSessions(), 0);
   ASSERT_EQ(Results().size(), 1u);
   const RelocalizationResult rejected = Results()[0];
   EXPECT_GT(rejected.candidates, 0);
   EXPECT_EQ(rejected.constraints_added, 0);
-  EXPECT_FALSE(rejected.correction.has_value());
+  EXPECT_TRUE(rejected.reseeded);
+  ASSERT_TRUE(rejected.correction.has_value());
+  const bool matched_somewhere =
+      rejected.best.has_value() &&
+      rejected.best->score >= option_.constraint_builder.relocalization_min_score;
+  EXPECT_LT(PoseDistance(NewestPose(), matched_somewhere ? rejected.best->global_pose : wrong),
+            1e-9);
 
   FeedThrough(20);
-  ExpectLost(20);
   backend_->SetInitialPose(LoopGroundTruth(20));
   backend_->WaitUntilQuiescent();
   ExpectSnappedOntoTruth(20);
-  ASSERT_EQ(Results().size(), 2u);
-  EXPECT_GT(Results()[1].constraints_added, 0);
+  ASSERT_GE(Results().size(), 2u);
+  EXPECT_GT(Results().back().constraints_added, 0);
 }
 
-TEST_F(RelocalizationE2eTest, AHintOutsideEveryFinishedSubmapReportsZeroCandidates) {
+// The session moves without a closure, so it stays floating and its own search keeps the
+// ordinary thresholds.
+TEST_F(RelocalizationE2eTest, AHintMatchedBelowTheThresholdsMovesTheSessionOntoTheMatch) {
+  option_.constraint_builder.tight_min_score = 0.99;
+  option_.constraint_builder.wide_min_score = 0.99;
+  Boot();
+  FeedThrough(14);
+  ExpectLost(14);
+
+  backend_->SetInitialPose(
+      Eigen::Affine2d(LoopGroundTruth(14) * transform::FromXYTheta(0.3, -0.2, 0.05)));
+  backend_->WaitUntilQuiescent();
+  EXPECT_EQ(NumClosuresOntoOtherSessions(), 0);
+  ASSERT_EQ(Results().size(), 1u);
+  const RelocalizationResult result = Results()[0];
+  EXPECT_EQ(result.constraints_added, 0);
+  EXPECT_TRUE(result.reseeded);
+  ASSERT_TRUE(result.best.has_value());
+  EXPECT_LT(result.best->score, 0.99);
+  EXPECT_LT(TranslationError(result.best->global_pose, 14), 0.15);
+  EXPECT_LT(TranslationError(NewestPose(), 14), 0.15);
+  EXPECT_LT(RotationError(NewestPose(), 14), 0.05);
+  ASSERT_TRUE(result.correction.has_value());
+  EXPECT_GT(result.correction->translation, 20.0);
+  const std::optional<Eigen::Affine2d> published = backend_->ActiveSessionToGlobal();
+  ASSERT_TRUE(published.has_value());
+  EXPECT_LT(PoseDistance(*published, backend_->graph().session(session_).local_to_global), 1e-12);
+
+  const std::vector<PoseGraphEvent> outcomes =
+      EventsOfKind(*backend_, PoseGraphEvent::Kind::RELOCALIZATION);
+  ASSERT_EQ(outcomes.size(), 1u);
+  EXPECT_TRUE(outcomes[0].reseeded);
+}
+
+TEST_F(RelocalizationE2eTest, AHintOutsideEveryFinishedSubmapMovesTheSessionThere) {
   Boot();
   FeedThrough(14);
   const int attempted_before = backend_->constraint_builder().num_matches_attempted();
-  backend_->SetInitialPose(transform::FromXYTheta(400.0, -250.0, 0.3));
+  const Eigen::Affine2d hint = transform::FromXYTheta(400.0, -250.0, 0.3);
+  backend_->SetInitialPose(hint);
   backend_->WaitUntilQuiescent();
   EXPECT_EQ(backend_->constraint_builder().num_matches_attempted(), attempted_before);
   ASSERT_EQ(Results().size(), 1u);
   EXPECT_EQ(Results()[0].candidates, 0);
   EXPECT_EQ(Results()[0].constraints_added, 0);
   EXPECT_FALSE(Results()[0].best.has_value());
-  ExpectLost(14);
+  EXPECT_TRUE(Results()[0].reseeded);
+  EXPECT_LT(PoseDistance(NewestPose(), hint), 1e-9);
+  EXPECT_EQ(NumClosuresOntoOtherSessions(), 0);
 }
 
+// On workers, so the round's shared score floor runs under TSan.
 TEST_F(RelocalizationE2eTest, AGlobalSearchWithoutAPriorReportsToo) {
+  option_.constraint_builder.num_match_workers = 3;
   Boot();
   FeedThrough(14);
   backend_->RelocalizeGlobally();
@@ -307,6 +351,9 @@ TEST_F(RelocalizationE2eTest, AGlobalSearchWithoutAPriorReportsToo) {
   EXPECT_GT(result.candidates, 0);
   if (result.constraints_added > 0) {
     ExpectSnappedOntoTruth(14);
+  } else if (result.reseeded) {
+    ASSERT_TRUE(result.best.has_value());
+    EXPECT_LT(PoseDistance(NewestPose(), result.best->global_pose), 1e-9);
   }
 }
 
@@ -407,6 +454,22 @@ TEST_F(RelocalizationE2eTest, AHintOnAnAnchoredSessionAddsAClosureWithoutReseedi
   EXPECT_GT(result.constraints_added, 0);
   ASSERT_TRUE(result.correction.has_value());
   EXPECT_LT(result.correction->translation, 0.1);
+}
+
+TEST_F(RelocalizationE2eTest, AHintMatchingNothingLeavesAnAnchoredSessionWhereItIs) {
+  Boot();
+  FeedThrough(14);
+  backend_->SetInitialPose(LoopGroundTruth(14));
+  backend_->WaitUntilQuiescent();
+  ExpectSnappedOntoTruth(14);
+
+  const Eigen::Affine2d alignment_before = backend_->graph().session(session_).local_to_global;
+  backend_->SetInitialPose(transform::FromXYTheta(400.0, -250.0, 0.3));
+  backend_->WaitUntilQuiescent();
+  ASSERT_EQ(Results().size(), 2u);
+  EXPECT_FALSE(Results()[1].reseeded);
+  EXPECT_LT(PoseDistance(backend_->graph().session(session_).local_to_global, alignment_before),
+            1e-12);
 }
 
 // An anchored session pinned to a wrong pose by `count` closures onto the base, newest nodes first.

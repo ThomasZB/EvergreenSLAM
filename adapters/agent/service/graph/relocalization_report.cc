@@ -35,12 +35,21 @@ const char* StateName(RelocalizationStatus::State state) {
       return "pending";
     case RelocalizationStatus::State::MATCHED:
       return "matched";
+    case RelocalizationStatus::State::RESEEDED:
+      return "reseeded";
     case RelocalizationStatus::State::NO_MATCH:
       return "no_match";
     case RelocalizationStatus::State::SUPERSEDED:
       return "superseded";
   }
   return "pending";
+}
+
+RelocalizationStatus::State Outcome(int constraints_added, bool reseeded) {
+  if (constraints_added > 0) {
+    return RelocalizationStatus::State::MATCHED;
+  }
+  return reseeded ? RelocalizationStatus::State::RESEEDED : RelocalizationStatus::State::NO_MATCH;
 }
 
 void OptionalInt(JsonWriter& writer, std::string_view key, const std::optional<int64_t>& value) {
@@ -150,11 +159,13 @@ void RelocalizationRequests::OnResult(const lifelong::RelocalizationResult& resu
   if (open.state != RelocalizationStatus::State::PENDING || !SamePrior(open.prior, result.prior)) {
     return;
   }
-  open.state = result.constraints_added > 0 ? RelocalizationStatus::State::MATCHED
-                                            : RelocalizationStatus::State::NO_MATCH;
+  open.state = Outcome(result.constraints_added, result.reseeded);
   open.candidates = result.candidates;
   open.constraints_added = result.constraints_added;
   open.correction = result.correction;
+  if (result.best.has_value()) {
+    open.best_score = result.best->score;
+  }
   open.requested_at = pose_graph_.graph().node(result.node_id).constant_data.time;
   open.resolved_at = result.time;
 }
@@ -194,6 +205,11 @@ void WriteRelocalization(JsonWriter& writer, const std::optional<RelocalizationS
       .Field("candidates", status->candidates)
       .Field("constraints", status->constraints_added);
   WriteCorrection(writer, status->correction);
+  if (status->best_score.has_value()) {
+    writer.Field("best_score", *status->best_score);
+  } else {
+    writer.NullField("best_score");
+  }
   OptionalInt(writer, "requested_ns", Nanos(status->requested_at));
   OptionalInt(writer, "resolved_ns", Nanos(status->resolved_at));
   OptionalInt(writer, "superseded_by", status->superseded_by);
@@ -208,7 +224,7 @@ void WriteEvent(JsonWriter& writer, const lifelong::PoseGraphEvent& event) {
       .Field("kind", Lowercase(lifelong::ToString(event.kind)));
   switch (event.kind) {
     case Kind::RELOCALIZATION:
-      writer.Field("state", event.constraints_added > 0 ? "matched" : "no_match")
+      writer.Field("state", StateName(Outcome(event.constraints_added, event.reseeded)))
           .Field("candidates", event.candidates)
           .Field("constraints", event.constraints_added);
       WriteCorrection(writer, event.correction);

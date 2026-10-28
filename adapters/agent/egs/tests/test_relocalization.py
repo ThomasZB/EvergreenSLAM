@@ -54,6 +54,24 @@ class RelocalizationTest(EgsTestCase):
         self.assertIn("move or turn the robot", out)
         self.assertNotIn("session rm", out)
 
+    def test_reseeded_exits_ok_and_says_the_session_is_not_linked(self):
+        self.state.aligned_to_base = False
+        self.state.relocalization_outcome = {
+            "state": "reseeded",
+            "candidates": 4,
+            "constraints": 0,
+            "correction_m": 3.2,
+            "correction_rad": 0.5,
+            "best_score": 0.31,
+        }
+        code, out, _ = self.egs("init-pose", "1", "2", "0")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith("reseeded: moved 3.20 m 29° (best score 0.31), not linked"), out)
+        code, out, _ = self.egs("init-pose", "1", "2", "0", "--json")
+        obj = json.loads(out)
+        self.assertTrue(obj["ok"])
+        self.assertEqual(obj["relocalization"]["state"], "reseeded")
+
     def test_superseded(self):
         self.state.relocalization_outcome = {"state": "superseded", "superseded_by": 7}
         code, out, _ = self.egs("init-pose", "1", "2", "0")

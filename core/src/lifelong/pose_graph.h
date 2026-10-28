@@ -154,6 +154,7 @@ class PoseGraph : public TrimmingHandle, public ConstraintHandle, public Session
   bool CheckpointSessions();
   void RelocalizeOnTask(const std::optional<Eigen::Affine2d>& prior);
   bool ReseedOnFirstAnchoring(const Constraint& constraint);
+  bool ReseedOnRelocalization(const MatchRoundSummary& summary);
   void ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global);
   void EnqueueNodeSearch();
   void SearchForFinishedSubmaps(const mapping::LocalTrajectoryBuilder::InsertionResult& result);

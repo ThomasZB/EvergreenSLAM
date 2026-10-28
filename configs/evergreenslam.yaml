@@ -63,12 +63,10 @@ lifelong:
     # A pair searches search_window_floor plus 5 % of the path since the last valid closure.
     candidate_slack_per_meter: 0.05
     search_window_floor: 0.5  # m
-    # Search windows up to tight_window_max cannot alias far and use the looser tight_gates,
+    # Search windows up to tight_window_max cannot alias far and use the looser tight_min_score,
     # which is every pair within about 10 m of the last valid closure.
     tight_window_max: 1.0
-    wide_gates:
-      min_coarse_score: 0.55        # mean occupancy probability the coarse match must reach
-      min_refined_score: 0.55       # the refined pose, rescored at full resolution
+    wide_min_score: 0.55  # mean occupancy probability, coarse and refined
 
   # Sensor time; a crash loses at most this much graph.
   checkpoint_min_interval: 30.0

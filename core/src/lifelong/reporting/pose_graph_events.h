@@ -46,6 +46,7 @@ struct PoseGraphEvent {
   Kind kind = Kind::RELOCALIZATION;
   int candidates = 0;
   int constraints_added = 0;
+  bool reseeded = false;
   std::optional<PoseCorrection> correction;
   std::optional<SessionId> session;
   std::optional<SessionId> fed_now;

@@ -205,6 +205,12 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   EXPECT_NEAR(JsonNumber(init.body, "pose.x"), truth.x(), kPlaceTolerance);
   EXPECT_EQ(JsonRaw(client.Post("/init-pose", {{"x", "1"}}).body, "reason"), "bad_param");
   backend.WaitUntilQuiescent();
+  // Nothing else to match against: the floating session moves the robot onto the place, and the
+  // place moves along with it.
+  const Reply moved = client.Get("/anchors/" + anchor + "?robot=1");
+  EXPECT_NEAR(JsonNumber(moved.body, "robot.x"), truth.x(), kPlaceTolerance) << moved.body;
+  EXPECT_NEAR(JsonNumber(moved.body, "robot.y"), truth.y(), kPlaceTolerance) << moved.body;
+  const double anchor_x = JsonNumber(moved.body, "pose.x");
 
   // fs passthrough and its sandbox.
   EXPECT_EQ(JsonRaw(client.PostBody("/fs/write?path=places/dock/notes.md", "hi\n").body, "ok"),
@@ -297,7 +303,7 @@ TEST(AgentServiceE2eTest, PlacesSnapshotSessionsAndFs) {
   EXPECT_EQ(ReadText(memory / "places/home2/place.yaml"), "anchor: " + copy_anchor + "\n");
   EXPECT_EQ(ReadText(memory / "places/home/place.yaml"), "anchor: " + anchor + "\n");
   const Reply original = client.Get("/anchors/" + anchor);
-  EXPECT_NEAR(JsonNumber(original.body, "pose.x"), truth.x(), kPlaceTolerance) << original.body;
+  EXPECT_NEAR(JsonNumber(original.body, "pose.x"), anchor_x, 1e-9) << original.body;
   EXPECT_NE(client.Get("/status").body.find("\"duplicate_anchor_paths\":[]"), std::string::npos);
 
   // Freeze through plan and apply: the fed session turns frozen and a fresh one is fed.

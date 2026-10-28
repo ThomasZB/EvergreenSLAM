@@ -130,6 +130,17 @@ but is not frozen in; re-freezing a changed room is planned, not implemented.
   <sub>The browser debug view during a long run: four sessions, three of them frozen.</sub>
 </p>
 
+### Relocalization
+
+`egs init-pose` (a pose or a saved place) and `egs relocalize` match the newest scan of the current
+session against the finished submaps of the other sessions: with a pose, the submaps reaching
+within 2 m of it, over ±0.5 rad; without one, every submap over every heading, by branch and bound
+on each. A match becomes a loop-closure constraint only above the usual score threshold. A session
+not yet linked to a frozen one has no position worth keeping, so when no constraint is added it is
+moved as a whole onto the best match scoring at least 0.2, or else onto the given pose. It stays
+unlinked until a later loop closure passes the usual threshold, and `egs` reports the outcome as
+`reseeded`. A session already linked to the base is never moved this way.
+
 ### Bounded growth
 
 Two mechanisms keep the graph from growing with uptime.
@@ -231,19 +242,23 @@ kept here yet.
   localization holds; the change is not frozen in, though (see Sessions and freezing). A map that
   diverged and was then frozen means starting a new map directory.
 - No dynamic-object filtering. Odometry has no remedy for degenerate geometry (long corridors,
-  open halls); loop closure rejects ambiguous matches in corridors.
+  open halls); loop closure rejects ambiguous matches in corridors. It does not check a scan
+  against free space in the map, since on an old map moved furniture and opened doors put true
+  matches there, so a corner or parallel-wall alias that scores well is accepted, and only the
+  robust loss limits its effect.
 - One robot, one map. No multi-robot support.
-- A robot carried elsewhere has to be told: `egs init-pose` or `egs relocalize`. There is no
-  automatic kidnap detection.
-- The freeze thresholds have not been calibrated against a reference trajectory.
+- The SLAM does not detect a robot carried elsewhere; the agent sees it in the `base` score of
+  `egs here` and answers with `egs init-pose` or `egs relocalize`. This is left to the agent on
+  purpose: in two similar rooms, an agent that reads the door sign and names the place does better
+  than a blind global search, which may lock onto the wrong room.
+- `egs relocalize` searches every submap in full, so its cost grows with the map: 13 to 16 s for
+  46 submaps on four threads of an Apple M4, and loop closures wait behind it. A faster global
+  search is planned.
 - One known odometry defect: in the simulated room, a straight run from rest along a wall-aligned
   axis has been observed to stay at the origin. The regression test is disabled until the cause is
   understood.
-- Everything in agent layer v0.2 (keep-out zones as a Nav2 keep-out filter mask, in-process removal
-  of the session being mapped, `--json` output, `observe --attach`, `place save --offset`, the
-  match score in `egs here`, the `/odom` twist) passes its tests but has not run on the robot, and
-  the Nav2 side of the keep-out mask has not been checked against a running Nav2 (the KeepoutFilter
-  setup is in the ROS README).
+- The Nav2 side of the keep-out mask has not been checked against a running Nav2 (the
+  KeepoutFilter setup is in the ROS README).
 
 Evaluated only in one flat and on the public datasets. Issues welcome.
 

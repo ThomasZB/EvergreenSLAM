@@ -23,7 +23,7 @@ void RelocalizationReporter::AddListener(Listener listener) {
   listeners_.push_back(std::move(listener));
 }
 
-void RelocalizationReporter::OnMatchRoundFinished(const MatchRoundSummary& summary) {
+void RelocalizationReporter::OnMatchRoundFinished(const MatchRoundSummary& summary, bool reseeded) {
   // A node gone mid-round went with a dropped fed session, which already ended the request.
   if (summary.source == MatchRoundSummary::Source::GRAPH || !summary.node_id.has_value() ||
       !graph_.HasNode(*summary.node_id)) {
@@ -35,7 +35,8 @@ void RelocalizationReporter::OnMatchRoundFinished(const MatchRoundSummary& summa
   result.prior = summary.prior;
   result.candidates = summary.candidates;
   result.constraints_added = summary.constraints_added;
-  if (summary.constraints_added > 0) {
+  result.reseeded = reseeded;
+  if (summary.constraints_added > 0 || reseeded) {
     result.correction =
         CorrectionBetween(summary.node_global_pose, graph_.node(result.node_id).global_pose);
   }
@@ -46,6 +47,7 @@ void RelocalizationReporter::OnMatchRoundFinished(const MatchRoundSummary& summa
   event.kind = PoseGraphEvent::Kind::RELOCALIZATION;
   event.candidates = result.candidates;
   event.constraints_added = result.constraints_added;
+  event.reseeded = result.reseeded;
   event.correction = result.correction;
   events_.Append(std::move(event));
 

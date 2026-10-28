@@ -258,7 +258,8 @@ read in the same task as `robot`:
   0.62–0.72); the same nodes moved 0.25 m or turned 5° or more score 0.20–0.45 with `coverage`
   barely lower. A 20 s median below 0.45 never occurred on a correct pose. `egs here --sample S`
   takes that median client side; the service keeps none. It polls `/events` alongside and drops
-  the reads taken before a `relocalization` (matched) or `pose_correction` event (`restarted`).
+  the reads taken before a `relocalization` (matched or reseeded) or `pose_correction` event
+  (`restarted`).
 - `since_base_match_m`: keyframe-polyline distance the fed session has driven since its last
   accepted loop closure to a frozen session (`DriftTracker::SinceBaseMatch`; closures the
   constraint builder added, not trim-recovered edges or priors; a match arriving late never moves
@@ -383,22 +384,29 @@ request_id}`, kind `global`.
 Core's `SetInitialPose` / `RelocalizeGlobally` return nothing; the service mints the id (counter
 from 1 per process) in the same task and owns the request's state (`RelocalizationRequests`, the
 last 64). The object in `/here` and `/status`:
-`{id, kind: pose|place|global, anchor|null, state: pending|matched|no_match|superseded, candidates,
-constraints, correction_m|null, correction_rad|null, requested_ns|null, resolved_ns|null,
-superseded_by|null}`.
+`{id, kind: pose|place|global, anchor|null, state: pending|matched|reseeded|no_match|superseded,
+candidates, constraints, correction_m|null, correction_rad|null, best_score|null, requested_ns|null,
+resolved_ns|null, superseded_by|null}`.
 - A new request supersedes the open one (`superseded_by` = its id). Its round still runs; its
   matches land as ordinary constraints but no longer count.
 - With no node in the fed session yet the request stays `pending` (`requested_ns` null) until the
   first keyframe runs it; a newer request before then replaces it in core. Otherwise one candidate
   round runs against the fed session's newest node (`requested_ns` = that node's sensor time):
   every finished submap of another session the prior reaches within the relocalization window, or
-  all of them without a prior. `candidates` = pairs selected after sampling. 0 candidates →
-  `no_match` at once (the prior is outside the saved map).
+  all of them without a prior. `candidates` = pairs selected after sampling. 0 candidates → the
+  round ends at once (the prior is outside the saved map).
 - When the round's last match is applied, core's `RelocalizationReporter` (`lifelong/reporting/`)
   calls the service's listener on the backend task with the round's result (prior, candidates,
   constraints added, correction). Core reports rounds, not requests: the service settles the open
   request with it when the priors agree (both absent for `global`), so of two back-to-back requests
-  with one prior the newer may take the older's round. ≥ 1 constraint → `matched`, else `no_match`.
+  with one prior the newer may take the older's round. ≥ 1 constraint → `matched`; else
+  `reseeded` or `no_match`, below.
+- `reseeded`: no constraint landed and the fed session is not linked to the base, so core moved it
+  rigidly onto the round's best match when its score ≥ `constraint_builder.relocalization_min_score`
+  (0.2), else onto the prior; a global search with no such match is `no_match`. The session stays
+  floating and its closures keep the usual thresholds; egs exits 0 on it. `best_score` = the round's
+  highest refined score, matched or not (null when no pose reached the floor). The move also logs a
+  `pose_correction` event when it exceeds that event's threshold.
 - `correction_m` / `correction_rad` = how far the round moved that node (its global pose at round
   start vs after the last apply). Only a session's first closure onto the base reseeds and solves at
   once; on a session already linked to the base the closures act at the next cadence solve, so
@@ -415,7 +423,7 @@ superseded_by|null}`.
 time_ns, kind, ...}]}`: the `PoseGraph` event ring (256, `EventsSince`), events with `seq ≥ since`.
 `lost` = `since < first_seq` (overrun) or `since > next_seq` (a restarted process); then every held
 event is returned; a changed `instance_id` (a map switch or restart) also means start over from 0. `time_ns` is sensor time. Kinds and fields:
-- `relocalization`: `state: matched|no_match, candidates, constraints, correction_m,
+- `relocalization`: `state: matched|reseeded|no_match, candidates, constraints, correction_m,
   correction_rad` — one per finished relocalization round, with no request id (see above).
 - `pose_correction`: `session, correction_m, correction_rad` — a `RepublishActiveSessionToGlobal()`
   moved the fed session's newest node by more than `lifelong.reporting.pose_correction_translation`
@@ -426,11 +434,12 @@ event is returned; a changed `instance_id` (a map switch or restart) also means 
 
 egs: `init-pose` / `relocalize` poll `/here?relocalization=<id>` every 0.5 s up to `--wait S`
 (default 30; `--no-wait` returns at once). Printed outcome: `matched: corrected D m A°; check egs
-here` (exit 0), `no_match (N candidates): ...` with the next step (`session rm` of the fed session only when
+here` (exit 0), `reseeded: moved D m A° (best score S), not linked to the saved map; ...` (exit 0),
+`no_match (N candidates): ...` with the next step (`session rm` of the fed session only when
 `aligned_to_base`; otherwise turn or move and send it again), `superseded by request M`
 (exit 1 for both); still pending at the deadline, or the id unknown to the process → `outcome
 unknown` (exit 3). `--json` adds the status object as `relocalization` (`ok` false and `reason` the
-state unless matched). `egs here` / `egs status` print a `relocalization ...` line when there is a
+state unless matched or reseeded). `egs here` / `egs status` print a `relocalization ...` line when there is a
 request. `egs events [--since N] [--follow] [--json]`: one line per event and `next_seq N`;
 `--follow` polls every second, one line (with `--json`, one JSON object) per event; `events lost`
 goes to stderr.

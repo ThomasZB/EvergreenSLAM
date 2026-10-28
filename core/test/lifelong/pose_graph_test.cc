@@ -434,9 +434,9 @@ TEST(PoseGraphTest, CheckpointsRideSolvesNoOftenerThanTheInterval) {
   EXPECT_EQ(pose_graph.map_manager()->num_checkpoints_written(), 3) << "Finish always writes";
 }
 
-// Nothing of another session to match against: every request is accepted, searches nothing and
-// moves nothing, before and after the first keyframe alike.
-TEST(PoseGraphTest, RelocalizationRequestsAreNeverRejectedAndMoveNothingOnTheirOwn) {
+// Nothing of another session to match against: every request is accepted and searches nothing.
+// A hint still moves the floating session onto it; a global search has nowhere to go.
+TEST(PoseGraphTest, WithNothingToMatchAHintMovesAFloatingSessionAndAGlobalSearchDoesNot) {
   PoseGraph pose_graph;
   const Eigen::Affine2d seed = transform::FromXYTheta(50.0, 40.0, 1.0);
   pose_graph.Start(TestTime(0), seed);
@@ -447,18 +447,20 @@ TEST(PoseGraphTest, RelocalizationRequestsAreNeverRejectedAndMoveNothingOnTheirO
   pose_graph.WaitUntilQuiescent();
   ExpectPoseNear(pose_graph.graph().session(session).local_to_global, seed);
 
+  // The global request replaced the waiting hint, so the first keyframe runs only the search.
   const std::shared_ptr<const mapping::Submap> submap = MakeSubmap(0, Eigen::Affine2d::Identity());
   const Eigen::Affine2d node_local = transform::FromXYTheta(1.1, 0.5, 0.2);
   pose_graph.AddInsertionResult(MakeInsertionResult(0, node_local, {submap}));
   pose_graph.WaitUntilQuiescent();
-  for (int repeat = 0; repeat < 2; ++repeat) {
-    pose_graph.SetInitialPose(hint);
-    pose_graph.RelocalizeGlobally();
-    pose_graph.WaitUntilQuiescent();
-  }
+  pose_graph.RelocalizeGlobally();
+  pose_graph.WaitUntilQuiescent();
   ExpectPoseNear(pose_graph.graph().session(session).local_to_global, seed);
-  ExpectPoseNear(pose_graph.graph().node(NodeId{session.session_index, 0}).global_pose,
-                 seed * node_local);
+
+  pose_graph.SetInitialPose(hint);
+  pose_graph.WaitUntilQuiescent();
+  ExpectPoseNear(pose_graph.graph().node(NodeId{session.session_index, 0}).global_pose, hint);
+  ExpectPoseNear(pose_graph.graph().session(session).local_to_global,
+                 Eigen::Affine2d(hint * node_local.inverse()));
   EXPECT_EQ(pose_graph.constraint_builder().num_matches_attempted(), 0);
   EXPECT_EQ(pose_graph.constraint_builder().num_constraints_added(), 0);
 }

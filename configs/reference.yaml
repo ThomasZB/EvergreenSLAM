@@ -123,16 +123,16 @@ lifelong:
     # Coarse windows around an operator's initial pose, which replaces the graph's estimate.
     relocalization_linear_search_window: 2.0
     relocalization_angular_search_window: 0.5
+    # A floating session moves to a relocalization's best match at or above this, even when no
+    # constraint passes; with a prior and no such match it moves to the prior.
+    relocalization_min_score: 0.2
     max_constraint_distance: 15.0  # m, a closure beyond this is ignored
-    # A window this narrow cannot alias far, so tight_gates may accept a scene that changed since
-    # mapping; wider pairs keep wide_gates. Reached within about 10 m of the last valid closure.
+    # A window this narrow cannot alias far, so tight_min_score may accept a scene that changed
+    # since mapping; wider pairs keep wide_min_score. Reached within about 10 m of the last valid
+    # closure. Mean occupancy probability, required of both the coarse and the refined match.
     tight_window_max: 1.0
-    tight_gates:
-      min_coarse_score: 0.4
-      min_refined_score: 0.45
-    wide_gates:
-      min_coarse_score: 0.55
-      min_refined_score: 0.55
+    tight_min_score: 0.4
+    wide_min_score: 0.55
     # Refinement moving the coarse result further than this means the peak was not real.
     max_refinement_translation: 0.25
     max_refinement_rotation: 0.1

@@ -236,6 +236,27 @@ bool PoseGraph::ReseedOnFirstAnchoring(const Constraint& constraint) {
   return true;
 }
 
+bool PoseGraph::ReseedOnRelocalization(const MatchRoundSummary& summary) {
+  const std::optional<SessionId> fed = session_manager_.fed_session();
+  if (summary.source == MatchRoundSummary::Source::GRAPH || summary.constraints_added > 0 ||
+      !summary.node_id.has_value() || !data_.HasNode(*summary.node_id) || !fed.has_value() ||
+      !(SessionOf(*summary.node_id) == *fed) || HasFrozenLink(data_, *fed)) {
+    return false;
+  }
+  std::optional<Eigen::Affine2d> node_global_pose = summary.prior;
+  if (summary.best.has_value() &&
+      summary.best->score >= option_.constraint_builder.relocalization_min_score) {
+    node_global_pose = summary.best->global_pose;
+  }
+  if (!node_global_pose.has_value()) {
+    return false;
+  }
+  const Node& node = data_.node(*summary.node_id);
+  ReseedSession(*fed, *node_global_pose * node.constant_data.local_pose.inverse());
+  RepublishActiveSessionToGlobal();
+  return true;
+}
+
 void PoseGraph::ReseedSession(SessionId id, const Eigen::Affine2d& local_to_global) {
   data_.SetSessionLocalToGlobal(id, local_to_global);
   const SessionData& session = data_.session(id);
@@ -394,7 +415,7 @@ bool PoseGraph::AddConstraintIfEndpointsLive(const Constraint& constraint) {
 }
 
 void PoseGraph::OnMatchRoundFinished(const MatchRoundSummary& summary) {
-  relocalization_reporter_.OnMatchRoundFinished(summary);
+  relocalization_reporter_.OnMatchRoundFinished(summary, ReseedOnRelocalization(summary));
 }
 
 TrimReport PoseGraph::ApplyTrim(const TrimRequest& request) {

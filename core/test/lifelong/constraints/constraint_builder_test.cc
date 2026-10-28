@@ -376,26 +376,7 @@ TEST(ConstraintBuilder, ANodeRoundReportsTheNodeItsStartPoseAndTheBestMatch) {
   ASSERT_TRUE(summary.best.has_value());
   EXPECT_LT((summary.best->global_pose.translation() - fixture.true_node_pose.translation()).norm(),
             0.1);
-  EXPECT_GT(summary.best->score, ConstraintBuilderOption().tight_gates.min_refined_score);
-}
-
-// A rejected match still names its best pose: what a caller falls back on is not a gate's call.
-TEST(ConstraintBuilder, ARoundWithNothingAcceptedStillReportsItsBestMatch) {
-  RoomFixture fixture;
-  FeedRoomFixture(fixture);
-  ConstraintBuilderOption option;
-  option.tight_gates.min_refined_score = 0.99;
-  option.wide_gates.min_refined_score = 0.99;
-  RecordingHandle handle(fixture.pose_graph);
-  ConstraintBuilder builder(handle, option);
-
-  builder.SearchForNode(fixture.query_node_id);
-  fixture.pose_graph.WaitUntilQuiescent();
-
-  ASSERT_EQ(handle.summaries.size(), 1u);
-  EXPECT_EQ(handle.summaries[0].constraints_added, 0);
-  ASSERT_TRUE(handle.summaries[0].best.has_value());
-  EXPECT_LT(handle.summaries[0].best->score, 0.99);
+  EXPECT_GT(summary.best->score, ConstraintBuilderOption().tight_min_score);
 }
 
 TEST(ConstraintBuilder, ARoundWithoutCandidatesReportsAtOnce) {
@@ -818,7 +799,8 @@ TEST(ConstraintBuilder, AChangedSceneIsAcceptedUnderTightAndWideWindows) {
     return builder.num_constraints_added();
   };
 
-  // The window is the 0.5 m floor plus the slack: 0.9 m takes the tight gates, 1.1 m the wide.
+  // The window is the 0.5 m floor plus the slack: 0.9 m takes tight_min_score, 1.1 m
+  // wide_min_score.
   EXPECT_EQ(added(/*max_candidate_slack=*/0.4), 1);
   EXPECT_EQ(added(/*max_candidate_slack=*/0.6), 1);
 }

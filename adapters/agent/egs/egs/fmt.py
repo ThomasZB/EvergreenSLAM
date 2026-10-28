@@ -68,6 +68,8 @@ def _outcome_tail(r):
     state = r.get("state")
     if state == "matched":
         return ": corrected " + correction(r)
+    if state == "reseeded":
+        return ": moved %s, not linked" % correction(r)
     if state == "no_match":
         return " (%s candidates)" % r.get("candidates")
     if state == "superseded":
