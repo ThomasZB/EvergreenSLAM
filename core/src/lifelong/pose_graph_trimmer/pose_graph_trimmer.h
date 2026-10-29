@@ -35,7 +35,7 @@ class PoseGraphTrimmer {
   void TrimToCompletionOnTask();
   void EnqueueForTrim(const SubmapId& id);
 
-  const std::vector<TrimReport>& reports() const { return reports_; }
+  const std::deque<TrimReport>& reports() const { return reports_; }
   size_t pending_count() const { return pending_.size(); }
 
   int num_submaps_trimmed() const { return num_submaps_trimmed_.load(); }
@@ -55,7 +55,8 @@ class PoseGraphTrimmer {
   CovarianceEvaluator covariance_evaluator_;
 
   std::deque<SubmapId> pending_;
-  std::vector<TrimReport> reports_;
+  static constexpr size_t kMaxReports = 64;
+  std::deque<TrimReport> reports_;
   std::atomic<int> num_submaps_trimmed_{0};
   std::atomic<int> num_priors_added_{0};
 };

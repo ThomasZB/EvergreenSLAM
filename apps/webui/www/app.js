@@ -204,8 +204,8 @@ events.onmessage = message => {
   const matched = frame.poses.matched;
   if (matched) {
     if (!view.ready || view.follow) centreOn(toGlobal(matched));
-    state.trajectory.push(matched[0], matched[1]);
-    if (state.trajectory.length / 2 !== frame.traj_len + 1) fetchTrajectory();
+    if (frame.traj_append) state.trajectory.push(matched[0], matched[1]);
+    if (state.trajectory.length / 2 !== frame.traj_len) fetchTrajectory();
   }
   if (frame.map_seq !== state.mapSeq) {
     state.mapSeq = frame.map_seq;
@@ -227,7 +227,7 @@ events.onmessage = message => {
   const a = alignment();
   hud.innerHTML =
       // The stream is latest wins, so the received count alone understates the pipeline.
-      `<b>${frame.traj_len + 1}</b> scans, <b>${state.frames}</b> drawn` +
+      `<b>${frame.scans}</b> scans, <b>${state.frames}</b> drawn` +
       ` &nbsp; t <b>${frame.time.toFixed(2)}</b><br>` +
       `score <b>${frame.score.toFixed(3)}</b> &nbsp; ` +
       `match &minus; predict <b>${(delta * 100).toFixed(1)}</b> cm &nbsp; ` +

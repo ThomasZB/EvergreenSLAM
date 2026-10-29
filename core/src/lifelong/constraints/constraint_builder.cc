@@ -243,6 +243,13 @@ void ConstraintBuilder::SweepStaleStateOnTask() {
     precomputation_lru_.erase(it->second.lru);
     it = precomputation_cache_.erase(it);
   }
+  for (auto it = attempted_pairs_.begin(); it != attempted_pairs_.end();) {
+    if (graph.HasNode(it->first) && graph.HasSubmap(it->second)) {
+      ++it;
+    } else {
+      it = attempted_pairs_.erase(it);
+    }
+  }
 }
 
 bool ConstraintBuilder::IsEligiblePair(const NodeId& node_id, const SubmapId& submap_id,

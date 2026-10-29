@@ -61,11 +61,11 @@ keyframe, or every Nth one, the same way `PublishGlobalMap` is throttled.
 
 | endpoint | payload |
 | --- | --- |
-| `GET /events` | SSE, one JSON object per scan: `time`, `score`, `poses`, `scan`, `map_seq`, `global_map_seq`, `graph_seq`, `traj_len` |
+| `GET /events` | SSE, one JSON object per scan: `time`, `score`, `poses`, `scan`, `map_seq`, `global_map_seq`, `graph_seq`, `traj_len`, `traj_append`, `scans` |
 | `GET /map` | `EGM1` header (width, height, resolution, origin as little endian int32/float64) then one byte per cell |
 | `GET /global_map` | same as `/map`, all sessions' submaps composed at their optimized poses |
 | `GET /submap?s=&i=` | same again, one finished submap in its own frame; 404 once it is trimmed |
-| `GET /trajectory` | float64 x, y pairs, the whole run |
+| `GET /trajectory` | float64 x, y pairs, the whole run: 5 cm apart, halved past 100k points |
 | `GET /graph` | the pose graph as JSON: `sessions`, `nodes`, `submaps`, `constraints`, `freeze`, `stats`, `to_global` |
 
 The scan is sent in the **sensor frame** with the poses alongside, so the page transforms it

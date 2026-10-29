@@ -253,6 +253,8 @@ ScenarioResult RunScenario(bool with_trimming) {
   const std::vector<Eigen::Affine2d> odometry = DriftedOdometry(num_nodes, 0.002);
 
   ScenarioResult result;
+  // The trimmer keeps only its latest reports, so they are collected after each batch.
+  std::vector<TrimReport> reports;
   for (int i = 0; i < num_nodes; ++i) {
     feeder.FeedNode(i, LoopGroundTruth(i), odometry[i]);
     if (i % kNodesPerSubmap == 5) {
@@ -274,10 +276,15 @@ ScenarioResult RunScenario(bool with_trimming) {
       if (with_trimming) {
         // One selector refill plus two trim rounds keeps pace with the four submaps a loop
         // creates.
+        const int trimmed_before = trimmer.num_submaps_trimmed();
         for (int round = 0; round < 3; ++round) {
           trimmer.TrimOnce();
         }
         pose_graph.WaitUntilQuiescent();
+        const auto& latest = trimmer.reports();
+        reports.insert(reports.end(),
+                       latest.end() - (trimmer.num_submaps_trimmed() - trimmed_before),
+                       latest.end());
       }
       if ((i + 1) == kNumLoops * kNodesPerLoop / 2) {
         result.constraints_mid_run = static_cast<int>(graph.constraints().size());
@@ -307,7 +314,7 @@ ScenarioResult RunScenario(bool with_trimming) {
 
   std::set<SubmapId> deleted_submaps;
   std::set<NodeId> deleted_nodes;
-  for (const TrimReport& report : trimmer.reports()) {
+  for (const TrimReport& report : reports) {
     for (const TrimReport::SubmapSuccession& succession : report.submap_successions) {
       EXPECT_EQ(succession.deleted_submap_id.session_id, second.session_index)
           << "only the active session may be trimmed";

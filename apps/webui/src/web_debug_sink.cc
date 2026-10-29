@@ -33,6 +33,20 @@ namespace {
 constexpr char kMapMagic[4] = {'E', 'G', 'M', '1'};
 constexpr size_t kMapHeaderSize = 4 + 2 * sizeof(int32_t) + 3 * sizeof(double);
 constexpr uint8_t kUnknownCell = 255;
+// A parked robot adds no points; a long run halves the resolution instead of growing.
+constexpr double kTrajectorySpacing = 0.05;  // m
+constexpr size_t kMaxTrajectoryPoints = 100000;
+
+// Keeps the newest point and every second one before it.
+void Thin(std::vector<double>& xy) {
+  const size_t n = xy.size() / 2;
+  size_t out = 0;
+  for (size_t i = (n - 1) % 2; i < n; i += 2, ++out) {
+    xy[2 * out] = xy[2 * i];
+    xy[2 * out + 1] = xy[2 * i + 1];
+  }
+  xy.resize(2 * out);
+}
 
 template <typename T>
 void AppendLittleEndian(std::vector<uint8_t>& blob, const T value) {
@@ -127,17 +141,13 @@ WebDebugSink::WebDebugSink(const Option& option)
   });
 
   server.Get("/trajectory", [this](const httplib::Request&, httplib::Response& response) {
-    std::vector<double> trajectory;
-    {
-      const std::lock_guard<std::mutex> lock(mutex_);
-      trajectory = trajectory_;
-    }
-    if (trajectory.empty()) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (trajectory_.empty()) {
       response.status = 204;
       return;
     }
-    response.set_content(reinterpret_cast<const char*>(trajectory.data()),
-                         trajectory.size() * sizeof(double), "application/octet-stream");
+    response.set_content(reinterpret_cast<const char*>(trajectory_.data()),
+                         trajectory_.size() * sizeof(double), "application/octet-stream");
   });
 
   server.Get("/events", [this](const httplib::Request&, httplib::Response& response) {
@@ -161,6 +171,8 @@ WebDebugSink::WebDebugSink(const Option& option)
                       ",\"global_map_seq\":" + std::to_string(global_map_seq_) +
                       ",\"graph_seq\":" + std::to_string(graph_seq_) +
                       ",\"traj_len\":" + std::to_string(trajectory_.size() / 2) +
+                      ",\"traj_append\":" + (latest_frame_appends_ ? "true" : "false") +
+                      ",\"scans\":" + std::to_string(num_scans_) +
                       ",\"epoch\":" + std::to_string(epoch_) + "}";
             }
           }
@@ -236,10 +248,20 @@ void WebDebugSink::PublishScanMatch(common::Time time,
     const std::lock_guard<std::mutex> lock(mutex_);
     latest_frame_ = out.str();
     ++stream_seq_;
+    ++num_scans_;
+    latest_frame_appends_ = false;
     const auto matched = poses.find("matched");
-    if (matched != poses.end()) {
+    const size_t n = trajectory_.size();
+    if (matched != poses.end() &&
+        (n == 0 ||
+         (matched->second.translation() - Eigen::Vector2d(trajectory_[n - 2], trajectory_[n - 1]))
+                 .norm() >= kTrajectorySpacing)) {
       trajectory_.push_back(matched->second.translation().x());
       trajectory_.push_back(matched->second.translation().y());
+      latest_frame_appends_ = true;
+      if (trajectory_.size() / 2 > kMaxTrajectoryPoints) {
+        Thin(trajectory_);
+      }
     }
   }
   frame_ready_.notify_all();
@@ -345,6 +367,7 @@ void WebDebugSink::Reset() {
     submap_blobs_.clear();
     global_map_blob_.clear();
     trajectory_.clear();
+    num_scans_ = 0;
     ++epoch_;
     ++graph_seq_;
     ++global_map_seq_;

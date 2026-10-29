@@ -298,6 +298,9 @@ bool PoseGraphTrimmer::TrimSubmap(const SubmapId& id) {
   request.added_constraints = std::move(added_constraints);
 
   reports_.push_back(handle_.ApplyTrim(request));
+  if (reports_.size() > kMaxReports) {
+    reports_.pop_front();
+  }
   ++num_submaps_trimmed_;
   return true;
 }

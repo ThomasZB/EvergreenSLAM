@@ -81,7 +81,9 @@ class WebDebugSink : public debug::DebugSink {
   std::condition_variable frame_ready_;
   // Held without its closing brace: the sequence numbers are stamped on at send time.
   std::string latest_frame_;
+  bool latest_frame_appends_ = false;
   uint64_t stream_seq_ = 0;
+  uint64_t num_scans_ = 0;
   // One byte per cell, 0..100 occupancy and 255 unknown.
   std::vector<uint8_t> map_blob_;
   uint64_t map_seq_ = 0;
