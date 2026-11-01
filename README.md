@@ -8,6 +8,10 @@ English | [中文](docs/README.zh.md)
 
 ---
 
+https://github.com/user-attachments/assets/ecc5e8f2-d290-4b70-8356-79e4789ae43c
+
+<p align="center"><sub>Two sessions of an agent (Claude Code) using EvergreenSLAM as the memory of a home robot, 1:44 in total, with the wall clock and the playback speed shown. Day 1, from an empty map: asked for a photo of the balcony, the agent finds it through <code>egs fs grep</code> in the one inferred note where it had mentioned it, and photographs it. Day 2, after the robot was powered off overnight, a new agent session with no chat history finds the scissors from the stored observation and photographs them. No teleoperation: the person used natural language only and did no mapping or localization by hand. Full video (3:18): <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>. See <a href="#an-agent-explores-takes-notes-and-comes-back">Experiments</a>.</sub></p>
+
 ## Hello, world
 
 ```
@@ -17,14 +21,6 @@ closest places/dock 2.4m frozen; places/kitchen 15.3m frozen
 robot 0.48,1.02,-2.72  keyframe 0s  @solve 135
 base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
 ```
-
-<p align="center">
-  <img src="docs/images/demo.gif" width="960" alt="Replay of the revo_lds bag in the browser debug view: the map grows, sessions 0 and 1 freeze, session 2 starts">
-  <br>
-  <sub><code>pixi run -e ros demo</code>: Cartographer's public revo_lds bag (a Neato Revo LDS, 16 min of
-  driving) replayed at 8x in the browser debug view. Sessions #0 and #1 freeze in turn and #2 starts
-  mapping.</sub>
-</p>
 
 An agent asked to fetch a cola from the fridge understands the request but not the home: where
 the fridge is, how to reach the kitchen, where the cola was last seen. Whatever model is used, it
@@ -83,7 +79,9 @@ scissors?" leads it to the right place. Furniture moves, the map is re-optimized
 restarts, and the places still resolve. Fetching the cola then starts from knowing that the fridge
 is in the kitchen and how to get there, before an arm takes over. The later steps need
 manipulation and vision; the layer underneath, places that stay valid without anyone maintaining
-the map, is what this project argues SLAM itself should provide.
+the map, is what this project argues SLAM itself should provide. The demo below covers the memory
+half of this on a real robot, from an empty map: places learned by exploring, notes written per
+place, and a place and a thing found again from that memory. Fetching with an arm is not shown.
 
 **Lifelong SLAM, but where.** Underneath this is lifelong SLAM: always on, mapping while in use,
 following changes, with resources that do not grow with uptime. The research literature on it is
@@ -108,6 +106,14 @@ for this setting a better trade-off than dense visual SLAM.
 
 ### Sessions and freezing
 
+<p align="center">
+  <img src="docs/images/demo.gif" width="960" alt="Replay of the revo_lds bag in the browser debug view: the map grows, sessions 0 and 1 freeze, session 2 starts">
+  <br>
+  <sub><code>pixi run -e ros demo</code>: Cartographer's public revo_lds bag (a Neato Revo LDS, 16 min of
+  driving) replayed at 8x in the browser debug view. Sessions #0 and #1 freeze in turn and #2 starts
+  mapping.</sub>
+</p>
+
 Mapping is organized in sessions. The frontend always maps into the current session; the backend
 closes loops against every finished submap within reach, frozen or not, including the current
 session's own, which the rolling window below keeps recent. Under gradual environmental change
@@ -123,12 +129,6 @@ automatically (`egs session freeze --yes` does it by hand); any unfrozen session
 after more than five boots without being fed (configurable). Where sessions overlap, the composed map keeps the more confident cell.
 Consequently a change inside already-mapped ground is visible while the current session is alive
 but is not frozen in; re-freezing a changed room is planned, not implemented.
-
-<p align="center">
-  <img src="docs/images/webui.jpg" width="900" alt="The browser debug view: submaps, trajectory and four sessions, three of them frozen">
-  <br>
-  <sub>The browser debug view during a long run: four sessions, three of them frozen.</sub>
-</p>
 
 ### Relocalization
 
@@ -161,6 +161,12 @@ the frozen part grows linearly with mapped area. A simulated 30-loop run stays b
 robot it has run in one flat over several days, but memory and graph size were not logged then;
 the numbers will be added.
 
+<p align="center">
+  <img src="docs/images/webui.jpg" width="900" alt="The browser debug view: submaps, trajectory and four sessions, three of them frozen">
+  <br>
+  <sub>The browser debug view during a long run: four sessions, three of them frozen.</sub>
+</p>
+
 ### Places as anchors
 
 A saved place is an anchor: a submap of the pose graph plus a transform relative to it. When the
@@ -183,44 +189,126 @@ Ceres refinement, submaps as probability grids, a pose graph with branch-and-bou
 Ceres optimization, then session-aware trimming, freezing and persistence with atomic commits.
 `core/` has no ROS dependency; ROS 2 is one adapter.
 
-## Field test
-
-On 2026-09-29 Claude Code drove the platform above through a flat. The agent had a small
-wrapper tool (`mochibot`) around `egs` and a Nav2 navigator, plus a skill for that flat
-(`robot-places`) written on top of the `evergreenslam` skill in this repository. The transcript
-is in Chinese; the steps, with the `egs` calls behind each, were:
-
-1. **"You are the agent driving the car. Wait for my orders."** It loads the skill, runs `egs here`
-   and reports: localized, next to the desk, bag recording started.
-2. **"Go check whether anything changed in the kitchen."** It reads the kitchen's `SKILL.md` in the
-   memory directory, which says to stop at the doorway on top of the ramp. The saved place is the
-   doorway, so `egs where places/kitchen/door` gives it the approach pose, which it hands to the
-   navigator.
-3. Crossed the threshold, about 6 m to go.
-4. Just past the door it gets wedged: an air purifier 30 to 40 cm ahead, the door frame on the
-   right, and Nav2 cannot turn. It backs straight up a short distance and re-plans.
-5. Free, 0.6 m from the doorway. It watches the robot stop on top of the ramp.
-6. 18 cm and 12° off the saved pose. It judges that sufficient, cancels navigation before the robot
-   starts shuffling at the edge of the ramp, and takes a photo.
-7. It compares the photo with the last one on record: same layout, but a new object in the lower
-   left, probably a mop or a folding stool, partly blocking the bin. It records the observation in
-   the kitchen's log with `egs observe` and waits.
+## Experiments
 
 <p align="center">
-  <img src="docs/images/agent.jpg" width="900" alt="Claude Code driving the robot to the kitchen">
+  <img src="docs/images/robot.jpg" width="320" alt="The robot in the demo: an XLeRobot on a three-tier cart with omni wheels, a head camera on a neck and two arms">
+  <br>
+  <sub>The platform the agent demo ran on: an XLeRobot (three omni wheels, a head camera on a pan/tilt neck, two SO-101 arms, not used) with the same 2D lidar as the car above and an RK3588 board. EvergreenSLAM uses only the lidar and the board.</sub>
 </p>
 
-Driving, backing up, the photo and the comparison belong to the wrapper and to Nav2; `egs` only
-answers where things are and keeps the record. No coordinate was typed by the user; poses passed
-from `egs` to the navigator.
+### An agent explores, takes notes and comes back
 
-After the run the same agent (Claude Code with Opus 5.5) was asked for a short assessment of its
-use so far, which covered more than this trip and predates the v0.2 features. In summary: it
-started from an empty map on this platform, saved the kitchen and the desk, later returned by name
-to check for changes, and after a restart the map and the pose were recovered without
-intervention; almost everything was `egs` commands and an ordinary directory, with no raw
-coordinates and no ROS details. The platform has since run in the same flat over several days;
-after the fixes those days prompted, the agent has not been stuck on localization or on the map.
+<p align="center">
+  <a href="https://youtu.be/FXoj2yCrbuo"><img src="https://img.youtube.com/vi/FXoj2yCrbuo/maxresdefault.jpg" width="640" alt="Full demo video on YouTube (3:18)"></a>
+  <br>
+  <sub>Full video (3:18, English subtitles) on YouTube.</sub>
+</p>
+
+**The task.**
+
+In the demo, Claude Code (Opus 5.5) acted as the mind of the robot shown above in two sessions: 24
+minutes on 2026-10-31 and 4 minutes the next morning. A robot harness that is not part of this
+repository (private for now) gave it the body over MCP: speech recognition, following a person, Nav2
+navigation to a pose or a saved place, the head, camera snapshots, a lidar scan, and Telegram for
+replies and photos. `egs` from this repository was its only spatial memory.
+
+Day 1 started on purpose from a new map and an empty `memory/`, so it shows how an agent builds and
+uses the memory. On the next morning the robot was restarted (with nobody attending to localization)
+and a new agent session began, which shows memory across a restart and across sessions; for longer
+SLAM runs see Sessions and freezing and Bounded growth. The person spoke Chinese throughout; the
+agent reasoned and wrote its notes in English, with Chinese names of places as aliases.
+
+> In fact this take did not go smoothly: the vision service dropped out midway, exploration missed
+> the table the scissors were on, and the agent asked me four times; after my hint ("scissors are
+> usually on a table") it went to ground the map showed as not yet explored and found them there. In
+> the two earlier runs exploration had passed that table, and a single "find the scissors for me"
+> was enough, in about two minutes. Results still depend heavily on the model and on the design of
+> the harness.
+
+**Step by step** (times as shown at the top left of the video):
+
+1. **Start (17:03).** `egs root`, `egs fs cat README.md`, `egs here`, `egs fs tree places`: a new
+   map, no places.
+2. **One named place (17:03–17:06).** "Follow me", then "your rest spot is beside the fridge";
+   after a few corrections by voice, `egs place save places/rest-spot`, with a `node.yaml` of
+   aliases and a `notes.md` that records the place as told by the person. This is the only place
+   the person named.
+3. **Exploring alone (17:06–17:12).** Asked to explore, the agent picks unexplored ground from
+   `egs view map`, has Nav2 drive there, looks with the head camera, and saves what it finds: a
+   figure shelf, the living room and its sofa, the washing machine, a desk, the bedroom at its
+   doorway. Each `notes.md` says what is there and where the knowledge came from: seen, told by the
+   person, or inferred. One line in the living room's notes, from a photo of a corner at 17:08: "a
+   red striped curtain and, past it, a glass door to what looks like a balcony (阳台, inferred)".
+   The balcony was neither visited nor saved.
+4. **A rule for a place (17:13).** Docking back at the rest spot, Nav2 crept on the last
+   centimetres; the agent stopped it, finished with short moves of its own, and wrote
+   `places/rest-spot/SKILL.md`: how to finish (the fridge square behind, 0.43 to 0.45 m on the
+   lidar's rear sector). `egs where places/rest-spot` lists that file under `read first:`.
+5. **"Do you know where the scissors are?" (17:12–17:23).** `egs find 剪刀` and
+   `egs fs grep scissors` return nothing. The harness's object detector had stopped responding at
+   17:08; the agent switched to its own reading of full-resolution snapshots after the first
+   timeout and said so when the search began. It went through the candidates it knew of: the desk,
+   the living-room shelf with tape and small parts (saved as `tool-shelf`), the entrance and the
+   bedroom table, saving places on the way and appending each miss to that place's
+   `notes.md`. The person spoke four times: "go and look" (to its question), "look somewhere else",
+   one hint ("scissors are usually on a table", which it stored in `places/notes.md` as a habit
+   told by the person), and "find them yourself". It then went to ground the map showed as occupied
+   but not yet visited, between the living room and the entrance, and found the scissors on a side
+   table: `egs place save places/side-table`, `egs observe places/side-table/scissors --offset …`,
+   and a photo at 17:23, about ten minutes after the question. Exploration had not reached that
+   corner. This was the slowest of three scissors searches that day; in the other two the
+   exploration had already passed that table and the search took about two minutes without hints.
+   Here the time went to the four places searched first and to driving, not to the failed vision
+   calls, which returned within about a second each.
+6. **"Take a photo of the balcony, then go back to your rest spot" (17:23–17:25).** `egs find 阳台`
+   finds no match: nothing was named balcony. `egs fs grep balcony` returns the inferred line from
+   step 3. The agent drives to `places/living-room/tool-shelf` (saved during the scissors search),
+   turns the head towards the curtain, moves to the opening rather than squeezing past the sofa,
+   saves `places/balcony` (aliases 阳台, 封闭阳台, balcony; its notes say the person named it) and
+   sends the photo at 17:25, 102 s after the request, with no further input.
+7. **Back to the rest spot (17:25–17:26)**, following its own rule: 3 cm off on arrival, a lidar
+   check, 5 cm back.
+8. **The next morning (2026-11-01, 09:39–09:43).** The robot had been powered off overnight where
+   it parked. After boot, with no `egs init-pose` or `egs relocalize`, `egs here` reported it at
+   `places/rest-spot` (0.0 m), with a base-map agreement of 0.73 over 90 % cover. A new Claude Code
+   session with no chat history received a four-line prompt: read the same three skills and use
+   only the memory in `egs`. (Claude Code also loaded the harness's project instructions, which
+   name finding scissors as a target task but do not say where anything is.) The person typed "do
+   you remember where the scissors are? take a photo for me". `egs find 剪刀` returned
+   `places/side-table/scissors`, last seen 16 h earlier; the agent said it would check rather than
+   rely on the old observation, took the approach pose from `egs where` and drove there (12 s). The
+   object detector was not running, so it pointed the head along the stored offset, judged the
+   snapshot itself, sent the photo 44 s after the question reached it (the message had waited 46 s
+   in Claude Code's input queue while a `listen` call ran), and appended a new `seen` observation
+   with `egs observe`. Asked to go back to the rest spot, it followed the
+   `places/rest-spot/SKILL.md` it had written the day before: 0.49 m from the fridge against the
+   rule's 0.43–0.45 m, then a short reverse. This is one restart of a robot that was not moved
+   while off; it is not a test of relocalization after the robot is carried elsewhere.
+
+At the end of day 1 `memory/` held 12 places, one thing (the scissors, with the observation), one
+place rule and one home-wide note, all as plain files. On day 2 the agent wrote one observation and
+nothing else.
+
+`egs` answered where places are (`where` gives the pose and the approach pose the harness passes to
+Nav2), bound saved places to the pose graph, and held the files (`fs`, `find`, `observe`, `view`).
+Driving, obstacle avoidance and docking were Nav2 and the harness; hearing, the camera, recognizing
+things in photos and every decision were the agent with the harness's tools. The day-1 prompt
+asked the agent to read three skills (`evergreenslam` from this repository, and two harness skills
+on moving the robot and on what to remember: provenance tags, place rules in `SKILL.md`, recording
+where something was not found), to narrate each decision, not to force narrow passages, and to
+store requested photos in memory. The gamepad stayed with the person as an emergency stop; the
+robot's daemon log shows no teleoperation lease during either session.
+
+### Earlier field test
+
+On 2026-09-29, on an earlier test car (mecanum wheels, a 2D lidar, an RK3588 board), Claude Code
+was sent to "check whether anything changed in the kitchen". It read the kitchen's `SKILL.md` in
+the memory tree (stop at the doorway on top of the ramp), took the approach pose from
+`egs where places/kitchen/door` to Nav2, backed out once when wedged against an air purifier, and
+recorded a new object next to the bin with `egs observe`. That car was the platform of the first
+public version (2026-09-30); the robot above replaced it on 2026-10-07 and has run EvergreenSLAM
+as its spatial memory since.
 
 ## Validation and limitations
 
@@ -230,7 +318,7 @@ Tested on macOS and Linux: unit tests, simulated-lidar end-to-end tests for the 
 matcher and each backend stage (loop closure, trimming, freezing, persistence, relocalization,
 anchors). CI runs the core and agent tests on Linux (gcc) and macOS on every push; the
 ThreadSanitizer run over the backend tests and the ROS 2 adapter build are by hand. Exercised
-on the platform above and on the public bags: laser odometry, loop closure, multi-session mapping
+on the two robots above and on the public bags: laser odometry, loop closure, multi-session mapping
 with automatic freezing and trimming, persistence with atomic commits and named maps, the agent
 service and `egs`, the browser debug view, the rviz2 plugin. On the datasets the replay tool
 reports the error against the reference trajectory (see the ROS README); no results table is
@@ -257,8 +345,6 @@ kept here yet.
 - One known odometry defect: in the simulated room, a straight run from rest along a wall-aligned
   axis has been observed to stay at the origin. The regression test is disabled until the cause is
   understood.
-- The Nav2 side of the keep-out mask has not been checked against a running Nav2 (the
-  KeepoutFilter setup is in the ROS README).
 
 Evaluated only in one flat and on the public datasets. Issues welcome.
 
