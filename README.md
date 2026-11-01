@@ -10,7 +10,7 @@ English | [中文](docs/README.zh.md)
 
 https://github.com/user-attachments/assets/ecc5e8f2-d290-4b70-8356-79e4789ae43c
 
-<p align="center"><sub>Two sessions of an agent (Claude Code) using EvergreenSLAM as the memory of a home robot, 1:44 in total, with the wall clock and the playback speed shown. Day 1, from an empty map: asked for a photo of the balcony, the agent finds it through <code>egs fs grep</code> in the one inferred note where it had mentioned it, and photographs it. Day 2, after the robot was powered off overnight, a new agent session with no chat history finds the scissors from the stored observation and photographs them. No teleoperation: the person used natural language only and did no mapping or localization by hand. Full video (3:18): <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>. See <a href="#an-agent-explores-takes-notes-and-comes-back">Experiments</a>.</sub></p>
+<p align="center"><sub>An agent (Claude Code) using EvergreenSLAM as the memory of a home robot; 1:44, wall clock and playback speed on screen. Day 1, from an empty map: asked for the balcony, it finds it through one line of its own exploration notes. Day 2, after a night powered off: a new session with no chat history finds the scissors from memory. No teleoperation, no mapping or localization by hand. Full video (3:18): <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>; details under <a href="#an-agent-explores-takes-notes-and-comes-back">Experiments</a>.</sub></p>
 
 ## Hello, world
 
@@ -46,9 +46,9 @@ The scan matching and the submaps follow Cartographer; the lifelong layer above 
 project's own. How it relates to slam_toolbox is under Related work.
 
 <p align="center">
-  <img src="docs/images/car.jpg" width="640" alt="The test robot: a 2D lidar on an Orange Pi, mecanum wheels, two power banks">
+  <img src="docs/images/car.jpg" width="640" alt="The first test robot: a 2D lidar on an Orange Pi, mecanum wheels, two power banks">
   <br>
-  <sub>The test platform: a 2D lidar (215 CNY, about 30 USD), an Orange Pi with an RK3588, mecanum wheels, two power banks.</sub>
+  <sub>The first test platform: a 2D lidar (215 CNY, about 30 USD), an Orange Pi with an RK3588, mecanum wheels, two power banks.</sub>
 </p>
 
 ## Motivation

@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/fbfdee89-250d-42ae-aad3-e9d3cb0cb1f4
 
-<p align="center"><sub>一个 agent（Claude Code）以 EvergreenSLAM 作为家用机器人的记忆完成的两次会话，一共 1 分 44 秒，标注了当前时间和播放倍速。第一天从空地图开始：在去阳台拍照任务中，agent 只在一条推断笔记里提到过的阳台，经 <code>egs fs grep</code> 找到并拍下。第二天，机器人断电过夜后，一个没有对话历史的新 agent 会话根据记忆里的观察记录找到剪刀并拍照。全程没有遥控，通过自然语言控制，没有任何手动控制建图定位的操作。完整视频（3 分 18 秒）：<a href="https://www.bilibili.com/video/BV1M2xW6JEDT">B 站</a>（中文字幕）、<a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>（英文字幕）。详见<a href="#agent-探索记录回访">「实验」</a>。</sub></p>
+<p align="center"><sub>一个 agent（Claude Code）用 EvergreenSLAM 当家用机器人的记忆；1 分 44 秒，画面上标有当前时间和播放倍速。第一天从空地图开始：让它去阳台拍照，它凭探索时自己写下的一句笔记找到了阳台。第二天，机器人断电一夜后，一个没有对话历史的新会话凭记忆找到了剪刀。全程没有遥控，也没有任何手动建图、定位的操作。完整视频（3 分 18 秒）：<a href="https://www.bilibili.com/video/BV1M2xW6JEDT">B 站</a>（中文字幕）、<a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>（英文字幕）；详见<a href="#agent-探索记录回访">「实验」</a>。</sub></p>
 
 ## Hello, world
 
@@ -32,9 +32,9 @@ base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
 扫描匹配和子图沿用 Cartographer 的设计，其上的 lifelong 层由本项目实现。与 slam_toolbox 的对比见「相关工作与致谢」。
 
 <p align="center">
-  <img src="images/car.jpg" width="640" alt="测试小车：一颗 2D 雷达装在 Orange Pi 上，麦轮，两个充电宝">
+  <img src="images/car.jpg" width="640" alt="最早的测试小车：一颗 2D 雷达装在 Orange Pi 上，麦轮，两个充电宝">
   <br>
-  <sub>测试平台：一颗 2D 雷达（215 元，约 30 美元），一块 RK3588 的 Orange Pi，麦轮，两个充电宝。</sub>
+  <sub>最早的测试平台：一颗 2D 雷达（215 元，约 30 美元），一块 RK3588 的 Orange Pi，麦轮，两个充电宝。</sub>
 </p>
 
 ## 动机
