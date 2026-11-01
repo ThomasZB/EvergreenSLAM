@@ -10,7 +10,7 @@
 
 https://github.com/user-attachments/assets/fbfdee89-250d-42ae-aad3-e9d3cb0cb1f4
 
-<p align="center"><sub>一个 agent（Claude Code）以 EvergreenSLAM 作为家用机器人的记忆完成的两次会话，一共 1 分 44 秒，标注了当前时间和播放倍速。第一天从空地图开始：在去阳台拍照任务中，agent 只在一条推断笔记里提到过的阳台，经 <code>egs fs grep</code> 找到并拍下。第二天，机器人断电过夜后，一个没有对话历史的新 agent 会话根据记忆里的观察记录找到剪刀并拍照。全程没有遥控，通过自然语言控制，没有任何手动控制建图定位的操作。完整视频（3 分 18 秒，英文字幕）：<a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>。详见<a href="#agent-探索记录回访">「实验」</a>。</sub></p>
+<p align="center"><sub>一个 agent（Claude Code）以 EvergreenSLAM 作为家用机器人的记忆完成的两次会话，一共 1 分 44 秒，标注了当前时间和播放倍速。第一天从空地图开始：在去阳台拍照任务中，agent 只在一条推断笔记里提到过的阳台，经 <code>egs fs grep</code> 找到并拍下。第二天，机器人断电过夜后，一个没有对话历史的新 agent 会话根据记忆里的观察记录找到剪刀并拍照。全程没有遥控，通过自然语言控制，没有任何手动控制建图定位的操作。完整视频（3 分 18 秒）：<a href="https://www.bilibili.com/video/BV1M2xW6JEDT">B 站</a>（中文字幕）、<a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>（英文字幕）。详见<a href="#agent-探索记录回访">「实验」</a>。</sub></p>
 
 ## Hello, world
 
@@ -106,9 +106,9 @@ base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
 ### agent 探索、记录、回访
 
 <p align="center">
-  <a href="https://youtu.be/FXoj2yCrbuo"><img src="https://img.youtube.com/vi/FXoj2yCrbuo/maxresdefault.jpg" width="640" alt="YouTube 上的完整演示视频（3 分 18 秒）"></a>
+  <a href="https://www.bilibili.com/video/BV1M2xW6JEDT"><img src="images/demo-cover-zh.jpg" width="640" alt="B 站上的完整演示视频（3 分 18 秒）"></a>
   <br>
-  <sub>完整视频（3 分 18 秒，英文字幕），点击在 YouTube 观看。</sub>
+  <sub>完整视频（3 分 18 秒，中文字幕），点击在 B 站观看；英文字幕版见 <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>。</sub>
 </p>
 
 **演示任务**：
