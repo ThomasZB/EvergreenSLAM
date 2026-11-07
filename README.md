@@ -1,6 +1,7 @@
 # EvergreenSLAM
 
-Always-on 2D lidar SLAM with named places, as a spatial memory for LLM agents.
+EvergreenSLAM is an always-on, hands-off, agent-friendly 2D lidar SLAM, built to serve as the
+long-term spatial memory of an agent.
 
 [![ci](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml)
 
@@ -10,101 +11,28 @@ English | [中文](docs/README.zh.md)
 
 https://github.com/user-attachments/assets/ecc5e8f2-d290-4b70-8356-79e4789ae43c
 
-<p align="center"><sub>An agent (Claude Code) using EvergreenSLAM as the memory of a home robot; 1:44, wall clock and playback speed on screen. Day 1, from an empty map: asked for the balcony, it finds it through one line of its own exploration notes. Day 2, after a night powered off: a new session with no chat history finds the scissors from memory. No teleoperation, no mapping or localization by hand. Full video (3:18): <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a>; details under <a href="#an-agent-explores-takes-notes-and-comes-back">Experiments</a>.</sub></p>
+<p align="center"><sub>An agent (Claude Code) using EvergreenSLAM as the memory of a home robot; 1:44, wall clock and playback speed on screen. Day 1, from an empty map: asked for the balcony, it finds it through one line of its own exploration notes. Day 2, after a night powered off: a new session with no chat history finds the scissors from memory. No teleoperation, no mapping or localization by hand. Full video (3:18): <a href="https://youtu.be/FXoj2yCrbuo">YouTube</a> (English subtitles), <a href="https://www.bilibili.com/video/BV1M2xW6JEDT">Bilibili</a> (Chinese subtitles); details under <a href="#the-full-exploration-demo">Experiments</a>.</sub></p>
 
-## Hello, world
+## Features
 
-```
-$ egs here
-current places/dock 2.4m
-closest places/dock 2.4m frozen; places/kitchen 15.3m frozen
-robot 0.48,1.02,-2.72  keyframe 0s  @solve 135
-base 0.75 (cover 98%)  since base match 0.0m  match 0.70 (avg 0.70)
-```
+- **Always-on lifelong SLAM.** Maps are created, frozen and extended automatically, and survive
+  any number of power cycles. Nobody has to think about mapping or localization.
+- **A CLI.** One command-line tool for driving and debugging the system from a terminal.
+- **Agent friendly.** An Agent Skill and an MCP interface let an agent call the SLAM directly.
+- **Saved places.** A place is saved through the CLI; the SLAM owns its coordinates and keeps them
+  current through every pose-graph optimization. Nobody has to think about coordinates.
+- **A spatial memory as a directory tree.** Memory lives in plain files, so an agent reads it the
+  way it reads any other memory, with `grep`, `cat` and `ls`.
+- **Visualization.** Tools for looking at the map and the localization result.
+- **Light and cheap.** C++, few dependencies, a simple build and a small footprint: a 2D lidar for
+  about 30 USD and a low-power single-board computer are enough.
 
-An agent asked to fetch a cola from the fridge understands the request but not the home: where
-the fridge is, how to reach the kitchen, where the cola was last seen. Whatever model is used, it
-needs a spatial memory: it must be able to remember a place from a command, a sentence or a photo,
-send the robot back there later, and keep that memory across context compaction, map
-re-optimization and process restarts. EvergreenSLAM is a 2D lidar SLAM designed around this
-requirement.
+To see how the lifelong SLAM is designed, read [Lifelong SLAM](#lifelong-slam). If SLAM is not your
+interest, skip to [Agent spatial memory](#agent-spatial-memory) for how EvergreenSLAM serves as an
+agent's memory, to [Experiments](#experiments) for what it does on a real robot, or to
+[Building and running](#building-and-running) to try it.
 
-- **One mode, no operator.** It runs as a background process with no separate mapping and
-  localization modes: it always maps into the current *session* while localizing against sessions
-  it has already *frozen*, and a session freezes itself once it has added enough new area and its
-  poses are well constrained.
-- **Bounded by area, not uptime.** Trimming marginalizes what it removes and sparsifies the result
-  to a Chow-Liu tree, and frozen poses are held constant in the optimizer, so that memory and CPU
-  are bounded by the mapped area rather than by uptime.
-- **Places that keep resolving.** A place is an *anchor* bound to a submap of the pose graph rather
-  than to coordinates, exposed to the agent as a directory tree plus a small CLI (`egs`, also
-  served as MCP tools).
-- **One cheap sensor.** A 2D lidar and a CPU; no IMU, wheel odometry, camera or GPU. It has been run
-  on a 215 CNY lidar and an RK3588 board, and on the public 2D datasets.
-
-The scan matching and the submaps follow Cartographer; the lifelong layer above them is the
-project's own. How it relates to slam_toolbox is under Related work.
-
-<p align="center">
-  <img src="docs/images/car.jpg" width="640" alt="The first test robot: a 2D lidar on an Orange Pi, mecanum wheels, two power banks">
-  <br>
-  <sub>The first test platform: a 2D lidar (215 CNY, about 30 USD), an Orange Pi with an RK3588, mecanum wheels, two power banks.</sub>
-</p>
-
-## Motivation
-
-**The agent does not know the home.** Language is no longer the bottleneck: an agent asked for a
-cola from the fridge knows what is wanted. What it lacks is the layout. Its memory is text, and a
-layout described in enough detail to act on takes a lot of context and survives only as long as
-the context does, compaction included.
-
-**Coordinates are fragile.** Writing places down as map coordinates does not hold for long. A
-coordinate goes stale when the map is rebuilt or re-optimized, often without the agent noticing,
-and means nothing in another map. Every agent on a conventional SLAM would have to keep its own
-record of where things are and keep that record consistent with the map. What an agent can use is
-a *name* that keeps resolving to the same physical spot, plus a place to record what it saw there.
-
-**SLAM without an operator.** The usual workflow: tune the odometry, calibrate extrinsics and
-synchronize timestamps, drive around to map, save, switch to localization mode, tune parameters
-when the environment changes, and rebuild when it changes too much. Vendors usually package this
-or train their customers. For a newcomer a mistake shows up as ghosting or drift, sometimes only
-later, and a rebuild means entering every saved station again. Each step needs an operator, and
-the agent should not have to be one.
-
-**The intended use.** For example: walk the robot around the home once, saying "this is the
-kitchen" in the kitchen and "this is the desk" at the desk, and do nothing else about mapping or
-localization. The next day, "go and check the kitchen" works. The agent notes that the scissors
-are in the left desk drawer and the apples on the dining table, and days later "where are the
-scissors?" leads it to the right place. Furniture moves, the map is re-optimized, the robot
-restarts, and the places still resolve. Fetching the cola then starts from knowing that the fridge
-is in the kitchen and how to get there, before an arm takes over. The later steps need
-manipulation and vision; the layer underneath, places that stay valid without anyone maintaining
-the map, is what this project argues SLAM itself should provide. The demo below covers the memory
-half of this on a real robot, from an empty map: places learned by exploring, notes written per
-place, and a place and a thing found again from that memory. Fetching with an arm is not shown.
-
-**Lifelong SLAM, but where.** Underneath this is lifelong SLAM: always on, mapping while in use,
-following changes, with resources that do not grow with uptime. The research literature on it is
-long, yet to the author's knowledge few open-source 2D implementations can be used as they are;
-slam_toolbox's lifelong node is described by its README as highly experimental and removes nodes
-without marginalizing them (see Related work).
-
-**Cost.** The memory should be cheap enough to leave running on a small robot all day. A 3D lidar
-costs a few hundred dollars and up and needs a board that can keep up with it. Cameras are cheap,
-but dense or learned visual SLAM usually wants more compute than a small board has, and cameras
-degrade in darkness, on textureless walls and under changing illumination. A 2D lidar costs about
-30 dollars, needs no GPU, and is insensitive to lighting; its own failure cases (glass, mirrors,
-strong sunlight) are not addressed here. On the same grounds the pipeline fuses no IMU, wheel
-odometry or camera: each adds calibration, time synchronization, a driver and per-robot tuning.
-The cost is that motion prediction comes from the laser alone, a Kalman filter with a Singer
-motion model fed only by scan matching, which is expected to struggle on fast turns and in long
-featureless stretches. The position taken is that cheap geometry with sparse semantics attached to
-named places (for example, a vision-language model occasionally writing "the bin is here") is
-for this setting a better trade-off than dense visual SLAM.
-
-## How it works
-
-### Sessions and freezing
+## Lifelong SLAM
 
 <p align="center">
   <img src="docs/images/demo.gif" width="960" alt="Replay of the revo_lds bag in the browser debug view: the map grows, sessions 0 and 1 freeze, session 2 starts">
@@ -114,239 +42,242 @@ for this setting a better trade-off than dense visual SLAM.
   mapping.</sub>
 </p>
 
-Mapping is organized in sessions. The frontend always maps into the current session; the backend
-closes loops against every finished submap within reach, frozen or not, including the current
-session's own, which the rolling window below keeps recent. Under gradual environmental change
-the robot therefore keeps matching the world as it is now, and those recent submaps are in turn
-constrained to the frozen base.
+### Design
 
-The first session becomes the frozen base once it has a finished submap. A later session is
-judged only after it has added enough new area outside the frozen footprint and has stopped
-growing; it freezes when it is linked to a frozen session and the marginal standard deviations
-of every finished submap pose are below per-axis thresholds. Freezing makes the session's files immutable and its poses
-constant in every later optimization. A session that only revisits known space is never frozen
-automatically (`egs session freeze --yes` does it by hand); any unfrozen session is discarded
-after more than five boots without being fed (configurable). Where sessions overlap, the composed map keeps the more confident cell.
-Consequently a change inside already-mapped ground is visible while the current session is alive
-but is not frozen in; re-freezing a changed room is planned, not implemented.
+Lifelong SLAM is a mature research direction with plenty of recent papers, but there is no
+open-source 2D lidar lifelong SLAM that is hands-off and usable as is. EvergreenSLAM is meant to
+fill that gap. Like most lifelong SLAM systems in the literature, it has these properties:
+
+- **Multiple sessions.** Every run is a new session (trajectory). Sessions are frozen, idle or
+  current; a frozen session is never modified.
+- **Bounded growth.** The system measures how much of each submap in the idle and current sessions
+  is covered by newer ones; a submap covered beyond a threshold is deleted, so the map cannot grow
+  without bound.
+- **History is kept.** A deleted submap is marginalized rather than dropped, and the result is
+  sparsified into a Chow-Liu tree to avoid fill-in.
+- **Pose-graph optimization.** The poses of the unfrozen sessions are optimized together with their
+  constraints to the frozen ones; frozen poses stay constant.
+
+For long-running operation there is also a garbage collector. A session with no constraint to any
+frozen session is called *floating*; at startup, a floating session last used more than five
+boots ago is deleted (`gc_unfrozen_after_n_boots`, 0 disables it).
+
+> The flow follows some of the classic lifelong SLAM work, for example:
+>
+> - [Information-theoretic compression of pose graphs for laser-based SLAM](https://dl.acm.org/doi/10.1177/0278364912455072)
+> - [A General Framework for Lifelong Localization and Mapping in Changing Environment](https://arxiv.org/abs/2111.10946)
+>
+> A proper design write-up with a system diagram is planned when time allows; until then, the
+> source is the documentation.
+
+### Mapping, localization and extension, managed automatically
+
+<p align="center">
+  <img src="docs/images/multisession.png" width="900" alt="The browser debug view: submaps, trajectories and 5 sessions, 3 of them frozen">
+  <br>
+  <sub>A long run in the browser debug view: 63 sessions created so far, 5 present, 3 of them frozen.</sub>
+</p>
+
+On top of the lifelong properties, and so that it can sit in the background without anyone
+thinking about mapping or localization, EvergreenSLAM freezes and extends the map by itself. The
+current map is frozen and a new session opened when:
+
+- **The first submap finishes.** The first submap's pose is always (0, 0, 0). When it finishes,
+  the current session is frozen and a new one opened; this is the reference every later freeze is
+  judged against.
+- **The extension conditions are met.** Every freeze after the first is a *map extension*. Once
+  the session is linked to a frozen session, it freezes when:
+  1. the new area exceeds 10% of the existing map, or 200 m²;
+  2. seven consecutive submaps add no new area;
+  3. the marginal standard deviation of every finished submap's pose is below a per-axis threshold.
+
+Strictly speaking, EvergreenSLAM offers no *mapping*, *extension* or *localization* in the usual
+sense, only the automatic management described above. Its purpose is to keep localization stable
+over the long run instead of drifting with every update. In a highly dynamic environment it can
+be switched off with `auto_freeze`; EvergreenSLAM is then a typical lifelong SLAM with no fixed
+anchor, and the map may drift as it updates, but saved places drift with the pose graph, so the
+robot can still return to them.
+
+For anyone who wants an agent or a person to manage mapping, extension and localization, the
+commands exist: `egs session freeze` freezes by hand, `egs map new/open` creates or switches maps,
+`egs init-pose` and `egs relocalize` relocalize by hand. Used that way, they behave like the
+mapping, extension and localization of a conventional SLAM.
 
 ### Relocalization
 
-`egs init-pose` (a pose or a saved place) and `egs relocalize` match the newest scan of the current
-session against the finished submaps of the other sessions: with a pose, the submaps reaching
-within 2 m of it, over ±0.5 rad; without one, every submap over every heading, by branch and bound
-on each. A match becomes a loop-closure constraint only above the usual score threshold. A session
-not yet linked to a frozen one has no position worth keeping, so when no constraint is added it is
-moved as a whole onto the best match scoring at least 0.2, or else onto the given pose. It stays
-unlinked until a later loop closure passes the usual threshold, and `egs` reports the outcome as
-`reseeded`. A session already linked to the base is never moved this way.
+At every start the new session begins at the last saved pose and aligns itself to the frozen map
+through loop closures; no relocalization by hand is needed.
 
-### Bounded growth
+If no loop closure ever links the session to the frozen map, the current session carries on from
+its starting pose. `egs relocalize` then triggers a global relocalization: it runs a
+branch-and-bound search over every frozen submap, one by one, which takes a while; a faster
+version is planned.
 
-Two mechanisms keep the graph from growing with uptime.
+`egs init-pose` relocalizes around a given pose: a branch-and-bound search within 2 m, much
+faster. Internally the newest keyframe gets the pose as a loop-closure seed. Even when the search
+produces no closure, a floating session is moved as a whole onto the best weak match (or onto the
+given pose when there is none), which `egs` reports as `reseeded`; a session already linked to the
+frozen map is never moved this way.
 
-*Trimming with sparsification.* The live session keeps a rolling window of its own submaps over
-ground it re-covers: an older submap is removed once newer submaps cover its area or newer passes
-cover its track. Removal is a marginalization, not a deletion: the removed nodes' Markov blanket
-is taken, the joint covariance of the survivors is computed, and the resulting dense information
-is sparsified to a Chow-Liu tree (the maximum spanning tree over pairwise mutual information)
-whose edges replace the removed constraints; edges that would span too far become priors weighted
-by the marginal covariance. At freeze, finished submaps that lie mostly inside the frozen map are
-dropped the same way, keeping one if all qualify.
+## Agent spatial memory
 
-*Frozen sessions are constant.* Frozen poses are parameter blocks held constant in the Ceres
-problem, no constraint is built between two frozen submaps, and frozen submaps are never
-modified. The optimization therefore scales with the live session, not with the whole map, and
-the frozen part grows linearly with mapped area. A simulated 30-loop run stays bounded. On the
-robot it has run in one flat over several days, but memory and graph size were not logged then;
-the numbers will be added.
+With the automatic management above, EvergreenSLAM can serve as an always-on spatial memory for an
+agent. The memory is a directory tree: everything lives as plain files under `memory/`, which the
+agent reads and edits through `egs fs ls|tree|cat|grep` (or straight from the shell when the SLAM
+runs on the same machine). A command-line tool and an Agent Skill cover what the files cannot:
+saving a place, asking where one is, recording an observation. The main points:
 
-<p align="center">
-  <img src="docs/images/webui.jpg" width="900" alt="The browser debug view: submaps, trajectory and four sessions, three of them frozen">
-  <br>
-  <sub>The browser debug view during a long run: four sessions, three of them frozen.</sub>
-</p>
+- **A place is an anchor.** `egs place save places/kitchen` stores the robot's pose as an anchor,
+  bound by ID to a submap of the pose graph. After re-optimization, trimming, freezing or a
+  restart, the place moves with its submap, and `egs where` always answers with the current
+  position.
+- **Memory is a directory.** Directories are places and things; the path is containment:
+  `places/kitchen/table/apple` is the apple on the kitchen table. The agent decides what deserves
+  a place and what goes into the files below it.
+- **A place is a workspace.** A place directory can hold `notes.md` (free notes) and `SKILL.md`
+  (what to know here, say how to dock); a thing has an append-only `observations.jsonl` (seen,
+  absent, could not check) and photo attachments.
+- **Search like any memory.** `egs fs ls|tree|cat|grep|write|mv|rm` work on the tree, `egs find
+  scissors` ranks things by name, alias and kind, `egs fs grep balcony` searches every note.
+- **A view to check on.** `egs view` renders the map and the localization result as an image; its
+  parameters choose what to draw, much like rviz.
+- **Command and process are separate.** `egs` depends on the Python standard library only and
+  talks HTTP to the agent service inside the SLAM process (`127.0.0.1:8643`); an agent on another
+  machine connects through an SSH tunnel. Agents that take tools rather than a shell use `egs mcp`
+  (MCP over stdio, one tool per command).
 
-### Places as anchors
+`egs help agent` lists the commands in under 30 lines. The directory conventions are in
+[memory_README.md](adapters/agent/memory_README.md), the Agent Skill in
+[SKILL.md](adapters/agent/skills/evergreenslam/SKILL.md), the HTTP contract in
+[API.md](adapters/agent/API.md).
 
-A saved place is an anchor: a submap of the pose graph plus a transform relative to it. When the
-graph is re-optimized the place moves with its submap; after a restart the name still resolves.
-Anchors survive loop closure, trimming, freezing, restart and an interrupted write, and are what
-`egs where` resolves.
+### The CLI
 
-### Memory as a directory
+`egs` was made for agents, but it is just as handy for a person driving and debugging the system.
+Some everyday commands:
 
-`memory/places/kitchen/table/apple` is a thing inside a place. The agent works on the tree with
-`ls`, `cat`, `mv` and `grep`. Only what the live process alone knows, such as poses, saving a place,
-and map or session management, goes through `egs`. Keep-out zones, notes and per-place skills live
-in the same tree. `egs view here` renders the current scan over the map around the robot so the
-agent can judge for itself whether localization is drifting.
-
-### Implementation
-
-Pure 2D, all `double`, poses as `Eigen::Affine2d`. Laser odometry with a correlative matcher and a
-Ceres refinement, submaps as probability grids, a pose graph with branch-and-bound loop closure and
-Ceres optimization, then session-aware trimming, freezing and persistence with atomic commits.
-`core/` has no ROS dependency; ROS 2 is one adapter.
+```bash
+egs --help                        # help
+egs root                          # where memory/ lives and which map is open
+egs here                          # the robot's pose
+egs relocalize                    # global relocalization
+egs init-pose --place places/<p>  # relocalize around a given pose
+egs map ls|new|open               # maps: list, create, switch
+```
 
 ## Experiments
+
+As of 2026-11-07, EvergreenSLAM has run on my home robot for half a month without trouble. I use
+it mostly while developing my robot harness, and the agent has handled every place-related task I
+gave it, such as the ones I ask for all the time:
+
+- go to the debugging spot
+- back to the rest spot
+- go where you charge
+
+These tasks are simple. A conventional SLAM gets there too: build the map, switch to localization,
+save the station coordinates, and let the agent call a tool. The difference with EvergreenSLAM is
+that nobody touches any of that. From the first boot the robot is run in natural language alone,
+and a few words in passing (for instance "nothing else to do, just wait here") are enough for the
+agent to save a place itself. There is no mapping-localization-station workflow; the agent needs
+no knowledge of SLAM, not even that a SLAM is running. Through `egs` it remembers a pose without
+remembering a coordinate, and later finds it again by asking in natural language.
+
+> The memory this gives the harness is far better than I expected. In the harness I am building, a
+> background worker takes care of place memory (it takes photos and records whatever is worth
+> keeping through `egs`). The robot explores my home on its own or follows me around once, and in
+> later conversations the agent queries these place memories in natural language, as naturally as
+> any other memory. In one exploration run I never named a single place. Afterwards I asked the
+> agent to photograph the balcony. `egs find 阳台` (balcony) found no such place; `egs fs grep
+> balcony` then found it on line 7 of `places/living-room/notes.md`, saved as
+> `a red striped curtain and, past it, a glass door to what looks like a balcony (阳台, inferred)`.
+> `egs` makes spatial memory as easy to query as ordinary memory: the agent needs one keyword, no
+> coordinate, and no idea whether a SLAM is running.
+
+### The full exploration demo
 
 <p align="center">
   <img src="docs/images/robot.jpg" width="320" alt="The robot in the demo: an XLeRobot on a three-tier cart with omni wheels, a head camera on a neck and two arms">
   <br>
-  <sub>The platform the agent demo ran on: an XLeRobot (three omni wheels, a head camera on a pan/tilt neck, two SO-101 arms, not used) with the same 2D lidar as the car above and an RK3588 board. EvergreenSLAM uses only the lidar and the board.</sub>
+  <sub>The platform the demo ran on: an XLeRobot (three omni wheels, a head camera on a pan/tilt neck, two SO-101 arms, not used) with the same 2D lidar as the car below and an RK3588 board. EvergreenSLAM uses only the lidar and the board.</sub>
 </p>
-
-### An agent explores, takes notes and comes back
 
 <p align="center">
   <a href="https://youtu.be/FXoj2yCrbuo"><img src="https://img.youtube.com/vi/FXoj2yCrbuo/maxresdefault.jpg" width="640" alt="Full demo video on YouTube (3:18)"></a>
   <br>
-  <sub>Full video (3:18, English subtitles) on YouTube.</sub>
+  <sub>Full video (3:18, English subtitles) on YouTube; Chinese subtitles on <a href="https://www.bilibili.com/video/BV1M2xW6JEDT">Bilibili</a>.</sub>
 </p>
 
-**The task.**
+**The demo:**
 
-In the demo, Claude Code (Opus 5.5) acted as the mind of the robot shown above in two sessions: 24
-minutes on 2026-10-31 and 4 minutes the next morning. A robot harness that is not part of this
-repository (private for now) gave it the body over MCP: speech recognition, following a person, Nav2
-navigation to a pose or a saved place, the head, camera snapshots, a lidar scan, and Telegram for
-replies and photos. `egs` from this repository was its only spatial memory.
+1. Start EvergreenSLAM on a fresh, empty map.
+2. Start Claude Code (Opus 5.5) in the RobbyBot project (another project of mine, not public yet)
+   and load the skills.
+3. Have the robot follow me and save a rest spot beside the fridge.
+4. Let the robot explore on its own; the agent saves several places through `egs`.
+5. Ask it to find the scissors. Through `egs` the agent reviews the places it just saved (the
+   desk, the shelves), checks the likely ones in turn, and finds the scissors on a table.
+6. Ask it to photograph the balcony and return to the rest spot. The agent finds the balcony
+   through `egs`, takes and saves the photo, and returns.
+7. Next day, reboot the robot and ask for the scissors again. The agent learns from `egs` that
+   they are on the table, goes to confirm, returns to the rest spot and appends an observation.
 
-Day 1 started on purpose from a new map and an empty `memory/`, so it shows how an agent builds and
-uses the memory. On the next morning the robot was restarted (with nobody attending to localization)
-and a new agent session began, which shows memory across a restart and across sessions; for longer
-SLAM runs see Sessions and freezing and Bounded growth. The person spoke Chinese throughout; the
-agent reasoned and wrote its notes in English, with Chinese names of places as aliases.
+> During this run the robot asked me several times over Telegram; I told it to keep looking by
+> itself and hinted that scissors usually sit on a table. In the two earlier takes before the one
+> on video it never asked and found the scissors within a single conversation.
 
-> In fact this take did not go smoothly: the vision service dropped out midway, exploration missed
-> the table the scissors were on, and the agent asked me four times; after my hint ("scissors are
-> usually on a table") it went to ground the map showed as not yet explored and found them there. In
-> the two earlier runs exploration had passed that table, and a single "find the scissors for me"
-> was enough, in about two minutes. Results still depend heavily on the model and on the design of
-> the harness.
+**What the agent did** (times as shown at the top left of the video; only what passed between
+the agent and `egs`):
 
-**Step by step** (times as shown at the top left of the video):
+1. **Start (17:03).** `egs root`, `egs fs cat README.md`, `egs here`, `egs fs tree places`: a
+   fresh map, no places.
+2. **Rest spot (17:03–17:06).** `egs place save places/rest-spot`, then `node.yaml` (aliases) and
+   `notes.md`, noting that a person chose it.
+3. **Exploring alone (17:06–17:12).** Picks unvisited areas from `egs view map`, looks around with
+   the camera on arrival, saves the figure shelf, the living room, the washing machine, the desk
+   and the bedroom, and marks in each note where the information came from (seen, told,
+   inferred). At 17:08 the living-room note gains one inferred line: the glass door behind the
+   curtain looks like it leads to a balcony. The balcony is neither visited nor saved.
+4. **Writing its own rule for a place (17:13).** Returning to the rest spot, Nav2 creeps back and
+   forth over the last centimetres; the agent finishes with short moves of its own and writes
+   `places/rest-spot/SKILL.md` (fridge panel squarely behind, rear lidar reading 0.43–0.45 m).
+   From then on `egs where places/rest-spot` lists it under `read first:`.
+5. **Finding the scissors (17:12–17:23).** `egs find 剪刀` and `egs fs grep scissors` return
+   nothing. The object detector has gone down by now, so the agent reads the snapshots itself. It
+   checks the desk, the tool shelf (saved as `tool-shelf`), the hallway and bedroom side tables in
+   turn, appending each "not found" to that place's `notes.md`; my hint that scissors usually sit
+   on a table goes into `places/notes.md`. It finds them on a small side table that exploration
+   had missed: `egs place save places/side-table`, then
+   `egs observe places/side-table/scissors --offset …`.
+6. **A photo of the balcony (17:23–17:25).** `egs find 阳台` returns nothing; `egs fs grep balcony`
+   returns the inferred line from step 3. The agent drives to the tool shelf, turns its head to
+   the curtain, goes in, saves `places/balcony` (alias 阳台) and sends the photo. 102 seconds from
+   request to photo, and I said nothing in between.
+7. **Back to the rest spot (17:25–17:26).** Docks by its own `SKILL.md`.
+8. **The next morning (09:39–09:43).** Powered off overnight where it stood (not moved). After
+   boot, with no relocalization by hand, `egs here` reports `places/rest-spot` straight away. A new
+   session with no chat history is asked whether it remembers where the scissors are: `egs find
+   剪刀` returns `places/side-table/scissors`, seen 16 hours ago; the agent drives to the approach
+   pose from `egs where` to check, sends the photo 44 seconds after reading the question and
+   appends a new observation with `egs observe`. Back at the rest spot it docks by the previous
+   day's `SKILL.md` again.
 
-1. **Start (17:03).** `egs root`, `egs fs cat README.md`, `egs here`, `egs fs tree places`: a new
-   map, no places.
-2. **One named place (17:03–17:06).** "Follow me", then "your rest spot is beside the fridge";
-   after a few corrections by voice, `egs place save places/rest-spot`, with a `node.yaml` of
-   aliases and a `notes.md` that records the place as told by the person. This is the only place
-   the person named.
-3. **Exploring alone (17:06–17:12).** Asked to explore, the agent picks unexplored ground from
-   `egs view map`, has Nav2 drive there, looks with the head camera, and saves what it finds: a
-   figure shelf, the living room and its sofa, the washing machine, a desk, the bedroom at its
-   doorway. Each `notes.md` says what is there and where the knowledge came from: seen, told by the
-   person, or inferred. One line in the living room's notes, from a photo of a corner at 17:08: "a
-   red striped curtain and, past it, a glass door to what looks like a balcony (阳台, inferred)".
-   The balcony was neither visited nor saved.
-4. **A rule for a place (17:13).** Docking back at the rest spot, Nav2 crept on the last
-   centimetres; the agent stopped it, finished with short moves of its own, and wrote
-   `places/rest-spot/SKILL.md`: how to finish (the fridge square behind, 0.43 to 0.45 m on the
-   lidar's rear sector). `egs where places/rest-spot` lists that file under `read first:`.
-5. **"Do you know where the scissors are?" (17:12–17:23).** `egs find 剪刀` and
-   `egs fs grep scissors` return nothing. The harness's object detector had stopped responding at
-   17:08; the agent switched to its own reading of full-resolution snapshots after the first
-   timeout and said so when the search began. It went through the candidates it knew of: the desk,
-   the living-room shelf with tape and small parts (saved as `tool-shelf`), the entrance and the
-   bedroom table, saving places on the way and appending each miss to that place's
-   `notes.md`. The person spoke four times: "go and look" (to its question), "look somewhere else",
-   one hint ("scissors are usually on a table", which it stored in `places/notes.md` as a habit
-   told by the person), and "find them yourself". It then went to ground the map showed as occupied
-   but not yet visited, between the living room and the entrance, and found the scissors on a side
-   table: `egs place save places/side-table`, `egs observe places/side-table/scissors --offset …`,
-   and a photo at 17:23, about ten minutes after the question. Exploration had not reached that
-   corner. This was the slowest of three scissors searches that day; in the other two the
-   exploration had already passed that table and the search took about two minutes without hints.
-   Here the time went to the four places searched first and to driving, not to the failed vision
-   calls, which returned within about a second each.
-6. **"Take a photo of the balcony, then go back to your rest spot" (17:23–17:25).** `egs find 阳台`
-   finds no match: nothing was named balcony. `egs fs grep balcony` returns the inferred line from
-   step 3. The agent drives to `places/living-room/tool-shelf` (saved during the scissors search),
-   turns the head towards the curtain, moves to the opening rather than squeezing past the sofa,
-   saves `places/balcony` (aliases 阳台, 封闭阳台, balcony; its notes say the person named it) and
-   sends the photo at 17:25, 102 s after the request, with no further input.
-7. **Back to the rest spot (17:25–17:26)**, following its own rule: 3 cm off on arrival, a lidar
-   check, 5 cm back.
-8. **The next morning (2026-11-01, 09:39–09:43).** The robot had been powered off overnight where
-   it parked. After boot, with no `egs init-pose` or `egs relocalize`, `egs here` reported it at
-   `places/rest-spot` (0.0 m), with a base-map agreement of 0.73 over 90 % cover. A new Claude Code
-   session with no chat history received a four-line prompt: read the same three skills and use
-   only the memory in `egs`. (Claude Code also loaded the harness's project instructions, which
-   name finding scissors as a target task but do not say where anything is.) The person typed "do
-   you remember where the scissors are? take a photo for me". `egs find 剪刀` returned
-   `places/side-table/scissors`, last seen 16 h earlier; the agent said it would check rather than
-   rely on the old observation, took the approach pose from `egs where` and drove there (12 s). The
-   object detector was not running, so it pointed the head along the stored offset, judged the
-   snapshot itself, sent the photo 44 s after the question reached it (the message had waited 46 s
-   in Claude Code's input queue while a `listen` call ran), and appended a new `seen` observation
-   with `egs observe`. Asked to go back to the rest spot, it followed the
-   `places/rest-spot/SKILL.md` it had written the day before: 0.49 m from the fridge against the
-   rule's 0.43–0.45 m, then a short reverse. This is one restart of a robot that was not moved
-   while off; it is not a test of relocalization after the robot is carried elsewhere.
+At the end of day 1, `memory/` holds 12 places, one thing, one place rule and one house-wide
+note, all plain files. `egs` is memory only: Nav2 drives, and the agent listens, looks and
+decides with the harness's tools. There was no teleoperation at any point.
 
-At the end of day 1 `memory/` held 12 places, one thing (the scissors, with the observation), one
-place rule and one home-wide note, all as plain files. On day 2 the agent wrote one observation and
-nothing else.
+### An earlier experiment on an ultra-low-cost platform
 
-`egs` answered where places are (`where` gives the pose and the approach pose the harness passes to
-Nav2), bound saved places to the pose graph, and held the files (`fs`, `find`, `observe`, `view`).
-Driving, obstacle avoidance and docking were Nav2 and the harness; hearing, the camera, recognizing
-things in photos and every decision were the agent with the harness's tools. The day-1 prompt
-asked the agent to read three skills (`evergreenslam` from this repository, and two harness skills
-on moving the robot and on what to remember: provenance tags, place rules in `SKILL.md`, recording
-where something was not found), to narrate each decision, not to force narrow passages, and to
-store requested photos in memory. The gamepad stayed with the person as an emergency stop; the
-robot's daemon log shows no teleoperation lease during either session.
+<p align="center">
+  <img src="docs/images/car.jpg" width="480" alt="The first test car: a 2D lidar on an Orange Pi, mecanum wheels, two power banks">
+  <br>
+  <sub>The first test platform: a 2D lidar (215 CNY, about 30 USD), an RK3588 Orange Pi, mecanum wheels, two power banks.</sub>
+</p>
 
-### Earlier field test
-
-On 2026-09-29, on an earlier test car (mecanum wheels, a 2D lidar, an RK3588 board), Claude Code
-was sent to "check whether anything changed in the kitchen". It read the kitchen's `SKILL.md` in
-the memory tree (stop at the doorway on top of the ramp), took the approach pose from
-`egs where places/kitchen/door` to Nav2, backed out once when wedged against an air purifier, and
-recorded a new object next to the bin with `egs observe`. That car was the platform of the first
-public version (2026-09-30); the robot above replaced it on 2026-10-07 and has run EvergreenSLAM
-as its spatial memory since.
-
-## Validation and limitations
-
-This is a preview, not a product. Scope was limited to the core; known omissions follow.
-
-Tested on macOS and Linux: unit tests, simulated-lidar end-to-end tests for the frontend, the scan
-matcher and each backend stage (loop closure, trimming, freezing, persistence, relocalization,
-anchors). CI runs the core and agent tests on Linux (gcc) and macOS on every push; the
-ThreadSanitizer run over the backend tests and the ROS 2 adapter build are by hand. Exercised
-on the two robots above and on the public bags: laser odometry, loop closure, multi-session mapping
-with automatic freezing and trimming, persistence with atomic commits and named maps, the agent
-service and `egs`, the browser debug view, the rviz2 plugin. On the datasets the replay tool
-reports the error against the reference trajectory (see the ROS README); no results table is
-kept here yet.
-
-- No IMU, wheel odometry or camera fusion, and no 3D (see Motivation).
-- Frozen sessions cannot be unfrozen. A change inside mapped ground is mapped and matched by the
-  current session, which stays aligned through its loop closures to the frozen base, so
-  localization holds; the change is not frozen in, though (see Sessions and freezing). A map that
-  diverged and was then frozen means starting a new map directory.
-- No dynamic-object filtering. Odometry has no remedy for degenerate geometry (long corridors,
-  open halls); loop closure rejects ambiguous matches in corridors. It does not check a scan
-  against free space in the map, since on an old map moved furniture and opened doors put true
-  matches there, so a corner or parallel-wall alias that scores well is accepted, and only the
-  robust loss limits its effect.
-- One robot, one map. No multi-robot support.
-- The SLAM does not detect a robot carried elsewhere; the agent sees it in the `base` score of
-  `egs here` and answers with `egs init-pose` or `egs relocalize`. This is left to the agent on
-  purpose: in two similar rooms, an agent that reads the door sign and names the place does better
-  than a blind global search, which may lock onto the wrong room.
-- `egs relocalize` searches every submap in full, so its cost grows with the map: 13 to 16 s for
-  46 submaps on four threads of an Apple M4, and loop closures wait behind it. A faster global
-  search is planned.
-- One known odometry defect: in the simulated room, a straight run from rest along a wall-aligned
-  axis has been observed to stay at the origin. The regression test is disabled until the cause is
-  understood.
-
-Evaluated only in one flat and on the public datasets. Issues welcome.
+At the start of the project I put together this very cheap test platform at my parents' home and
+did the first deployment and validation on it. It stays here to show that the project deploys
+quickly on hardware this modest; I no longer use the car, and every later experiment ran on the
+XLeRobot above.
 
 ## Building and running
 
