@@ -254,6 +254,20 @@ tools/           包转换脚本、TSan 门禁和 demo
 - [RoboStack](https://robostack.github.io/)，它把 ROS 2 装进了 pixi，macOS 上的开发流程依赖它。
 - Freiburg 和 Willow Garage 的数据集，回放和打分用的是它们；Cartographer 的 revo_lds 数据包，demo 用的是它。
 
+## 引用
+
+如果本项目对你的工作有帮助，欢迎引用。GitHub 仓库页右侧的 “Cite this repository” 读取的是根目录的 [`CITATION.cff`](../CITATION.cff)。
+
+```bibtex
+@software{chen2026evergreenslam,
+  author  = {Chen, Hang},
+  title   = {EvergreenSLAM: always-on 2D lidar SLAM as the long-term spatial memory of an agent},
+  year    = {2026},
+  version = {0.3-preview},
+  url     = {https://github.com/ThomasZB/EvergreenSLAM}
+}
+```
+
 ## 许可
 
 Apache License 2.0，见 [`LICENSE`](../LICENSE) 和 [`NOTICE`](../NOTICE)。

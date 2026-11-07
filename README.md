@@ -423,6 +423,21 @@ tools/           bag converters, the TSan gate and the demo
 - The Freiburg and Willow Garage datasets, used for replay and scoring, and Cartographer's
   revo_lds bag, used for the demo.
 
+## Citation
+
+If EvergreenSLAM is useful in your work, please cite it. GitHub's "Cite this repository" button
+reads [`CITATION.cff`](CITATION.cff).
+
+```bibtex
+@software{chen2026evergreenslam,
+  author  = {Chen, Hang},
+  title   = {EvergreenSLAM: always-on 2D lidar SLAM as the long-term spatial memory of an agent},
+  year    = {2026},
+  version = {0.3-preview},
+  url     = {https://github.com/ThomasZB/EvergreenSLAM}
+}
+```
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

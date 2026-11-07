@@ -1,0 +1,32 @@
+{
+  "title": "EvergreenSLAM: always-on 2D lidar SLAM as the long-term spatial memory of an agent",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "Apache-2.0",
+  "creators": [
+    {
+      "name": "Chen, Hang"
+    }
+  ],
+  "description": "<p>Always-on, hands-off, agent-friendly 2D lidar SLAM. Maps are created, frozen and extended automatically across power cycles, with pose-graph trimming by marginalization and Chow-Liu sparsification to keep the graph bounded. Named places (anchors) bind to graph nodes rather than coordinates, and an agent reads and writes its spatial memory as plain files through a CLI and an MCP server.</p><p>Source: <a href=\"https://github.com/ThomasZB/EvergreenSLAM\">github.com/ThomasZB/EvergreenSLAM</a></p>",
+  "keywords": [
+    "slam",
+    "2d-slam",
+    "lidar",
+    "lifelong-slam",
+    "pose-graph",
+    "spatial-memory",
+    "embodied-ai",
+    "llm-agents",
+    "mcp",
+    "ros2",
+    "robotics"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/ThomasZB/EvergreenSLAM",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
