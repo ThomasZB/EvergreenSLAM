@@ -9,8 +9,13 @@ authors:
 repository-code: "https://github.com/ThomasZB/EvergreenSLAM"
 url: "https://github.com/ThomasZB/EvergreenSLAM"
 license: Apache-2.0
-version: 0.3-preview
-date-released: 2026-10-16
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24028821
+    description: "Concept DOI, resolves to the latest archived release"
+doi: 10.5281/zenodo.24028821
+version: 0.3.1-preview
+date-released: 2026-11-07
 abstract: >-
   Always-on, hands-off, agent-friendly 2D lidar SLAM. Maps are created, frozen and
   extended automatically across power cycles, with pose-graph trimming by

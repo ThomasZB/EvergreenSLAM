@@ -3,6 +3,7 @@
 EvergreenSLAM 是一个常驻、无需人工干预、Agent 友好的 2D 激光 SLAM 系统，适合作为 Agent 长期的空间记忆。
 
 [![ci](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24028821.svg)](https://doi.org/10.5281/zenodo.24028821)
 
 [English](../README.md) | 中文
 
@@ -263,7 +264,8 @@ tools/           包转换脚本、TSan 门禁和 demo
   author  = {Chen, Hang},
   title   = {EvergreenSLAM: always-on 2D lidar SLAM as the long-term spatial memory of an agent},
   year    = {2026},
-  version = {0.3-preview},
+  version = {0.3.1-preview},
+  doi     = {10.5281/zenodo.24028821},
   url     = {https://github.com/ThomasZB/EvergreenSLAM}
 }
 ```

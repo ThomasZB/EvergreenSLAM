@@ -4,6 +4,7 @@ EvergreenSLAM is an always-on, hands-off, agent-friendly 2D lidar SLAM, built to
 long-term spatial memory of an agent.
 
 [![ci](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasZB/EvergreenSLAM/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24028821.svg)](https://doi.org/10.5281/zenodo.24028821)
 
 English | [中文](docs/README.zh.md)
 
@@ -433,7 +434,8 @@ reads [`CITATION.cff`](CITATION.cff).
   author  = {Chen, Hang},
   title   = {EvergreenSLAM: always-on 2D lidar SLAM as the long-term spatial memory of an agent},
   year    = {2026},
-  version = {0.3-preview},
+  version = {0.3.1-preview},
+  doi     = {10.5281/zenodo.24028821},
   url     = {https://github.com/ThomasZB/EvergreenSLAM}
 }
 ```
